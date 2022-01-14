@@ -1010,6 +1010,19 @@ namespace cryptonote
       s.insert(s.size() - decimal_point, ".");
     return s;
   }
+    //---------------------------------------------------------------
+  std::string print_money(std::string amount, unsigned int decimal_point)
+  {
+    if (decimal_point == (unsigned int)-1)
+      decimal_point = default_decimal_point;
+    if(amount.size() < decimal_point+1)
+    {
+      amount.insert(0, decimal_point+1 - amount.size(), '0');
+    }
+    if (decimal_point > 0)
+      amount.insert(amount.size() - decimal_point, ".");
+    return amount;
+  }
   //---------------------------------------------------------------
   crypto::hash get_blob_hash(const blobdata& blob)
   {

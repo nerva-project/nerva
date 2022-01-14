@@ -42,6 +42,7 @@
 #include <boost/multi_index/hashed_index.hpp>
 #include <boost/multi_index/member.hpp>
 #include <boost/circular_buffer.hpp>
+#include <boost/multiprecision/cpp_int.hpp>
 #include <atomic>
 #include <functional>
 #include <unordered_map>
@@ -106,7 +107,7 @@ namespace cryptonote
       uint64_t height; //!< the height of the block in the blockchain
       uint64_t block_cumulative_weight; //!< the weight of the block
       difficulty_type_128 cumulative_difficulty; //!< the accumulated difficulty after that block
-      uint64_t already_generated_coins; //!< the total coins minted after that block
+      boost::multiprecision::uint128_t already_generated_coins; //!< the total coins minted after that block
     };
 
     /**
@@ -1277,7 +1278,7 @@ namespace cryptonote
      *
      * @return false if anything is found wrong with the miner transaction, otherwise true
      */
-    bool validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, bool &partial_block_reward, uint8_t version);
+    bool validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, boost::multiprecision::uint128_t already_generated_coins, bool &partial_block_reward, uint8_t version);
 
     /**
      * @brief reverts the blockchain to its previous state following a failed switch
@@ -1304,9 +1305,10 @@ namespace cryptonote
      *
      * @return the generated coin count
      */
-    inline uint64_t compute_generated_coins(uint64_t block_reward, uint64_t prev_generated_coins)
+    inline boost::multiprecision::uint128_t compute_generated_coins(uint64_t block_reward, boost::multiprecision::uint128_t prev_generated_coins)
     {
-      return (block_reward < (MONEY_SUPPLY - prev_generated_coins) ? prev_generated_coins + block_reward : MONEY_SUPPLY);
+      //return (block_reward < (MONEY_SUPPLY - prev_generated_coins) ? prev_generated_coins + block_reward : MONEY_SUPPLY);
+      return prev_generated_coins + block_reward;
     }
 
     /**

@@ -33,6 +33,7 @@
 #include <cstdio>
 #include <boost/filesystem.hpp>
 #include <boost/range/adaptor/reversed.hpp>
+#include <boost/multiprecision/cpp_int.hpp>
 
 #include "include_base_utils.h"
 #include "cryptonote_basic/cryptonote_basic_impl.h"
@@ -1221,7 +1222,7 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height)
 }
 //------------------------------------------------------------------
 // This function validates the miner transaction reward
-bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_size, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, bool &partial_block_reward, uint8_t version)
+bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_size, uint64_t fee, uint64_t& base_reward, boost::multiprecision::uint128_t already_generated_coins, bool &partial_block_reward, uint8_t version)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   //validate reward
@@ -1344,7 +1345,7 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   size_t median_weight;
-  uint64_t already_generated_coins;
+  boost::multiprecision::uint128_t already_generated_coins;
   uint64_t pool_cookie;
 
   m_tx_pool.lock();
@@ -3158,7 +3159,7 @@ bool Blockchain::check_fee(size_t tx_weight, uint64_t fee) const
 
   uint64_t fee_per_kb;
   uint64_t median = 0;
-  uint64_t already_generated_coins = 0;
+  boost::multiprecision::uint128_t already_generated_coins = 0;
   uint64_t base_reward = 0;
 
   median = m_current_block_cumul_weight_limit / 2;
@@ -3204,7 +3205,7 @@ uint64_t Blockchain::get_dynamic_per_kb_fee_estimate(uint64_t grace_blocks) cons
   if(median <= min_block_weight)
     median = min_block_weight;
 
-  uint64_t already_generated_coins = db_height ? m_db->get_block_already_generated_coins(db_height - 1) : 0;
+  boost::multiprecision::uint128_t already_generated_coins = db_height ? m_db->get_block_already_generated_coins(db_height - 1) : 0;
   uint64_t base_reward;
   if (!get_block_reward(median, 1, already_generated_coins, base_reward, version))
   {
@@ -3668,7 +3669,7 @@ leave:
 
   TIME_MEASURE_START(vmt);
   uint64_t base_reward = 0;
-  uint64_t already_generated_coins = blockchain_height ? m_db->get_block_already_generated_coins(blockchain_height - 1) : 0;
+  boost::multiprecision::uint128_t already_generated_coins = blockchain_height ? m_db->get_block_already_generated_coins(blockchain_height - 1) : 0;
   if(!validate_miner_transaction(bl, cumulative_block_weight, fee_summary, base_reward, already_generated_coins, bvc.m_partial_block_reward, m_hardfork->get_current_version()))
   {
     MERROR_VER("Block with id: " << id << " has incorrect miner transaction");

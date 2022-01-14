@@ -1192,7 +1192,7 @@ namespace cryptonote
     return std::pair<uint64_t, uint64_t>(emission_amount, total_fee_amount);
   }
 
-  uint64_t core::get_generated_coins()
+  boost::multiprecision::uint128_t core::get_generated_coins()
   {
     uint64_t h = get_current_blockchain_height() - 1;
     return m_blockchain_storage.get_db().get_block_already_generated_coins(h);

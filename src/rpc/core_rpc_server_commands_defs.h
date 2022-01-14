@@ -39,6 +39,7 @@
 #include "rpc/rpc_handler.h"
 #include "common/varint.h"
 #include "common/perf_timer.h"
+#include <boost/multiprecision/cpp_int.hpp>
 
 namespace
 {
@@ -2311,7 +2312,7 @@ namespace cryptonote
     struct response_t
     {
       std::string status;
-      uint64_t coins;
+      std::string coins;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(status)

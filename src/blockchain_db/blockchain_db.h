@@ -34,6 +34,7 @@
 #include <string>
 #include <exception>
 #include <boost/program_options.hpp>
+#include <boost/multiprecision/cpp_int.hpp>
 #include "common/command_line.h"
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
@@ -139,7 +140,7 @@ struct alt_block_data_t
   uint64_t cumulative_weight;
   uint64_t cumulative_difficulty_low;
   uint64_t cumulative_difficulty_high;
-  uint64_t already_generated_coins;
+  boost::multiprecision::uint128_t already_generated_coins;
 };
 
 /**
@@ -381,7 +382,7 @@ private:
                 , size_t block_weight
                 , uint64_t long_term_block_weight
                 , const difficulty_type_128& cumulative_difficulty
-                , const uint64_t& coins_generated
+                , const boost::multiprecision::uint128_t& coins_generated
                 , uint64_t num_rct_outs
                 , const crypto::hash& blk_hash
                 ) = 0;
@@ -835,7 +836,7 @@ public:
                             , size_t block_weight
                             , uint64_t long_term_block_weight
                             , const difficulty_type_128& cumulative_difficulty
-                            , const uint64_t& coins_generated
+                            , const boost::multiprecision::uint128_t& coins_generated
                             , const std::vector<std::pair<transaction, blobdata>>& txs
                             );
 
@@ -1057,7 +1058,7 @@ public:
    *
    * @return the already generated coins
    */
-  virtual uint64_t get_block_already_generated_coins(const uint64_t& height) const = 0;
+  virtual boost::multiprecision::uint128_t get_block_already_generated_coins(const uint64_t& height) const = 0;
 
   /**
    * @brief fetch a block's long term weight

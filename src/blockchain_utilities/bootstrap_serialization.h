@@ -31,6 +31,8 @@
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
 #include "serialization/difficulty_type.h"
 
+#include <boost/multiprecision/cpp_int.hpp>
+
 
 namespace cryptonote
 {
@@ -72,7 +74,7 @@ namespace cryptonote
       std::vector<transaction> txs;
       size_t block_weight;
       uint64_t cumulative_difficulty;
-      uint64_t coins_generated;
+      boost::multiprecision::uint128_t coins_generated;
 
       BEGIN_SERIALIZE()
         FIELD(block)
@@ -89,7 +91,7 @@ namespace cryptonote
       std::vector<transaction> txs;
       size_t block_weight;
       difficulty_type_128 cumulative_difficulty;
-      uint64_t coins_generated;
+      boost::multiprecision::uint128_t coins_generated;
 
       BEGIN_SERIALIZE()
         FIELD(block)

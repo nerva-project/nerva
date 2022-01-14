@@ -49,6 +49,8 @@ using namespace epee;
 #include "ringct/rctSigs.h"
 #include "multisig/multisig.h"
 
+#include <boost/multiprecision/cpp_int.hpp>
+
 using namespace crypto;
 
 namespace cryptonote
@@ -80,7 +82,7 @@ namespace cryptonote
     LOG_PRINT_L2("destinations include " << num_stdaddresses << " standard addresses and " << num_subaddresses << " subaddresses");
   }
   //---------------------------------------------------------------
-  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, const account_public_address &miner_address, 
+  bool construct_miner_tx(size_t height, size_t median_weight, boost::multiprecision::uint128_t already_generated_coins, size_t current_block_weight, uint64_t fee, const account_public_address &miner_address, 
     transaction& tx, const blobdata& extra_nonce, size_t max_outs, uint8_t hard_fork_version) {
     tx.vin.clear();
     tx.vout.clear();

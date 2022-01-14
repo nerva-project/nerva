@@ -33,6 +33,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <boost/multiprecision/cpp_int.hpp>
 
 #include "blockchain_db.h"
 
@@ -80,7 +81,7 @@ public:
   virtual std::vector<uint64_t> get_block_weights(uint64_t start_height, size_t count) const override { return {}; }
   virtual cryptonote::difficulty_type_128 get_block_cumulative_difficulty(const uint64_t& height) const override { return 10; }
   virtual uint64_t get_block_difficulty(const uint64_t& height) const override { return 0; }
-  virtual uint64_t get_block_already_generated_coins(const uint64_t& height) const override { return 10000000000; }
+  virtual boost::multiprecision::uint128_t get_block_already_generated_coins(const uint64_t& height) const override { return 10000000000; }
   virtual uint64_t get_block_long_term_weight(const uint64_t& height) const override { return 128; }
   virtual std::vector<uint64_t> get_long_term_block_weights(uint64_t start_height, size_t count) const override { return {}; }
   virtual crypto::hash get_block_hash_from_height(const uint64_t& height) const override { return crypto::hash(); }
@@ -139,7 +140,7 @@ public:
                         , size_t block_weight
                         , uint64_t long_term_block_weight
                         , const cryptonote::difficulty_type_128& cumulative_difficulty
-                        , const uint64_t& coins_generated
+                        , const boost::multiprecision::uint128_t& coins_generated
                         , uint64_t num_rct_outs
                         , const crypto::hash& blk_hash
                         ) override { }

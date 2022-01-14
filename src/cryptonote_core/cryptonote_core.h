@@ -752,7 +752,7 @@ namespace cryptonote
       /**
       * @brief get the sum of coinbase tx amounts for the entire chain
       */
-     uint64_t get_generated_coins();
+     boost::multiprecision::uint128_t get_generated_coins();
 
       /**
       * @brief get the tx pubkey from the transaction extra field

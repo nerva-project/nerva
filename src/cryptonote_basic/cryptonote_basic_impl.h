@@ -34,6 +34,8 @@
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
 
+#include <boost/multiprecision/cpp_int.hpp>
+
 
 namespace cryptonote {
   /************************************************************************/
@@ -88,7 +90,7 @@ namespace cryptonote {
   /************************************************************************/
   size_t get_min_block_weight(uint8_t version);
   size_t get_max_tx_size();
-  bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version);
+  bool get_block_reward(size_t median_weight, size_t current_block_weight, boost::multiprecision::uint128_t already_generated_coins, uint64_t &reward, uint8_t version);
   uint8_t get_account_address_checksum(const public_address_outer_blob& bl);
   uint8_t get_account_integrated_address_checksum(const public_integrated_address_outer_blob& bl);
 

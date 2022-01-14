@@ -32,6 +32,8 @@
 
 #include "bootstrap_file.h"
 
+#include <boost/multiprecision/cpp_int.hpp>
+
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "bcutil"
 
@@ -238,7 +240,7 @@ void BootstrapFile::write_block(block& block)
   {
     size_t block_weight = m_blockchain_storage->get_db().get_block_weight(block_height);
     difficulty_type_128 cumulative_difficulty = m_blockchain_storage->get_db().get_block_cumulative_difficulty(block_height);
-    uint64_t coins_generated = m_blockchain_storage->get_db().get_block_already_generated_coins(block_height);
+    boost::multiprecision::uint128_t coins_generated = m_blockchain_storage->get_db().get_block_already_generated_coins(block_height);
 
     bp.block_weight = block_weight;
     bp.cumulative_difficulty = cumulative_difficulty;

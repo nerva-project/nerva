@@ -442,7 +442,7 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
 
           size_t block_weight;
           difficulty_type_128 cumulative_difficulty;
-          uint64_t coins_generated;
+          boost::multiprecision::uint128_t coins_generated;
 
           block_weight = bp.block_weight;
           cumulative_difficulty = bp.cumulative_difficulty;

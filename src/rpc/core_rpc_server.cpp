@@ -30,6 +30,7 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 #include <boost/preprocessor/stringize.hpp>
+#include <boost/multiprecision/cpp_int.hpp>
 #include "include_base_utils.h"
 #include "string_tools.h"
 using namespace epee;
@@ -2463,8 +2464,8 @@ namespace cryptonote
     uint64_t h = req.height;
     if (h == 0)
       h = m_core.get_current_blockchain_height() - 1;
-    uint64_t c = m_core.get_blockchain_storage().get_db().get_block_already_generated_coins(h);
-    res.coins = c;
+    boost::multiprecision::uint128_t c = m_core.get_blockchain_storage().get_db().get_block_already_generated_coins(h);
+    res.coins = cryptonote::hex(c);
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }

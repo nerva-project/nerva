@@ -31,6 +31,7 @@
 #include <boost/filesystem.hpp>
 #include <boost/format.hpp>
 #include <boost/circular_buffer.hpp>
+#include <boost/multiprecision/cpp_int.hpp>
 #include <memory>  // std::unique_ptr
 #include <cstring>  // memcpy
 
@@ -57,7 +58,7 @@ using namespace crypto;
 
 // Increase when the DB changes in a non backward compatible way, and there
 // is no automatic conversion, so that a full resync is needed.
-#define VERSION 4
+#define VERSION 5
 
 namespace
 {
@@ -678,7 +679,7 @@ estim:
   return threshold_size;
 }
 
-void BlockchainLMDB::add_block(const block& blk, size_t block_weight, uint64_t long_term_block_weight, const difficulty_type_128& cumulative_difficulty, const uint64_t& coins_generated,
+void BlockchainLMDB::add_block(const block& blk, size_t block_weight, uint64_t long_term_block_weight, const difficulty_type_128& cumulative_difficulty, const boost::multiprecision::uint128_t& coins_generated,
     uint64_t num_rct_outs, const crypto::hash& blk_hash)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
@@ -1430,7 +1431,8 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags, uint3
       }
 
       //migration only exists between v3 and v4 databases
-      if (db_version == 3)
+      // Now also between v4 and v5
+      if (db_version == 3 || db_version == 4)
       {
         txn.commit();
         m_open = true;
@@ -2634,8 +2636,8 @@ void BlockchainLMDB::get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t
         msgpos += sizeof(uint64_t);
  
         bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
-        std::memcpy(msg + msgpos, &(bi->bi_coins), sizeof(uint64_t));
-        msgpos += sizeof(uint64_t);
+        std::memcpy(msg + msgpos, &(bi->bi_coins), sizeof(boost::multiprecision::uint128_t));
+        msgpos += sizeof(boost::multiprecision::uint128_t);
  
         std::memcpy(msg + msgpos, &count, sizeof(uint64_t));
  
@@ -2677,8 +2679,8 @@ void BlockchainLMDB::get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t
         msgpos += sizeof(uint64_t);
 
         bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
-        std::memcpy(msg + msgpos, &(bi->bi_coins), sizeof(uint64_t));
-        msgpos += sizeof(uint64_t);
+        std::memcpy(msg + msgpos, &(bi->bi_coins), sizeof(boost::multiprecision::uint128_t));
+        msgpos += sizeof(boost::multiprecision::uint128_t);
 
         std::memcpy(msg + msgpos, &count, sizeof(uint64_t));
 
@@ -3003,7 +3005,7 @@ uint64_t BlockchainLMDB::get_block_difficulty(const uint64_t& height) const
   return (diff1 - diff2).convert_to<uint64_t>();
 }
 
-uint64_t BlockchainLMDB::get_block_already_generated_coins(const uint64_t& height) const
+boost::multiprecision::uint128_t BlockchainLMDB::get_block_already_generated_coins(const uint64_t& height) const
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
@@ -3021,7 +3023,7 @@ uint64_t BlockchainLMDB::get_block_already_generated_coins(const uint64_t& heigh
     throw0(DB_ERROR("Error attempting to retrieve a total generated coins from the db"));
 
   mdb_block_info *bi = (mdb_block_info *)result.mv_data;
-  uint64_t ret = bi->bi_coins;
+  boost::multiprecision::uint128_t ret = bi->bi_coins;
   TXN_POSTFIX_RDONLY();
   return ret;
 }
@@ -4078,7 +4080,7 @@ void BlockchainLMDB::block_rtxn_abort() const
   memset(&m_tinfo->m_ti_rflags, 0, sizeof(m_tinfo->m_ti_rflags));
 }
 
-uint64_t BlockchainLMDB::add_block(const std::pair<block, blobdata>& blk, size_t block_weight, uint64_t long_term_block_weight, const difficulty_type_128& cumulative_difficulty, const uint64_t& coins_generated,
+uint64_t BlockchainLMDB::add_block(const std::pair<block, blobdata>& blk, size_t block_weight, uint64_t long_term_block_weight, const difficulty_type_128& cumulative_difficulty, const boost::multiprecision::uint128_t& coins_generated,
     const std::vector<std::pair<transaction, blobdata>>& txs)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
@@ -4909,10 +4911,164 @@ void BlockchainLMDB::migrate_3_4()
   MGINFO_YELLOW("Database migration complete");
 }
 
+void BlockchainLMDB::migrate_4_5()
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  uint64_t i, z;
+  int result;
+  mdb_txn_safe txn(false);
+  MDB_val k, v;
+  char *ptr;
+  bool past_long_term_weight = false;
+
+  MGINFO_YELLOW("Migrating blockchain from DB version 4 to 5 - Please wait...");
+
+  do {
+    LOG_PRINT_L0("Migrating block info:");
+
+    result = mdb_txn_begin(m_env, NULL, 0, txn);
+    if (result)
+      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
+
+    MDB_stat db_stats;
+    if ((result = mdb_stat(txn, m_blocks, &db_stats)))
+      throw0(DB_ERROR(lmdb_error("Failed to query m_blocks: ", result).c_str()));
+    const uint64_t blockchain_height = db_stats.ms_entries;
+
+    /* the block_info table name is the same but the old version and new version
+     * have incompatible data. Create a new table. We want the name to be similar
+     * to the old name so that it will occupy the same location in the DB.
+     */
+    MDB_dbi o_block_info = m_block_info;
+    lmdb_db_open(txn, "block_infn", MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED, m_block_info, "Failed to open db handle for block_infn");
+    mdb_set_dupsort(txn, m_block_info, compare_uint64);
+
+    MDB_cursor *c_blocks;
+    result = mdb_cursor_open(txn, m_blocks, &c_blocks);
+    if (result)
+      throw0(DB_ERROR(lmdb_error("Failed to open a cursor for blocks: ", result).c_str()));
+
+    MDB_cursor *c_old, *c_cur;
+    i = 0;
+    
+    // Used to calculate bi_coins
+    boost::multiprecision::uint128_t new_supply = 0;
+
+    while(1) {
+      if (!(i % 1000)) {
+        if (i) {
+          LOGIF(el::Level::Info) {
+            std::cout << i << " / " << blockchain_height << "  \r" << std::flush;
+          }
+          txn.commit();
+          result = mdb_txn_begin(m_env, NULL, 0, txn);
+          if (result)
+            throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
+        }
+        result = mdb_cursor_open(txn, m_block_info, &c_cur);
+        if (result)
+          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for block_infn: ", result).c_str()));
+        result = mdb_cursor_open(txn, o_block_info, &c_old);
+        if (result)
+          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for block_info: ", result).c_str()));
+        result = mdb_cursor_open(txn, m_blocks, &c_blocks);
+        if (result)
+          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for blocks: ", result).c_str()));
+        if (!i) {
+          MDB_stat db_stat;
+          result = mdb_stat(txn, m_block_info, &db_stats);
+          if (result)
+            throw0(DB_ERROR(lmdb_error("Failed to query m_block_info: ", result).c_str()));
+          i = db_stats.ms_entries;
+        }
+      }
+      result = mdb_cursor_get(c_old, &k, &v, MDB_NEXT);
+      if (result == MDB_NOTFOUND) {
+        txn.commit();
+        break;
+      }
+      else if (result)
+        throw0(DB_ERROR(lmdb_error("Failed to get a record from block_info: ", result).c_str()));
+      const mdb_block_info_4 *bi_old = (const mdb_block_info_4*)v.mv_data;
+      mdb_block_info_5 bi;
+      bi.bi_height = bi_old->bi_height;
+      bi.bi_timestamp = bi_old->bi_timestamp;
+      
+      // For bi_coins that are less than max value, assume they were properly tracked so just copy
+      // If it's over max value, we're in tail emission so use final subsidy
+      uint64_t old_supply = bi_old->bi_coins;      
+      if (old_supply < MONEY_SUPPLY)
+        new_supply = ((boost::multiprecision::uint128_t)bi_old->bi_coins);
+      else
+        new_supply += FINAL_SUBSIDY_PER_MINUTE;
+      bi.bi_coins = new_supply;
+
+      bi.bi_weight = bi_old->bi_weight;
+      bi.bi_diff_hi = bi_old->bi_diff_hi;
+      bi.bi_diff_lo = bi_old->bi_diff_lo;      
+      bi.bi_hash = bi_old->bi_hash;
+      bi.bi_cum_rct = bi_old->bi_cum_rct;
+      bi.bi_long_term_block_weight = bi_old->bi_long_term_block_weight;      
+
+      if (!(i % 1000)) {
+        if (i) {
+          LOG_PRINT_L0(i << ", height: " << bi.bi_height << ", old coins: " << bi_old->bi_coins << ", new coins: " << bi.bi_coins);
+        }
+      }
+      MDB_val_set(nv, bi);
+      result = mdb_cursor_put(c_cur, (MDB_val *)&zerokval, &nv, MDB_APPENDDUP);
+      if (result)
+        throw0(DB_ERROR(lmdb_error("Failed to put a record into block_infn: ", result).c_str()));
+      /* we delete the old records immediately, so the overall DB and mapsize should not grow.
+       * This is a little slower than just letting mdb_drop() delete it all at the end, but
+       * it saves a significant amount of disk space.
+       */
+      result = mdb_cursor_del(c_old, 0);
+      if (result)
+        throw0(DB_ERROR(lmdb_error("Failed to delete a record from block_info: ", result).c_str()));
+      i++;
+    }
+
+    result = mdb_txn_begin(m_env, NULL, 0, txn);
+    if (result)
+      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
+    /* Delete the old table */
+    result = mdb_drop(txn, o_block_info, 1);
+    if (result)
+      throw0(DB_ERROR(lmdb_error("Failed to delete old block_info table: ", result).c_str()));
+
+    RENAME_DB("block_infn");
+    mdb_dbi_close(m_env, m_block_info);
+
+    lmdb_db_open(txn, "block_info", MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED, m_block_info, "Failed to open db handle for block_infn");
+    mdb_set_dupsort(txn, m_block_info, compare_uint64);
+
+    txn.commit();
+  } while(0);
+
+  LOG_PRINT_L0(i << " blocks migrated");
+
+  uint32_t version = 5;
+  v.mv_data = (void *)&version;
+  v.mv_size = sizeof(version);
+  MDB_val_str(vk, "version");
+  result = mdb_txn_begin(m_env, NULL, 0, txn);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
+  result = mdb_put(txn, m_properties, &vk, &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to update version for the db: ", result).c_str()));
+  txn.commit();
+
+  MGINFO_YELLOW("Database migration complete");
+}
+
 void BlockchainLMDB::migrate(const uint32_t oldversion)
 {
   if (oldversion == 3)
     migrate_3_4();
+  else if(oldversion == 4)
+    migrate_4_5();
   else
     throw0(DB_ERROR("No migration path for your DB version. A full resync is required"));
 }

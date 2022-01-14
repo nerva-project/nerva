@@ -44,6 +44,8 @@ using namespace epee;
 #include "int-util.h"
 #include "common/dns_utils.h"
 
+#include <boost/multiprecision/cpp_int.hpp>
+
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "cn"
 
@@ -78,7 +80,7 @@ namespace cryptonote {
     return CRYPTONOTE_MAX_TX_SIZE;
   }
   //-----------------------------------------------------------------------------------------------
-  bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version) {
+  bool get_block_reward(size_t median_weight, size_t current_block_weight, boost::multiprecision::uint128_t already_generated_coins, uint64_t &reward, uint8_t version) {
     static_assert(DIFFICULTY_TARGET % 60 == 0,"difficulty targets must be a multiple of 60");
     const int target_minutes = DIFFICULTY_TARGET / 60;
     const int emission_speed_factor = EMISSION_SPEED_FACTOR_PER_MINUTE - (target_minutes-1);
@@ -89,10 +91,17 @@ namespace cryptonote {
        return true;
      }
 
-    uint64_t base_reward = (MONEY_SUPPLY - already_generated_coins) >> emission_speed_factor;
-    if (base_reward < FINAL_SUBSIDY_PER_MINUTE*target_minutes)
+    uint64_t base_reward = 0;
+    if (already_generated_coins > MONEY_SUPPLY)
     {
       base_reward = FINAL_SUBSIDY_PER_MINUTE*target_minutes;
+    }
+    else {
+      base_reward = (MONEY_SUPPLY - ((uint64_t)already_generated_coins)) >> emission_speed_factor;
+      if (base_reward < FINAL_SUBSIDY_PER_MINUTE*target_minutes)
+      {
+        base_reward = FINAL_SUBSIDY_PER_MINUTE*target_minutes;
+      }
     }
 
     uint64_t full_reward_zone = get_min_block_weight(version);

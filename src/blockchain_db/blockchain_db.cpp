@@ -27,6 +27,7 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <boost/range/adaptor/reversed.hpp>
+#include <boost/multiprecision/cpp_int.hpp>
 
 #include "string_tools.h"
 #include "blockchain_db.h"
@@ -164,7 +165,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
                                 , size_t block_weight
                                 , uint64_t long_term_block_weight
                                 , const difficulty_type_128& cumulative_difficulty
-                                , const uint64_t& coins_generated
+                                , const boost::multiprecision::uint128_t& coins_generated
                                 , const std::vector<std::pair<transaction, blobdata>>& txs
                                 )
 {

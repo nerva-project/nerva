@@ -35,6 +35,7 @@
 #include "cryptonote_basic/blobdatatype.h" // for type blobdata
 #include "ringct/rctTypes.h"
 #include <boost/thread/tss.hpp>
+#include <boost/multiprecision/cpp_int.hpp>
 
 #include <lmdb.h>
 
@@ -66,7 +67,20 @@ typedef struct mdb_block_info_4
   uint64_t bi_long_term_block_weight;
 } mdb_block_info_4;
 
-typedef mdb_block_info_4 mdb_block_info;
+typedef struct mdb_block_info_5
+{
+  uint64_t bi_height;
+  uint64_t bi_timestamp;
+  boost::multiprecision::uint128_t bi_coins;
+  uint64_t bi_weight;
+  uint64_t bi_diff_hi;
+  uint64_t bi_diff_lo;
+  crypto::hash bi_hash;
+  uint64_t bi_cum_rct;
+  uint64_t bi_long_term_block_weight;
+} mdb_block_info_5;
+
+typedef mdb_block_info_5 mdb_block_info;
 
 typedef struct txindex {
     crypto::hash key;
@@ -264,7 +278,7 @@ public:
 
   virtual uint64_t get_block_difficulty(const uint64_t& height) const;
 
-  virtual uint64_t get_block_already_generated_coins(const uint64_t& height) const;
+  virtual boost::multiprecision::uint128_t get_block_already_generated_coins(const uint64_t& height) const;
 
   virtual uint64_t get_block_long_term_weight(const uint64_t& height) const;
 
@@ -346,7 +360,7 @@ public:
                             , size_t block_weight
                             , uint64_t long_term_block_weight
                             , const difficulty_type_128& cumulative_difficulty
-                            , const uint64_t& coins_generated
+                            , const boost::multiprecision::uint128_t& coins_generated
                             , const std::vector<std::pair<transaction, blobdata>>& txs
                             );
 
@@ -399,7 +413,7 @@ private:
                 , size_t block_weight
                 , uint64_t long_term_block_weight
                 , const difficulty_type_128& cumulative_difficulty
-                , const uint64_t& coins_generated
+                , const boost::multiprecision::uint128_t& coins_generated
                 , uint64_t num_rct_outs
                 , const crypto::hash& block_hash
                 );
@@ -460,6 +474,7 @@ private:
   // migrate from older DB version to current
   void migrate(const uint32_t oldversion);
   void migrate_3_4();
+  void migrate_4_5();
 
   void cleanup_batch();
 
