@@ -46,6 +46,9 @@ message(STATUS "CMake version ${CMAKE_VERSION}")
 project(monero)
 
 enable_language(C ASM)
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 function (die msg)
   if (NOT WIN32)
