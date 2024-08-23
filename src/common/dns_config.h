@@ -13,8 +13,7 @@ namespace dns_config
 
     static const std::vector<std::string> TXT_SEED_NODES = {
         "seed.nerva.one",
-        "seed.nerva.info",
-        "seed.nerva.tools"
+        "seed.nerva.info"
     };
 
     static const std::vector<std::string> CHECKPOINTS = {
@@ -37,8 +36,7 @@ namespace dns_config
 
         static const std::vector<std::string> TXT_SEED_NODES = {
             "seed-tn.nerva.one",
-            "seed-tn.nerva.info",
-            "seed-tn.nerva.tools"
+            "seed-tn.nerva.info"
         };
 
         static const std::vector<std::string> CHECKPOINTS = {

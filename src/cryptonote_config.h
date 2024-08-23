@@ -112,7 +112,7 @@
 #define P2P_LOCAL_WHITE_PEERLIST_LIMIT                                  1000
 #define P2P_LOCAL_GRAY_PEERLIST_LIMIT                                   5000
 
-#define P2P_DEFAULT_CONNECTIONS_COUNT                                   8
+#define P2P_DEFAULT_CONNECTIONS_COUNT                                   13
 #define P2P_DEFAULT_HANDSHAKE_INTERVAL                                  60
 #define P2P_DEFAULT_PACKET_MAX_SIZE                                     50000000
 #define P2P_DEFAULT_PEERS_IN_HANDSHAKE                                  250
@@ -171,7 +171,7 @@
 
 #define CRYPTONOTE_MAX_FRAGMENTS                                        20
 
-#define DONATION_ADDR "NV1r8P6THPASAQX77re6hXTMJ1ykXXvtYXFXgMv4vFAQNYo3YatUvZ8LFNRu4dPQBjTwqJbMvqoeiipywmREPHpD2AgWnmG7Q"
+#define DONATION_ADDR "NV1aMtARDQjK8j7XeoQ66S7XQe5ZS8CX92XqXmJxSZMpSDf2i11NQyqgHzghmRsDHR1LwYv3bEnE3VoqqbmyRdrR2MMBfdXvY"
 
 struct hard_fork
 {
