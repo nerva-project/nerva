@@ -1422,10 +1422,9 @@ namespace nodetool
     std::set<size_t> tried_peers;
 
     size_t try_count = 0;
-    size_t rand_count = 0;
-    while(rand_count < (max_random_index+1)*3 &&  try_count < 10 && !zone.m_net_server.is_stop_signal_sent())
+    while(try_count < 5 && !zone.m_net_server.is_stop_signal_sent())
     {
-      ++rand_count;
+      ++try_count;
       size_t random_index;
       const uint32_t next_needed_pruning_stripe = m_payload_handler.get_next_needed_pruning_stripe().second;
 
@@ -1447,11 +1446,23 @@ namespace nodetool
       }
 
       std::deque<size_t> filtered;
-      const size_t limit = use_white_list ? 20 : std::numeric_limits<size_t>::max();
-      size_t idx = 0, skipped = 0;
+      const size_t white_peers_count = zone.m_peerlist.get_white_peers_count();
+      
+      // Look more towards the top of last seen white peers but also consider the ones connected to longer ago. try_count = 5
+      size_t white_limit = white_peers_count >= 30 ? 30 : white_peers_count;
+      if(white_peers_count > 100 && try_count > 3)
+        white_limit = white_peers_count;
+      else if(white_peers_count > 50 && try_count > 2)
+        white_limit = white_peers_count >= 100 ? 100 : white_peers_count;
+      else if(white_peers_count > 30 && try_count > 1)
+        white_limit = white_peers_count >= 50 ? 50 : white_peers_count;
+
+      const size_t limit = use_white_list ? white_limit : std::numeric_limits<size_t>::max();
       for (int step = 0; step < 2; ++step)
       {
+        size_t idx = 0, skipped = 0;
         bool skip_duplicate_class_B = step == 0;
+        MDEBUG("try_count: " << try_count << ", step: " << step << ", limit: " << limit << ", classB: " << classB.size() << ", filtered size: " << filtered.size() << ", idx: " << idx << ", skipped: " << skipped << ", skip_duplicate_class_B: " << skip_duplicate_class_B << ", next_needed_pruning_stripe: " << next_needed_pruning_stripe);
         zone.m_peerlist.foreach (use_white_list, [&classB, &filtered, &idx, &skipped, skip_duplicate_class_B, limit, next_needed_pruning_stripe](const peerlist_entry &pe){
           if (filtered.size() >= limit)
             return false;
@@ -1484,7 +1495,7 @@ namespace nodetool
       if (use_white_list)
       {
         // if using the white list, we first pick in the set of peers we've already been using earlier
-        random_index = get_random_index_with_fixed_probability(std::min<uint64_t>(filtered.size() - 1, 20));
+        random_index = get_random_index_with_fixed_probability(std::min<uint64_t>(filtered.size() - 1, white_limit));
         CRITICAL_REGION_LOCAL(m_used_stripe_peers_mutex);
         if (next_needed_pruning_stripe > 0 && next_needed_pruning_stripe <= (1ul << CRYPTONOTE_PRUNING_LOG_STRIPES) && !m_used_stripe_peers[next_needed_pruning_stripe-1].empty())
         {
@@ -1518,8 +1529,7 @@ namespace nodetool
       bool r = use_white_list ? zone.m_peerlist.get_white_peer_by_index(pe, random_index):zone.m_peerlist.get_gray_peer_by_index(pe, random_index);
       CHECK_AND_ASSERT_MES(r, false, "Failed to get random peer from peerlist(white:" << use_white_list << ")");
 
-      ++try_count;
-
+      MDEBUG("Filtered size: " << filtered.size() << ", tried_peers size: " << tried_peers.size() << ", random_index: " << random_index << ", try_count: " << try_count);      
       _note("Considering connecting (out) to " << (use_white_list ? "white" : "gray") << " list peer: " <<
           peerid_to_string(pe.id) << " " << pe.adr.str() << ", pruning seed " << epee::string_tools::to_string_hex(pe.pruning_seed) <<
           " (stripe " << next_needed_pruning_stripe << " needed)");
@@ -1564,6 +1574,7 @@ namespace nodetool
         if(server.is_stop_signal_sent())
           return false;
 
+        MDEBUG("Connecting to seed: " << m_seed_nodes[current_index].str());
         if(try_to_connect_and_handshake_with_new_peer(m_seed_nodes[current_index], true))
           break;
 
