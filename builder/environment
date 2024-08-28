@@ -4,6 +4,7 @@ BUILDER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NERVA_DIR=$(dirname $BUILDER_DIR)
 
 if [ -z ${BUILD_TYPE} ]; then
+	#export BUILD_TYPE=Debug
 	export BUILD_TYPE=release
 fi
 
