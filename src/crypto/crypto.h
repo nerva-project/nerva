@@ -164,7 +164,9 @@ namespace crypto {
   /* Generate a value filled with random bytes.
    */
   template<typename T>
-  typename std::enable_if<std::is_pod<T>::value, T>::type rand() {
+  T rand() {
+    static_assert(std::is_standard_layout<T>(), "cannot write random bytes into non-standard layout type");
+    static_assert(std::is_trivially_copyable<T>(), "cannot write random bytes into non-trivially copyable type");
     typename std::remove_cv<T>::type res;
     generate_random_bytes_thread_safe(sizeof(T), (uint8_t*)&res);
     return res;
@@ -294,9 +296,6 @@ namespace crypto {
   }
 
   inline std::ostream &operator <<(std::ostream &o, const crypto::public_key &v) {
-    epee::to_hex::formatted(o, epee::as_byte_span(v)); return o;
-  }
-  inline std::ostream &operator <<(std::ostream &o, const crypto::secret_key &v) {
     epee::to_hex::formatted(o, epee::as_byte_span(v)); return o;
   }
   inline std::ostream &operator <<(std::ostream &o, const crypto::key_derivation &v) {

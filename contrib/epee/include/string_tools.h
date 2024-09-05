@@ -178,7 +178,6 @@ POP_WARNINGS
 	
 	inline bool compare_no_case(const std::string& str1, const std::string& str2)
 	{
-    
 		return !boost::iequals(str1, str2);
 	}
 	//----------------------------------------------------------------------------
@@ -274,14 +273,12 @@ POP_WARNINGS
   template<class t_pod_type>
   std::string pod_to_hex(const t_pod_type& s)
   {
-    static_assert(std::is_standard_layout<t_pod_type>(), "expected standard layout type");
     return to_hex::string(as_byte_span(s));
   }
   //----------------------------------------------------------------------------
   template<class t_pod_type>
   bool hex_to_pod(const boost::string_ref hex_str, t_pod_type& s)
   {
-    static_assert(std::is_standard_layout<t_pod_type>(), "expected standard layout type");
     return from_hex::to_buffer(as_mut_byte_span(s), hex_str);
   }
   //----------------------------------------------------------------------------
