@@ -28,8 +28,10 @@ namespace dns_config
 
         dr.get_ipv4(ROOT_DOMAIN, dns_avail, dns_valid);
 
-        if (!dns_avail || !dns_valid)
+        if (!dns_avail || !dns_valid) {
+            MWARNING("DNS: Cannot resolve A record for " << ROOT_DOMAIN << " (Exists = " << dns_avail << ", DNSSEC Valid = " << dns_valid << ")");
             return;
+        }
 
         std::vector<std::string> seed_nodes = testnet ? testnet::SEED_NODES : SEED_NODES;
         std::vector<std::string> txt_seed_nodes = testnet ? testnet::TXT_SEED_NODES : TXT_SEED_NODES;
