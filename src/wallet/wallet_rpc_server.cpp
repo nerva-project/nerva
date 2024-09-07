@@ -1090,9 +1090,9 @@ namespace tools
       res.tx_hash_list.push_back(epee::string_tools::pod_to_hex(cryptonote::get_transaction_hash(ptx.tx)));
       if (req.get_tx_keys)
       {
-        res.tx_key_list.push_back(epee::string_tools::pod_to_hex(ptx.tx_key));
+        res.tx_key_list.push_back(epee::string_tools::pod_to_hex(rct::sk2rct(ptx.tx_key)));
         for (const crypto::secret_key& additional_tx_key : ptx.additional_tx_keys)
-          res.tx_key_list.back() += epee::string_tools::pod_to_hex(additional_tx_key);
+          res.tx_key_list.back() += epee::string_tools::pod_to_hex(rct::sk2rct(additional_tx_key));
       }
     }
 
@@ -1870,11 +1870,11 @@ namespace tools
       }
       else if(req.key_type.compare("secret_view_key") == 0)
       {
-          res.private_view_key = string_tools::pod_to_hex(m_wallet->get_account().get_keys().m_view_secret_key);
+          res.private_view_key = string_tools::pod_to_hex(rct::sk2rct(m_wallet->get_account().get_keys().m_view_secret_key));
       }
       else if(req.key_type.compare("secret_spend_key") == 0)
       {
-          res.private_spend_key = string_tools::pod_to_hex(m_wallet->get_account().get_keys().m_spend_secret_key);
+          res.private_spend_key = string_tools::pod_to_hex(rct::sk2rct(m_wallet->get_account().get_keys().m_spend_secret_key));
       }
       else if(req.key_type.compare("public_view_key") == 0)
       {
@@ -1887,10 +1887,10 @@ namespace tools
       else if(req.key_type.compare("all_keys") == 0)
       {
           res.public_spend_key = string_tools::pod_to_hex(m_wallet->get_account().get_keys().m_account_address.m_spend_public_key);
-          res.private_spend_key = string_tools::pod_to_hex(m_wallet->get_account().get_keys().m_spend_secret_key);
+          res.private_spend_key = string_tools::pod_to_hex(rct::sk2rct(m_wallet->get_account().get_keys().m_spend_secret_key));
 
           res.public_view_key = string_tools::pod_to_hex(m_wallet->get_account().get_keys().m_account_address.m_view_public_key);
-          res.private_view_key = string_tools::pod_to_hex(m_wallet->get_account().get_keys().m_view_secret_key);
+          res.private_view_key = string_tools::pod_to_hex(rct::sk2rct(m_wallet->get_account().get_keys().m_view_secret_key));
       }
       else
       {

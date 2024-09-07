@@ -5,7 +5,7 @@ NERVA_DIR=$(dirname $BUILDER_DIR)
 
 if [ -z ${BUILD_TYPE} ]; then
 	#export BUILD_TYPE=Debug
-	export BUILD_TYPE=release
+	export BUILD_TYPE=Release
 fi
 
 if [ -z ${STATIC} ]; then

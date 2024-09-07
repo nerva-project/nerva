@@ -34,6 +34,8 @@
 #include "rpc/message_data_structs.h"
 #include "cryptonote_protocol/cryptonote_protocol_defs.h"
 #include "common/sfinae_helpers.h"
+#include "hex.h"
+#include "span.h"
 
 #define OBJECT_HAS_MEMBER_OR_THROW(val, key) \
   do \
@@ -115,6 +117,8 @@ inline constexpr bool is_to_hex()
 }
 
 
+void read_hex(const rapidjson::Value& val, epee::span<std::uint8_t> dest);
+
 // POD to json value
 template <class Type>
 typename std::enable_if<is_to_hex<Type>()>::type toJsonValue(rapidjson::Document& doc, const Type& pod, rapidjson::Value& value)
@@ -125,18 +129,8 @@ typename std::enable_if<is_to_hex<Type>()>::type toJsonValue(rapidjson::Document
 template <class Type>
 typename std::enable_if<is_to_hex<Type>()>::type fromJsonValue(const rapidjson::Value& val, Type& t)
 {
-  if (!val.IsString())
-  {
-    throw WRONG_TYPE("string");
-  }
-
-  //TODO: handle failure to convert hex string to POD type
-  bool success = epee::string_tools::hex_to_pod(val.GetString(), t);
-
-  if (!success)
-  {
-    throw BAD_INPUT();
-  }
+  static_assert(std::is_standard_layout<Type>(), "expected standard layout type");
+  json::read_hex(val, epee::as_mut_byte_span(t));
 }
 
 void toJsonValue(rapidjson::Document& doc, const std::string& i, rapidjson::Value& val);
