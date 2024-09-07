@@ -1265,6 +1265,7 @@ namespace nodetool
       LOG_PRINT_CC_PRIORITY_NODE(is_priority, bool(con), "Connect failed to " << na.str()
         /*<< ", try " << try_count*/);
       //m_peerlist.set_peer_unreachable(pe);
+      record_addr_failed(na);
       return false;
     }
 
@@ -1273,8 +1274,10 @@ namespace nodetool
 
     bool res = do_request_peer_id(pi, *con, just_take_peerlist);
 
-    if (!res)
+    if (!res) {
+      record_addr_failed(na);
       return false;
+    }
 
     res = do_handshake_with_peer(pi, *con, just_take_peerlist);
 
@@ -1284,6 +1287,7 @@ namespace nodetool
 
       LOG_PRINT_CC_PRIORITY_NODE(is_priority, *con, "Failed to HANDSHAKE with peer " << na.str());
       zone.m_net_server.get_config_object().close(con->m_connection_id);
+      record_addr_failed(na);
       return false;
     }
 
@@ -1333,7 +1337,7 @@ namespace nodetool
       bool is_priority = is_priority_node(na);
 
       LOG_PRINT_CC_PRIORITY_NODE(is_priority, p2p_connection_context{}, "Connect failed to " << na.str());
-
+      record_addr_failed(na);
       return false;
     }
 
@@ -1342,8 +1346,10 @@ namespace nodetool
 
     bool res = do_request_peer_id(pi, *con, true);
 
-    if (!res)
+    if (!res) {
+      record_addr_failed(na);
       return false;
+    }
 
     res = do_handshake_with_peer(pi, *con, true);
 
@@ -1353,6 +1359,7 @@ namespace nodetool
 
       LOG_PRINT_CC_PRIORITY_NODE(is_priority, *con, "Failed to HANDSHAKE with peer " << na.str());
       zone.m_net_server.get_config_object().close(con->m_connection_id);
+      record_addr_failed(na);
       return false;
     }
 
@@ -1364,7 +1371,13 @@ namespace nodetool
   }
 
 #undef LOG_PRINT_CC_PRIORITY_NODE
-
+  //-----------------------------------------------------------------------------------
+  template <class t_payload_net_handler>
+  void nodetool::node_server<t_payload_net_handler>::record_addr_failed(const epee::net_utils::network_address &addr)
+  {
+    CRITICAL_REGION_LOCAL(m_conn_fails_cache_lock);
+    m_conn_fails_cache[addr.host_str()] = time(NULL);
+  }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::is_addr_recently_failed(const epee::net_utils::network_address& addr)
