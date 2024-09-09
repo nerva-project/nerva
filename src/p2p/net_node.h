@@ -166,7 +166,8 @@ namespace nodetool
           m_proxy_address(),
           m_current_number_of_out_peers(0),
           m_current_number_of_in_peers(0),
-          m_can_pingback(false)
+          m_can_pingback(false),
+          m_seed_nodes_initialized(false)
       {
         set_config_defaults();
       }
@@ -185,7 +186,8 @@ namespace nodetool
           m_proxy_address(),
           m_current_number_of_out_peers(0),
           m_current_number_of_in_peers(0),
-          m_can_pingback(false)
+          m_can_pingback(false),
+          m_seed_nodes_initialized(false)
       {
         set_config_defaults();
       }
@@ -204,6 +206,7 @@ namespace nodetool
       std::atomic<unsigned int> m_current_number_of_out_peers;
       std::atomic<unsigned int> m_current_number_of_in_peers;
       bool m_can_pingback;
+      bool m_seed_nodes_initialized;
 
     private:
       void set_config_defaults() noexcept
