@@ -655,22 +655,10 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::init(const boost::program_options::variables_map& vm)
   {
-    std::vector<std::string> full_addrs = {};
-
     bool res = handle_command_line(vm);
     CHECK_AND_ASSERT_MES(res, false, "Failed to handle command line");
 
     memcpy(&m_network_id, &cryptonote::get_config(m_nettype).NETWORK_ID, 16);
-
-    if (m_exclusive_peers.empty() && !m_offline)
-      full_addrs = dns_config::get_seed_node_records();
-      
-    for (const auto& full_addr : full_addrs)
-    {
-      MDEBUG("Seed node: " << full_addr);
-      append_net_address(m_seed_nodes, full_addr, cryptonote::get_config(m_nettype).P2P_DEFAULT_PORT);
-    }
-    MDEBUG("Number of seed nodes: " << m_seed_nodes.size());
 
     m_config_folder = command_line::get_arg(vm, cryptonote::arg_data_dir);
     network_zone& public_zone = m_network_zones.at(epee::net_utils::zone::public_);
@@ -1576,15 +1564,33 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::connect_to_seed()
   {
+      network_zone& net_zone = m_network_zones.at(epee::net_utils::zone::public_);
+      if(!net_zone.m_seed_nodes_initialized)
+      {
+        dns_config::init(m_nettype == cryptonote::TESTNET);
+        
+        std::vector<std::string> full_addrs = {};
+        if (m_exclusive_peers.empty() && !m_offline)
+          full_addrs = dns_config::get_seed_node_records();
+          
+        for (const auto& full_addr : full_addrs)
+        {
+          MDEBUG("Seed node: " << full_addr);
+          append_net_address(m_seed_nodes, full_addr, cryptonote::get_config(m_nettype).P2P_DEFAULT_PORT);
+        }
+        MDEBUG("Number of seed nodes: " << m_seed_nodes.size());
+
+        net_zone.m_seed_nodes_initialized = true;
+      }
+
       if (m_seed_nodes.empty() || m_offline || !m_exclusive_peers.empty())
         return true;
 
       size_t try_count = 0;
       size_t current_index = crypto::rand_idx(m_seed_nodes.size());
-      const net_server& server = m_network_zones.at(epee::net_utils::zone::public_).m_net_server;
       while(true)
       {
-        if(server.is_stop_signal_sent())
+        if(net_zone.m_net_server.is_stop_signal_sent())
           return false;
 
         MDEBUG("Connecting to seed: " << m_seed_nodes[current_index].str());
