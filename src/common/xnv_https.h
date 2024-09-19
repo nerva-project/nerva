@@ -25,6 +25,7 @@ namespace analytics
 
     void enable(bool enabled);
     bool is_enabled();
+    std::string get_analytics_url();
     bool contact_server(const bool testnet);
 };
 

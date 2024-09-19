@@ -10,6 +10,7 @@ namespace dns_config
     std::vector<std::string> m_txt_seed_nodes;
     std::vector<std::string> m_update;
     std::vector<std::string> m_download;
+        std::vector<std::string> m_analytics;
     bool m_dnssec_ok;
     tools::DNSResolver dr = tools::DNSResolver::create();
 
@@ -20,6 +21,7 @@ namespace dns_config
         m_txt_seed_nodes.clear();
         m_update.clear();
         m_download.clear();
+        m_analytics.clear();
 
         bool dns_avail = false, dns_valid = false;
         std::vector<std::string> result;
@@ -55,6 +57,7 @@ namespace dns_config
         tools::dns_utils::load_txt_records_from_dns(dr, m_update, UPDATE);
         tools::dns_utils::load_txt_records_from_dns(dr, m_download, DOWNLOAD);
         tools::dns_utils::load_txt_records_from_dns(dr, m_txt_seed_nodes, txt_seed_nodes);
+        tools::dns_utils::load_txt_records_from_dns(dr, m_analytics, ANALYTICS);
 
         for (auto &s : m_txt_seed_nodes)
             m_seed_nodes.push_back(s);
@@ -66,8 +69,10 @@ namespace dns_config
     std::vector<std::string> get_update_records() { return m_update; }
     std::vector<std::string> get_download_records() { return m_download; }
     std::vector<std::string> get_seed_node_records() { return m_seed_nodes; }
+    std::vector<std::string> get_analytics_records() { return m_analytics; }
     bool has_update_records() { return m_update.size() > 0; }
     bool has_download_records() { return m_download.size() > 0; }
     bool has_seed_node_records() { return m_seed_nodes.size() > 0; }
+    bool has_analytics_records() { return m_analytics.size() > 0; }
     bool is_dnssec_ok() { return m_dnssec_ok; }
 }

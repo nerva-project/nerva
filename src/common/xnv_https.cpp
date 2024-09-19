@@ -88,56 +88,68 @@ namespace analytics
     void enable(bool enabled) { m_enabled = enabled; }
     bool is_enabled() { return m_enabled; }
 
+    std::string get_analytics_url()
+    {
+        std::vector<std::string> records = dns_config::get_analytics_records();
+        for (const auto& record : records)
+        {
+            // Take the first one
+            return record;
+        }
+
+        return "Link not available";
+    }
+
     bool contact_server(const bool testnet)
     {
         if (testnet)
             return false;
 
-        if (!dns_config::has_seed_node_records())
+        if (!dns_config::has_analytics_records())
             return false;
 
-        std::vector<std::string> url_list = dns_config::get_seed_node_records();
-
         std::string user_agent = "nerva-cli/" + std::string(MONERO_VERSION);
-
         epee::net_utils::http::http_simple_client http_client;
         const epee::net_utils::http::http_response_info *info = NULL;
         epee::net_utils::http::url_content u_c;
         epee::net_utils::http::fields_list fields;
         fields.push_back(std::make_pair(u8"User-Agent", user_agent));
 
-        for (const std::string &a : url_list)
+        std::string url = get_analytics_url();
+        MGINFO("Sending analytics to " << url);
+
+        if (!epee::net_utils::parse_url(url, u_c))
         {
-            std::string url = "http://" + a + "/api/analytics/submit/";
-            MGINFO("Sending analytics to " << url);
-
-            if (!epee::net_utils::parse_url(url, u_c))
-                continue;
-
-            http_client.set_server(a, boost::none);
-
-            if (!http_client.connect(std::chrono::seconds(30)))
-                continue;
-
-            if (!http_client.invoke_get(u_c.uri, std::chrono::seconds(30), "", &info, fields))
-                continue;
-
-            http_client.disconnect();
-
-            if (!info)
-                continue;
-            
-            if (info->m_response_code != 200)
-            {
-                MGINFO(url << " response code: " << info->m_response_code);
-                MGINFO(info->m_body);
-                continue;
-            }
-
-            return true;
+            MGINFO("Sending analytics failed. Bad URL.");
+            return false;
         }
-        
-        MGINFO("Sending analytics failed");
-        return false;
+
+        http_client.set_server(url, boost::none);
+        if (!http_client.connect(std::chrono::seconds(30)))
+        {
+            MGINFO("Sending analytics failed. Connection.");
+            return false;
+        }
+
+        if (!http_client.invoke_get(u_c.uri, std::chrono::seconds(30), "", &info, fields))
+        {
+            MGINFO("Sending analytics failed. Invoke.");
+            return false;
+        }
+
+        http_client.disconnect();
+
+        if (!info)
+        {
+            MGINFO("No info.");
+        }
+        else if (info->m_response_code != 200)
+        {
+            MGINFO(url << " response code: " << info->m_response_code);
+            MGINFO(info->m_body);
+        }
+
+        MGINFO("Analytics submitted successfully!");
+        return true;
     }
 }
