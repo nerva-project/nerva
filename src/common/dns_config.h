@@ -28,6 +28,10 @@ namespace dns_config
         "download.nerva.one"
     };
 
+    static const std::vector<std::string> ANALYTICS = {
+        "analytics.nerva.one"
+    };
+
     static const std::string ROOT_DOMAIN = "nerva.one";
 
     namespace testnet
@@ -49,9 +53,11 @@ namespace dns_config
     std::vector<std::string> get_update_records();
     std::vector<std::string> get_download_records();
     std::vector<std::string> get_seed_node_records();
+    std::vector<std::string> get_analytics_records();
     bool has_update_records();
     bool has_download_records();
     bool has_seed_node_records();
+    bool has_analytics_records();    
     bool is_dnssec_ok();
 
     struct dns_config_t
