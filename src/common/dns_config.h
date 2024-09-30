@@ -60,6 +60,9 @@ namespace dns_config
     bool has_analytics_records();    
     bool is_dnssec_ok();
 
+    void disable_dns(bool disable);
+    bool is_dns_disabled();
+
     struct dns_config_t
     {
         std::vector<std::string> const SEED_NODES;

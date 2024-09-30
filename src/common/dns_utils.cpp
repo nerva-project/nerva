@@ -34,6 +34,7 @@
 #include "include_base_utils.h"
 #include "common/threadpool.h"
 #include "crypto/crypto.h"
+#include "dns_config.h"
 #include <boost/thread/mutex.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/join.hpp>
@@ -244,6 +245,13 @@ static void add_anchors(ub_ctx *ctx)
 DNSResolver::DNSResolver() : m_data(new DNSResolverData())
 {
   std::vector<std::string> dns_public_addr;
+
+  if(dns_config::is_dns_disabled())
+  {
+    LOG_PRINT_L0("DNS disabled. Returning from DNSResolver...");
+    return;
+  }
+
   char* DNS_PUBLIC = getenv("DNS_PUBLIC");
   if (DNS_PUBLIC)
   {
@@ -285,6 +293,12 @@ std::vector<std::string> DNSResolver::get_record(const std::string& url, int rec
   std::vector<std::string> addresses;
   dnssec_available = false;
   dnssec_valid = false;
+
+  if(dns_config::is_dns_disabled())
+  {
+    LOG_PRINT_L0("DNS disabled. Returning from get_records...");
+    return addresses;
+  }
 
   LOG_PRINT_L3("get_record URL: " << url <<  " record_type: " << record_type);
 

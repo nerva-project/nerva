@@ -47,6 +47,7 @@
 #include "daemon/command_line_args.h"
 #include "version.h"
 #include "common/xnv_https.h"
+#include "common/dns_config.h"
 
 #ifdef STACK_TRACE
 #include "common/stack_trace.h"
@@ -135,6 +136,7 @@ int main(int argc, char const * argv[])
 
       // Settings
       command_line::add_arg(core_settings, daemon_args::arg_noanalytics);
+      command_line::add_arg(core_settings, daemon_args::arg_nodns);
       command_line::add_arg(core_settings, daemon_args::arg_log_file);
       command_line::add_arg(core_settings, daemon_args::arg_log_level);
       command_line::add_arg(core_settings, daemon_args::arg_max_log_file_size);
@@ -220,6 +222,7 @@ int main(int argc, char const * argv[])
     const bool testnet = command_line::get_arg(vm, cryptonote::arg_testnet_on);
     const bool stagenet = command_line::get_arg(vm, cryptonote::arg_stagenet_on);
     const bool noanalytics = command_line::get_arg(vm, daemon_args::arg_noanalytics);
+    const bool nodns = command_line::get_arg(vm, daemon_args::arg_nodns);
 
     if (testnet && stagenet)
     {
@@ -367,6 +370,12 @@ int main(int argc, char const * argv[])
       MGINFO("Analytics enabled.");
 
     analytics::enable(!noanalytics);
+
+    if (nodns)
+    {
+      MGINFO("DNS disabled.");
+      dns_config::disable_dns(nodns);
+    }
 
     blacklist::read_blacklist_from_url();
     if (blacklist::get_ip_list().size() > 0)
