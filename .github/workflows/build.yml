@@ -1,0 +1,39 @@
+name: Build
+
+on: [ push, pull_request ]
+
+env:
+    REMOVE_BUNDLED_BOOST : rm -rf /usr/local/share/boost
+    APT_INSTALL_LINUX: 'sudo apt install -y build-essential cmake pkg-config libboost-all-dev libssl-dev libzmq3-dev libpgm-dev libunbound-dev libsodium-dev git ccache'
+    APT_SET_CONF: |
+        echo "Acquire::Retries \"3\";" | sudo tee -a /etc/apt/apt.conf.d/80-custom
+        echo "Acquire::http::Timeout \"120\";" | sudo tee -a /etc/apt/apt.conf.d/80-custom
+        echo "Acquire::ftp::Timeout \"120\";" | sudo tee -a /etc/apt/apt.conf.d/80-custom
+
+jobs:
+    build-ubuntu:
+        runs-on: ubuntu-22.04
+        env:
+            CCACHE_COMPRESS: 1
+            CCACHE_TEMPDIR: /tmp/.ccache-temp
+        steps:
+            -   uses: actions/checkout@v4
+                with:
+                    submodules: recursive
+            -   uses: actions/cache@v4
+                with:
+                    path: ~/.ccache
+                    key: ccache-ubuntu-build-${{ github.sha }}
+                    restore-keys: ccache-ubuntu-build-
+            -   name: Remove bundled boost
+                run: ${{env.REMOVE_BUNDLED_BOOST}}
+            -   name: Set apt conf
+                run: ${{env.APT_SET_CONF}}
+            -   name: update apt
+                run: sudo apt update
+            -   name: install dependencies
+                run: ${{env.APT_INSTALL_LINUX}}
+            -   name: build
+                run: |
+                    ccache --max-size=150M
+                    make -j3

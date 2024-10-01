@@ -1,3 +1,4 @@
+.idea/*
 .vscode/ipch
 build
 builder/output
@@ -10,3 +11,4 @@ db
 external/miniupnpc/Makefile
 miniupnpcstrings.h
 version/
+cmake-build-debug/*
