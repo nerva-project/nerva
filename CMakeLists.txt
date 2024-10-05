@@ -874,7 +874,7 @@ elseif(NOT MSVC AND NOT DEPENDS)
   set(EXTRA_LIBRARIES ${RT})
 endif()
 
-if (UNIX AND STATIC)
+if (UNIX AND NOT APPLE AND STATIC)
   set(EXTRA_LIBRARIES "${EXTRA_LIBRARIES};protokit;bsd")
 endif()
 
