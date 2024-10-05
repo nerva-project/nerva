@@ -830,16 +830,17 @@ elseif(Boost_FOUND)
     list(APPEND BOOST_COMPONENTS locale)
   endif()
 
-  if(Boost_VERSION VERSION_LESS 1.69)
+  # Boost_VERSION is not something can be compared using VERSION_* comparator
+  if(Boost_VERSION LESS 106900)
     # Boost system is header only since 1.69
     list(APPEND BOOST_COMPONENTS system)
   endif()
 
-  if(Boost_VERSION VERSION_LESS 1.77)
+  if(Boost_VERSION LESS 107700)
     # Boost regex is header only since 1.77
     list(APPEND BOOST_COMPONENTS regex)
   endif()
-
+  
   find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED COMPONENTS ${BOOST_COMPONENTS})
 endif()
 
@@ -867,7 +868,7 @@ elseif(NOT MSVC AND NOT DEPENDS)
 endif()
 
 if (LINUX AND STATIC)
-  set(EXTRA_LIBRARIES "${EXTRA_LIBRARIES};protokit")
+  set(EXTRA_LIBRARIES "${EXTRA_LIBRARIES};protokit;bsd")
 endif()
 
 list(APPEND EXTRA_LIBRARIES ${CMAKE_DL_LIBS})
