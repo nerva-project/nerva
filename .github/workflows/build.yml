@@ -1,6 +1,12 @@
-name: Build
+name: ci/gh-actions/build
 
-on: [ push, pull_request ]
+on:
+    push:
+        paths-ignore:
+            - '**/*.md'
+    pull_request:
+        paths-ignore:
+            - '**/*.md'
 
 env:
     REMOVE_BUNDLED_PACKAGES : sudo rm -rf /usr/local
@@ -60,14 +66,6 @@ jobs:
                 with:
                     update: true
                     install: mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-ccache mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-zeromq mingw-w64-x86_64-libsodium mingw-w64-x86_64-hidapi mingw-w64-x86_64-unbound git
-            #-   name: Install boost 1.81
-            #    run: |
-            #        wget https://sn1f3rt.dev/assets/mingw-w64-x86_64-boost-1.81.0-1-any.pkg.tar.zst
-            #        pacman -U mingw-w64-x86_64-boost-1.81.0-1-any.pkg.tar.zst --noconfirm
-            #-   name: Install icu 1.72
-            #    run: |
-            #        wget https://sn1f3rt.dev/assets/mingw-w64-x86_64-icu-72.1-1-any.pkg.tar.zst
-            #        pacman -U mingw-w64-x86_64-icu-72.1-1-any.pkg.tar.zst --noconfirm
             -   name: Build
                 run: |
                     ${{env.CCACHE_SETTINGS}}
@@ -94,3 +92,30 @@ jobs:
                 run: |
                     ${{env.CCACHE_SETTINGS}}
                     make -j3
+
+        libwallet-ubuntu:
+            runs-on: ubuntu-latest
+            env:
+                CCACHE_TEMPDIR: ~/.ccache-temp
+            steps:
+                -   uses: actions/checkout@v4
+                    with:
+                        submodules: recursive
+                -   uses: actions/cache@v4
+                    with:
+                        path: ~/.ccache
+                        key: ccache-${{ runner.os }}-libwallet-${{ matrix.os }}-${{ github.sha }}
+                        restore-keys: ccache-${{ runner.os }}-libwallet-${{ matrix.os }}
+                -   name: Remove bundled packages
+                    run: ${{env.REMOVE_BUNDLED_PACKAGES}}
+                -   name: Set APT configuration
+                    run: ${{env.SET_APT_CONF}}
+                -   name: Update APT
+                    run: sudo apt update
+                -   name: Install dependencies
+                    run: sudo apt install -y build-essential cmake ccache pkg-config libboost-all-dev libssl-dev libzmq3-dev libpgm-dev libunbound-dev libsodium-dev git
+                -   name: Build
+                    run: |
+                        ${{env.CCACHE_SETTINGS}}
+                        cmake .
+                        make wallet_api -j3
