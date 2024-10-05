@@ -840,7 +840,7 @@ elseif(Boost_FOUND)
     # Boost regex is header only since 1.77
     list(APPEND BOOST_COMPONENTS regex)
   endif()
-  
+
   find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED COMPONENTS ${BOOST_COMPONENTS})
 endif()
 
@@ -867,7 +867,7 @@ elseif(NOT MSVC AND NOT DEPENDS)
   set(EXTRA_LIBRARIES ${RT})
 endif()
 
-if (LINUX AND STATIC)
+if (UNIX AND STATIC)
   set(EXTRA_LIBRARIES "${EXTRA_LIBRARIES};protokit;bsd")
 endif()
 
