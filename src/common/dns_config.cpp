@@ -10,9 +10,9 @@ namespace dns_config
     std::vector<std::string> m_txt_seed_nodes;
     std::vector<std::string> m_update;
     std::vector<std::string> m_download;
-        std::vector<std::string> m_analytics;
+    std::vector<std::string> m_analytics;
     bool m_dnssec_ok;
-    tools::DNSResolver dr = tools::DNSResolver::create();
+    bool m_is_dns_disabled = false;
 
     void init(const bool testnet)
     {
@@ -25,6 +25,12 @@ namespace dns_config
 
         bool dns_avail = false, dns_valid = false;
         std::vector<std::string> result;
+
+        if(is_dns_disabled())
+        {
+            LOG_PRINT_L0("DNS disabled. Returning from init...");
+            return;
+        }
 
         tools::DNSResolver dr = tools::DNSResolver::create();
 
@@ -75,4 +81,7 @@ namespace dns_config
     bool has_seed_node_records() { return m_seed_nodes.size() > 0; }
     bool has_analytics_records() { return m_analytics.size() > 0; }
     bool is_dnssec_ok() { return m_dnssec_ok; }
+
+    void disable_dns(bool disable) { m_is_dns_disabled = disable; }
+    bool is_dns_disabled() { return m_is_dns_disabled; }    
 }

@@ -139,6 +139,12 @@ namespace daemon_args
   , false
   };
 
+  const command_line::arg_descriptor<bool> arg_nodns = {
+    "no-dns"
+  , "Do not use DNS to get seed nodes, update links or anything else from the web"
+  , false
+  };
+
 }  // namespace daemon_args
 
 #endif // DAEMON_COMMAND_LINE_ARGS_H
