@@ -50,7 +50,7 @@ jobs:
                     name: win-x64
                     path: 'build/**/**/**/bin/nerva*'
 
-    build-macos:
+    release-macos:
         runs-on: macos-13
         steps:
             -   uses: actions/checkout@v4
@@ -61,7 +61,7 @@ jobs:
                     HOMEBREW_NO_AUTO_UPDATE=1 brew install boost hidapi zmq libpgm miniupnpc ldns expat libunwind-headers protobuf@21 ccache
                     brew link protobuf@21
             -   name: Build
-                run: USE_SINGLE_DIR=1 release-static-mac-x86_64 -j3
+                run: USE_SINGLE_DIR=1 make release-static-mac-x86_64 -j3
             -   name: Upload artifacts
                 uses: actions/upload-artifact@v4
                 with:
