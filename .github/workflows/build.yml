@@ -9,7 +9,7 @@ on:
             - '**/*.md'
 
 env:
-    REMOVE_BUNDLED_PACKAGES : sudo rm -rf /usr/local
+    REMOVE_BUNDLED_PACKAGES: sudo rm -rf /usr/local
     SET_APT_CONF: |
         echo "Acquire::Retries \"3\";"         | sudo tee -a /etc/apt/apt.conf.d/80-custom
         echo "Acquire::http::Timeout \"120\";" | sudo tee -a /etc/apt/apt.conf.d/80-custom
@@ -93,29 +93,29 @@ jobs:
                     ${{env.CCACHE_SETTINGS}}
                     make -j3
 
-        libwallet-ubuntu:
-            runs-on: ubuntu-latest
-            env:
-                CCACHE_TEMPDIR: ~/.ccache-temp
-            steps:
-                -   uses: actions/checkout@v4
-                    with:
-                        submodules: recursive
-                -   uses: actions/cache@v4
-                    with:
-                        path: ~/.ccache
-                        key: ccache-${{ runner.os }}-libwallet-${{ matrix.os }}-${{ github.sha }}
-                        restore-keys: ccache-${{ runner.os }}-libwallet-${{ matrix.os }}
-                -   name: Remove bundled packages
-                    run: ${{env.REMOVE_BUNDLED_PACKAGES}}
-                -   name: Set APT configuration
-                    run: ${{env.SET_APT_CONF}}
-                -   name: Update APT
-                    run: sudo apt update
-                -   name: Install dependencies
-                    run: sudo apt install -y build-essential cmake ccache pkg-config libboost-all-dev libssl-dev libzmq3-dev libpgm-dev libunbound-dev libsodium-dev git
-                -   name: Build
-                    run: |
-                        ${{env.CCACHE_SETTINGS}}
-                        cmake .
-                        make wallet_api -j3
+    libwallet-ubuntu:
+        runs-on: ubuntu-latest
+        env:
+            CCACHE_TEMPDIR: ~/.ccache-temp
+        steps:
+            -   uses: actions/checkout@v4
+                with:
+                submodules: recursive
+            -   uses: actions/cache@v4
+                with:
+                    path: ~/.ccache
+                    key: ccache-${{ runner.os }}-libwallet-${{ matrix.os }}-${{ github.sha }}
+                    restore-keys: ccache-${{ runner.os }}-libwallet-${{ matrix.os }}
+            -   name: Remove bundled packages
+                run: ${{env.REMOVE_BUNDLED_PACKAGES}}
+            -   name: Set APT configuration
+                run: ${{env.SET_APT_CONF}}
+            -   name: Update APT
+                run: sudo apt update
+            -   name: Install dependencies
+                run: sudo apt install -y build-essential cmake ccache pkg-config libboost-all-dev libssl-dev libzmq3-dev libpgm-dev libunbound-dev libsodium-dev git
+            -   name: Build
+                run: |
+                    ${{env.CCACHE_SETTINGS}}
+                    cmake .
+                    make wallet_api -j3
