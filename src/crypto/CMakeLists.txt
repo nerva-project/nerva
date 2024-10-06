@@ -106,3 +106,7 @@ if (ANDROID OR IOS)
     add_definitions(-DFORCE_USE_HEAP=1)
   endif()
 endif()
+
+# cheat because cmake and ccache hate each other
+set_property(SOURCE CryptonightR_template.S PROPERTY LANGUAGE C)
+set_property(SOURCE CryptonightR_template.S PROPERTY XCODE_EXPLICIT_FILE_TYPE sourcecode.asm)
