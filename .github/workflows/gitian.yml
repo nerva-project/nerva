@@ -1,11 +1,9 @@
 name: ci/gh-actions/gitian
 
-on: [ push ]
-
-#on:
-#    push:
-#        tags:
-#            - '*'
+on:
+    push:
+        tags:
+            - '*'
 
 jobs:
     build-gitian:
