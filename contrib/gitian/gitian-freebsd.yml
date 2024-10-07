@@ -2,7 +2,7 @@
 name: "nerva-freebsd-0.2"
 enable_cache: true
 suites:
-- "bionic"
+- "focal"
 architectures:
 - "amd64"
 packages:
