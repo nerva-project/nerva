@@ -26,9 +26,6 @@ jobs:
             fail-fast: false
             matrix:
                 toolchain:
-                    -   name: "RISCV 64bit"
-                        host: "riscv64-linux-gnu"
-                        packages: "python3 gperf g++-riscv64-linux-gnu"
                     -   name: "ARM v7"
                         host: "arm-linux-gnueabihf"
                         packages: "python3 gperf g++-arm-linux-gnueabihf"
