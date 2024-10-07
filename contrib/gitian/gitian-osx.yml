@@ -2,7 +2,7 @@
 name: "nerva-osx-0.2"
 enable_cache: true
 suites:
-- "focal"
+- "bionic"
 architectures:
 - "amd64"
 packages:

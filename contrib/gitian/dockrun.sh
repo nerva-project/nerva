@@ -17,8 +17,8 @@ fi
 
 GH_USER=${GH_USER-$USER}
 
-TAG=gitrun-focal
-TAG2=base-focal-amd64
+TAG=gitrun-bionic
+TAG2=base-bionic-amd64
 IMAGE=`docker images | grep $TAG`
 
 WORKDIR=/home/ubuntu
@@ -30,7 +30,7 @@ cd docker
 
 # container for running gitian-build.py
 cat <<EOF > ${TAG}.Dockerfile
-FROM ubuntu:focal
+FROM ubuntu:bionic
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN echo 'Acquire::http { Proxy "http://172.17.0.1:3142"; };' > /etc/apt/apt.conf.d/50cacher
@@ -63,7 +63,7 @@ cd docker
 
 # container for actually running each build
 cat <<EOF > ${TAG2}.Dockerfile
-FROM ubuntu:focal
+FROM ubuntu:bionic
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN echo 'Acquire::http { Proxy "http://172.17.0.1:3142"; };' > /etc/apt/apt.conf.d/50cacher
