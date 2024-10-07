@@ -3,10 +3,10 @@ name: ci/gh-actions/build
 on:
     push:
         paths-ignore:
-            - '**/*.md'
+            - '**.md'
     pull_request:
         paths-ignore:
-            - '**/*.md'
+            - '**.md'
 
 env:
     REMOVE_BUNDLED_PACKAGES: sudo rm -rf /usr/local
