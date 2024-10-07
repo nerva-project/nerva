@@ -63,15 +63,13 @@ jobs:
                 with:
                     fetch-depth: 0
                     submodules: recursive
-            # Most volatile cache
-            -   name: ccache
+            -   name: Ccache
                 uses: actions/cache@v4
                 with:
                     path: ~/.ccache
                     key: ccache-${{ matrix.toolchain.host }}-${{ github.sha }}
                     restore-keys: ccache-${{ matrix.toolchain.host }}-
-            # Less volatile cache
-            -   name: depends cache
+            -   name: Depends cache
                 uses: actions/cache@v4
                 with:
                     path: contrib/depends/built
@@ -79,23 +77,16 @@ jobs:
                     restore-keys: |
                         depends-${{ matrix.toolchain.host }}-${{ hashFiles('contrib/depends/packages/*') }}
                         depends-${{ matrix.toolchain.host }}-
-            # Static cache
-            -   name: OSX SDK cache
-                uses: actions/cache@v4
-                with:
-                    path: contrib/depends/sdk-sources
-                    key: sdk-${{ matrix.toolchain.host }}-${{ matrix.toolchain.osx_sdk }}
-                    restore-keys: sdk-${{ matrix.toolchain.host }}-${{ matrix.toolchain.osx_sdk }}
-            -   name: set apt conf
+            -   name: Set apt conf
                 run: ${{env.APT_SET_CONF}}
-            -   name: install dependencies
+            -   name: Install dependencies
                 run: sudo apt update; sudo apt -y install build-essential libtool cmake autotools-dev automake pkg-config bsdmainutils curl git ca-certificates ccache ${{ matrix.toolchain.packages }}
-            -   name: prepare w64-mingw32
+            -   name: Prepare w64-mingw32
                 if: ${{ matrix.toolchain.host == 'x86_64-w64-mingw32' || matrix.toolchain.host == 'i686-w64-mingw32' }}
                 run: |
                     sudo update-alternatives --set ${{ matrix.toolchain.host }}-g++ $(which ${{ matrix.toolchain.host }}-g++-posix)
                     sudo update-alternatives --set ${{ matrix.toolchain.host }}-gcc $(which ${{ matrix.toolchain.host }}-gcc-posix)
-            -   name: build
+            -   name: Build
                 run: |
                     ${{env.CCACHE_SETTINGS}}
                     make depends target=${{ matrix.toolchain.host }} -j2
