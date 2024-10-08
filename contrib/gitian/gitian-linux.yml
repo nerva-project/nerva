@@ -159,6 +159,7 @@ script: |
     fi
     export C_INCLUDE_PATH="$EXTRA_INCLUDES"
     export CPLUS_INCLUDE_PATH="$EXTRA_INCLUDES"
+    cmake .. -DCMAKE_TOOLCHAIN_FILE=${BASEPREFIX}/${i}/share/toolchain.cmake -DBACKCOMPAT=${BACKCOMPAT_OPTION} -DCMAKE_SKIP_RPATH=ON
     make ${MAKEOPTS}
     chmod 755 bin/*
     cp ../LICENSE ../README.md ../docs/ANONYMITY_NETWORKS.md bin
@@ -169,3 +170,4 @@ script: |
     cd ..
     rm -rf build
   done
+
