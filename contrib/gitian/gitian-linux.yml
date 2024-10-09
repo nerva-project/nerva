@@ -37,7 +37,7 @@ packages:
 - "python"
 - "cmake"
 remotes:
-- "url": "https://github.com/Sn1F3rt/nerva.git"
+- "url": "https://github.com/nerva-project/nerva.git"
   "dir": "nerva"
 files: []
 script: |

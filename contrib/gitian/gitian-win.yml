@@ -35,7 +35,7 @@ alternatives:
   package: "x86_64-w64-mingw32-gcc"
   path: "/usr/bin/x86_64-w64-mingw32-gcc-posix"
 remotes:
-- "url": "https://github.com/Sn1F3rt/nerva.git"
+- "url": "https://github.com/nerva-project/nerva.git"
   "dir": "nerva"
 files: []
 script: |
