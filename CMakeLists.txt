@@ -1207,11 +1207,6 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang" AND ARCH_WIDTH EQUAL "32" AND NOT IOS AND
   endif()
 endif()
 
-if(STATIC)
-  set(sodium_USE_STATIC_LIBS ON)
-endif()
-find_package(Sodium REQUIRED)
-
 find_path(ZMQ_INCLUDE_PATH zmq.h)
 find_library(ZMQ_LIB zmq)
 find_library(PGM_LIBRARY pgm)
