@@ -1185,7 +1185,7 @@ elseif(USE_READLINE AND DEPENDS AND NOT MINGW)
   set(Readline_LIBRARY "${Readline_LIBRARY};${Terminfo_LIBRARY}")
   set(GNU_READLINE_LIBRARY ${Readline_LIBRARY})
   add_definitions(-DHAVE_READLINE)
-  set(EPEE_READLINE epee_readline)
+#  set(EPEE_READLINE epee_readline)
 endif()
 
 if(ANDROID)
