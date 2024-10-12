@@ -3,10 +3,11 @@ name: ci/gh-actions/build
 on:
     push:
         paths-ignore:
-            - '**/*.md'
+            - '**.md'
     pull_request:
         paths-ignore:
-            - '**/*.md'
+            - '**.md'
+    workflow_dispatch:
 
 env:
     REMOVE_BUNDLED_PACKAGES: sudo rm -rf /usr/local
@@ -22,7 +23,7 @@ jobs:
     build-ubuntu:
         runs-on: ubuntu-latest
         env:
-            CCACHE_TEMPDIR: ~/.ccache-temp
+            CCACHE_TEMPDIR: /tmp/.ccache-temp
         steps:
             -   uses: actions/checkout@v4
                 with:
@@ -74,7 +75,7 @@ jobs:
     build-macos:
         runs-on: macos-latest
         env:
-            CCACHE_TEMPDIR: ~/.ccache-temp
+            CCACHE_TEMPDIR: /tmp/.ccache-temp
         steps:
             -   uses: actions/checkout@v4
                 with:
@@ -96,7 +97,7 @@ jobs:
     libwallet-ubuntu:
         runs-on: ubuntu-latest
         env:
-            CCACHE_TEMPDIR: ~/.ccache-temp
+            CCACHE_TEMPDIR: /tmp/.ccache-temp
         steps:
             -   uses: actions/checkout@v4
                 with:
