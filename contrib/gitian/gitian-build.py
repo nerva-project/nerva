@@ -207,7 +207,7 @@ def main():
         "-u",
         "--url",
         dest="url",
-        default="https://github.com/Sn1F3rt/nerva",
+        default="https://github.com/nerva-project/nerva",
         help="Specify the URL of the repository. Default is %(default)s",
     )
     parser.add_argument(
