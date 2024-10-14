@@ -1,4 +1,6 @@
-// Copyright (c) 2018, The NERVA Project
+// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2014-2024, The Monero Project
+
 #ifndef _RANDOM_NUMBERS_
 #define _RANDOM_NUMBERS_
 

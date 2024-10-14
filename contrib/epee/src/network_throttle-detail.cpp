@@ -2,7 +2,8 @@
 /// @author rfree (current maintainer in monero.cc project)
 /// @brief implementaion for throttling of connection (count and rate-limit speed etc)
 
-// Copyright (c) 2014-2019, The Monero Project
+// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2014-2024, The Monero Project
 // 
 // All rights reserved.
 // 
