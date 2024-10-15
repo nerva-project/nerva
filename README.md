@@ -25,6 +25,8 @@ Each miner requires a copy of the blockchain, hence there is no support for pool
 
 You can download precompiled binaries from the [releases][nerva-releases-link].
 
+You can also use the official Nerva Docker image from Docker Hub. See [docs/DOCKER.md](docs/DOCKER.md) for instructions.
+
 Alternatively, see [docs/BUILDING.md](docs/BUILDING.md) for build instructions.
 
 ## Contributing
