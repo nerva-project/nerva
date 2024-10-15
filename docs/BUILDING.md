@@ -213,6 +213,8 @@ By default, in either dynamically or statically linked builds, binaries target t
 * ```make release-static-linux-armv8``` builds binaries on Linux portable across POSIX systems on armv8 processors
 * ```make release-static-linux-armv7``` builds binaries on Linux portable across POSIX systems on armv7 processors
 * ```make release-static-linux-armv6``` builds binaries on Linux portable across POSIX systems on armv6 processors
+* ```make release-static-mac-x86_64``` builds binaries on macOS on x86_64 portable across macOS systems on x86_64 processors
+* ```make release-static-mac-armv8``` builds binaries on macOS on arm64 portable across macOS systems on arm64 processors
 * ```make release-static-win64``` builds binaries on 64-bit Windows portable across 64-bit Windows systems
 * ```make release-static-win32``` builds binaries on 64-bit or 32-bit Windows portable across 32-bit Windows systems
 
