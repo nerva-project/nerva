@@ -1,5 +1,6 @@
+// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2014-2024, The Monero Project
 // Copyright (c) 2006-2013, Andrey N. Sabelnikov, www.sabelnikov.net
-// Copyright (c) 2018-2019, The NERVA Project
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without

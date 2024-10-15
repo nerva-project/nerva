@@ -1,4 +1,3 @@
-// Copyright (c) 2018-2019, The NERVA Project
 // Copyright (c) 2016, Monero Research Labs
 //
 // Author: Shen Noether <shen.noether@gmx.com>
