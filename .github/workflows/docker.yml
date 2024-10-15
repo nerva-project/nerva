@@ -31,8 +31,8 @@ name: ci/gh-actions/docker
 
 on:
     push:
-        branches:
-            - docker-test-2
+        tags:
+            - '*'
 
 jobs:
     docker:
