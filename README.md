@@ -15,11 +15,11 @@
 
 ## About
 
-Nerva (XNV) is a private and secure cryptocurrency that you can mine on your computer's CPU. It's GPU and ASIC resistant and tries to stay true to 1 CPU = 1 VOTE vision.
+Nerva (XNV) is a private and secure cryptocurrency that you can mine on your computer's CPU. It's GPU and ASIC resistant and tries to stay true to the 1 CPU = 1 VOTE vision.
 
-Nerva offers true privacy and fungibility, is untraceable and unlinkable, with users and transfer amounts hidden from the public.
+Nerva offers true privacy and fungibility, is untraceable and un-linkable, with users and transfer amounts hidden from the public.
 
-Each miner requires a copy of the blockchain, hence there is no support for pool mining. Therefore, Nerva offers better decentralization and censorship resistance.
+Each miner requires a copy of the blockchain, hence there is no support for pool mining. Therefore, Nerva offers better decentralization and censorship resistance than the majority of other blockchains.
 
 ## Installing
 
