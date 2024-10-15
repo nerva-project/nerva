@@ -136,7 +136,7 @@ GH_USER=YOUR_GITHUB_USER_NAME
 VERSION=v0.2.0.0
 ```
 
-Where `GH_USER` is your GitHub user name and `VERSION` is the version tag you want to build.
+Where `GH_USER` is your GitHub username and `VERSION` is the version tag you want to build.
 The `gitian-build.py`'s `--setup` switch will also refresh the environment of any stale files and submodules.
 
 Setup for LXC:
@@ -157,7 +157,7 @@ fork the [gitian-sigs repository](https://github.com/nerva-project/gitian-sigs) 
 or pass the signed assert file back to your build machine.
 
 ```bash
-git clone https://github.com/nerva-project/gitian.sigs/
+git clone https://github.com/nerva-project/gitian-sigs/
 pushd gitian-sigs
 git remote add $GH_USER https://github.com/$GH_USER/gitian-sigs
 popd
