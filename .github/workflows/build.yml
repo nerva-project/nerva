@@ -3,10 +3,12 @@ name: ci/gh-actions/build
 on:
     push:
         paths-ignore:
-            - '**.md'
+            - 'docs/**'
+            - '**/README.md'
     pull_request:
         paths-ignore:
-            - '**.md'
+            - 'docs/**'
+            - '**/README.md'
     workflow_dispatch:
 
 env:
