@@ -91,3 +91,5 @@ cmake-build-debug/
 __pycache__/
 *.pyc
 *.log
+
+builder/output/
