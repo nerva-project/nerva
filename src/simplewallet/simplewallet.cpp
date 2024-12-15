@@ -157,6 +157,7 @@ namespace
   const command_line::arg_descriptor<bool> arg_long_payment_id_support = {"long-payment-id-support", sw::tr("Support obsolete long (unencrypted) payment ids (using them harms your privacy)"), false};
 
   const command_line::arg_descriptor< std::vector<std::string> > arg_command = {"command", ""};
+  const command_line::arg_descriptor<bool> arg_non_interactive = {"non-interactive", sw::tr("run the command in non interactive mode"), false};
 
   const char* USAGE_START_MINING("start_mining [<number_of_threads>] [bg_mining] [ignore_battery]");
   const char* USAGE_SET_DONATE_LEVEL("donate_level [<number_of_blocks>]");
@@ -3624,6 +3625,11 @@ bool simple_wallet::init(const boost::program_options::variables_map& vm)
 
   bool welcome = false;
 
+  if (m_non_interactive && command_line::is_arg_defaulted(vm, arg_command)) {
+    fail_msg_writer() << tr("Cannot specify non interactive mode when there is no command given");
+    return false;
+  }
+
   if((!m_generate_new.empty()) + (!m_wallet_file.empty()) + (!m_generate_from_device.empty()) + (!m_generate_from_view_key.empty()) + (!m_generate_from_spend_key.empty()) + (!m_generate_from_keys.empty()) + (!m_generate_from_multisig_keys.empty()) + (!m_generate_from_json.empty()) > 1)
   {
     fail_msg_writer() << tr("can't specify more than one of --generate-new-wallet=\"wallet_name\", --wallet-file=\"wallet_name\", --generate-from-view-key=\"wallet_name\", --generate-from-spend-key=\"wallet_name\", --generate-from-keys=\"wallet_name\", --generate-from-multisig-keys=\"wallet_name\", --generate-from-json=\"jsonfilename\" and --generate-from-device=\"wallet_name\"");
@@ -4270,6 +4276,7 @@ bool simple_wallet::handle_command_line(const boost::program_options::variables_
                                     !m_generate_from_device.empty() ||
                                     m_restore_deterministic_wallet ||
                                     m_restore_multisig_wallet;
+  m_non_interactive               = command_line::get_arg(vm, arg_non_interactive);
 
   if (!command_line::is_arg_defaulted(vm, arg_restore_date))
   {
@@ -4367,7 +4374,7 @@ boost::optional<epee::wipeable_string> simple_wallet::new_wallet(const boost::pr
   const crypto::secret_key& recovery_key, bool recover, bool two_random, const std::string &old_language)
 {
   std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> rc;
-  try { rc = tools::wallet2::make_new(vm, false, password_prompter); }
+  try { rc = tools::wallet2::make_new(vm, m_non_interactive, password_prompter); }
   catch(const std::exception &e) { fail_msg_writer() << tr("Error creating wallet: ") << e.what(); return {}; }
   m_wallet = std::move(rc.first);
   if (!m_wallet)
@@ -4464,7 +4471,7 @@ boost::optional<epee::wipeable_string> simple_wallet::new_wallet(const boost::pr
   const crypto::secret_key& viewkey)
 {
   std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> rc;
-  try { rc = tools::wallet2::make_new(vm, false, password_prompter); }
+  try { rc = tools::wallet2::make_new(vm, m_non_interactive, password_prompter); }
   catch(const std::exception &e) { fail_msg_writer() << tr("Error creating wallet: ") << e.what(); return {}; }
   m_wallet = std::move(rc.first);
   if (!m_wallet)
@@ -4512,7 +4519,7 @@ boost::optional<epee::wipeable_string> simple_wallet::new_wallet(const boost::pr
 boost::optional<epee::wipeable_string> simple_wallet::new_wallet(const boost::program_options::variables_map& vm)
 {
   std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> rc;
-  try { rc = tools::wallet2::make_new(vm, false, password_prompter); }
+  try { rc = tools::wallet2::make_new(vm, m_non_interactive, password_prompter); }
   catch(const std::exception &e) { fail_msg_writer() << tr("Error creating wallet: ") << e.what(); return {}; }
   m_wallet = std::move(rc.first);
   m_wallet->callback(this);
@@ -4555,7 +4562,7 @@ boost::optional<epee::wipeable_string> simple_wallet::new_wallet(const boost::pr
     const epee::wipeable_string &multisig_keys, const std::string &old_language)
 {
   std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> rc;
-  try { rc = tools::wallet2::make_new(vm, false, password_prompter); }
+  try { rc = tools::wallet2::make_new(vm, m_non_interactive, password_prompter); }
   catch(const std::exception &e) { fail_msg_writer() << tr("Error creating wallet: ") << e.what(); return {}; }
   m_wallet = std::move(rc.first);
   if (!m_wallet)
@@ -9578,6 +9585,7 @@ int main(int argc, char* argv[])
   command_line::add_arg(desc_params, arg_generate_from_json);
   command_line::add_arg(desc_params, arg_mnemonic_language);
   command_line::add_arg(desc_params, arg_command);
+  command_line::add_arg(desc_params, arg_non_interactive);
 
   command_line::add_arg(desc_params, arg_restore_deterministic_wallet );
   command_line::add_arg(desc_params, arg_restore_from_seed );
