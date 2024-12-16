@@ -415,6 +415,7 @@ namespace cryptonote
     uint64_t m_restore_height;  // optional
     bool m_do_not_relay;
     bool m_use_english_language_names;
+    bool m_non_interactive; // is the cli started under a shell script?
 
     epee::console_handlers_binder m_cmd_binder;
 
