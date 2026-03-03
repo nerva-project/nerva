@@ -139,6 +139,24 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------
+  bool construct_uncle_miner_tx(uint64_t amount, crypto::public_key out_eph_public_key, crypto::public_key tx_pubkey, transaction& tx)
+  {
+    add_tx_pub_key_to_extra(tx, tx_pubkey);
+
+    txout_to_key tk;
+    tk.key = out_eph_public_key;
+
+    tx_out out;
+    out.amount = amount / SECOR_UNCLE_REWARD_RATIO;
+    out.target = tk;
+    tx.vout.push_back(out);
+
+    //lock
+    tx.invalidate_hashes();
+
+    return true;
+  }
+  //---------------------------------------------------------------
   bool construct_genesis_tx(transaction& tx, uint64_t amount) {
     tx.vin.clear();
     tx.vout.clear();
