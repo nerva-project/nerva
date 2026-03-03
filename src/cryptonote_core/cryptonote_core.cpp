@@ -702,8 +702,8 @@ namespace cryptonote
     r = m_miner.init(vm, m_nettype);
     CHECK_AND_ASSERT_MES(r, false, "Failed to initialize miner instance");
 
-    if (!keep_alt_blocks && !m_blockchain_storage.get_db().is_read_only())
-      m_blockchain_storage.get_db().drop_alt_blocks();
+    // if (!keep_alt_blocks && !m_blockchain_storage.get_db().is_read_only())
+    //   m_blockchain_storage.get_db().drop_alt_blocks();
 
     if (prune_blockchain)
     {
@@ -1443,6 +1443,19 @@ namespace cryptonote
     CHECK_AND_ASSERT_MES(!bvc.m_verifivation_failed, false, "mined block failed verification");
     if(bvc.m_added_to_main_chain)
     {
+      if (b.uncle_hash != crypto::null_hash)
+      {
+        // first relay uncle blocks if an uncle block hash is included in the block
+        cryptonote_connection_context exclude_context = {};
+        NOTIFY_NEW_BLOCK::request arg = AUTO_VAL_INIT(arg);
+        arg.current_blockchain_height = m_blockchain_storage.get_current_blockchain_height()-1; // -1 per uncle block definition
+        cryptonote::block uncle_block;
+        get_block_by_hash(b.uncle_hash, uncle_block);
+        block_to_blob(uncle_block, arg.b.block);
+        m_pprotocol->relay_block(arg, exclude_context);
+        // TODO: this should be recursive - if the uncle's prev_id isnt in the main chain then continue relaying the alt chain history until a common ancestor is found
+      }
+
       cryptonote_connection_context exclude_context = {};
       NOTIFY_NEW_BLOCK::request arg = AUTO_VAL_INIT(arg);
       arg.current_blockchain_height = m_blockchain_storage.get_current_blockchain_height();

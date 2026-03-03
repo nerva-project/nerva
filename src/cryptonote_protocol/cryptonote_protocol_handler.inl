@@ -432,7 +432,8 @@ namespace cryptonote
   template<class t_core>
   int t_cryptonote_protocol_handler<t_core>::handle_notify_new_block(int command, NOTIFY_NEW_BLOCK::request& arg, cryptonote_connection_context& context)
   {
-    MLOGIF_P2P_MESSAGE(crypto::hash hash; cryptonote::block b; bool ret = cryptonote::parse_and_validate_block_from_blob(arg.b.block, b, &hash);, ret, "Received NOTIFY_NEW_BLOCK " << hash << " (height " << arg.current_blockchain_height << ", " << arg.b.txs.size() << " txes)");
+    cryptonote::block b;
+    MLOGIF_P2P_MESSAGE(crypto::hash hash; b; bool ret = cryptonote::parse_and_validate_block_from_blob(arg.b.block, b, &hash);, ret, "Received NOTIFY_NEW_BLOCK " << hash << " (height " << arg.current_blockchain_height << ", " << arg.b.txs.size() << " txes)");
     if(context.m_state != cryptonote_connection_context::state_normal)
       return 1;
     if(!is_synchronized() || m_no_sync) // can happen if a peer connection goes to normal but another thread still hasn't finished adding queued blocks
@@ -483,6 +484,16 @@ namespace cryptonote
     if(bvc.m_added_to_main_chain)
     {
       //TODO: Add here announce protocol usage
+      if (b.uncle_hash != crypto::null_hash)
+      {
+        cryptonote_connection_context exclude_context = {};
+        NOTIFY_NEW_BLOCK::request arg_uncle_request = AUTO_VAL_INIT(arg_uncle_request);
+        arg_uncle_request.current_blockchain_height = arg.current_blockchain_height-1; // -1 per uncle block definition
+        cryptonote::block uncle_block;
+        m_core.get_block_by_hash(b.uncle_hash, uncle_block);
+        block_to_blob(uncle_block, arg_uncle_request.b.block);
+        relay_block(arg_uncle_request, exclude_context);
+      }
       relay_block(arg, context);
     }else if(bvc.m_marked_as_orphaned)
     {
@@ -761,6 +772,16 @@ namespace cryptonote
         if( bvc.m_added_to_main_chain )
         {
           //TODO: Add here announce protocol usage
+          if (new_block.uncle_hash != crypto::null_hash)
+          {
+            cryptonote_connection_context exclude_context = {};
+            NOTIFY_NEW_BLOCK::request arg_uncle_request = AUTO_VAL_INIT(arg_uncle_request);
+            arg_uncle_request.current_blockchain_height = arg.current_blockchain_height-1; // -1 per uncle block definition
+            cryptonote::block uncle_block;
+            m_core.get_block_by_hash(new_block.uncle_hash, uncle_block);
+            block_to_blob(uncle_block, arg_uncle_request.b.block);
+            relay_block(arg_uncle_request, exclude_context);
+          }
           NOTIFY_NEW_BLOCK::request reg_arg = AUTO_VAL_INIT(reg_arg);
           reg_arg.current_blockchain_height = arg.current_blockchain_height;
           reg_arg.b = b;
