@@ -81,7 +81,7 @@ namespace cryptonote
   }
   //---------------------------------------------------------------
   bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, const account_public_address &miner_address, 
-    transaction& tx, const blobdata& extra_nonce, size_t max_outs, uint8_t hard_fork_version) {
+    transaction& tx, const blobdata& extra_nonce, size_t max_outs, uint8_t hard_fork_version, bool uncle_reward) {
     tx.vin.clear();
     tx.vout.clear();
     tx.extra.clear();
@@ -108,6 +108,7 @@ namespace cryptonote
     LOG_PRINT_L1("Creating block template: reward " << block_reward <<
       ", fee " << fee);
 #endif
+    if (uncle_reward) block_reward += block_reward / SECOR_NEPHEW_REWARD_RATIO;
     block_reward += fee;
 
     crypto::key_derivation derivation = AUTO_VAL_INIT(derivation);

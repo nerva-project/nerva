@@ -1261,6 +1261,7 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
   uint64_t total_reward = base_reward + fee;
   if (b.uncle_hash != crypto::null_hash)
   {
+    total_reward += base_reward / SECOR_NEPHEW_REWARD_RATIO;
     total_reward += base_reward / SECOR_UNCLE_REWARD_RATIO;
     // make sure that the uncle reward uses the output key from the uncle block miner tx and is for the correct amount - dont let the nephew miner steal the uncle reward
     cryptonote::block uncle_block;
@@ -1550,7 +1551,7 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
    block weight, so first miner transaction generated with fake amount of money, and with phase we know think we know expected block weight
    */
   //make blocks coin-base tx looks close to real coinbase tx to get truthful blob size
-  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, 0, hf_version);
+  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, 0, hf_version, b.uncle_hash != crypto::null_hash);
   if (b.uncle_hash != crypto::null_hash)
   {
     cryptonote::block uncle_block;
@@ -1567,7 +1568,7 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
 #endif
   for (size_t try_count = 0; try_count != 10; ++try_count)
   {
-    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, miner_address, b.miner_tx, ex_nonce, 0, hf_version);
+    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, miner_address, b.miner_tx, ex_nonce, 0, hf_version, b.uncle_hash != crypto::null_hash);
     if (b.uncle_hash != crypto::null_hash)
     {
       cryptonote::block uncle_block;
