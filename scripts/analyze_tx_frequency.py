@@ -1,4 +1,3 @@
-import os
 import json
 import requests
 
@@ -12,31 +11,39 @@ def get_block(block_hash:str) -> dict:
     r = requests.post(DAEMON_HOST, json={'method': 'get_block', 'params': {'hash': block_hash}})
     return json.loads(r.json()['result']['json'])
 
-if __name__ == '__main__':
-    top_block_hash, top_block_height = get_top_block()
+class BlockchainRPCIterator:
+    '''
+    Iterate from the top of the chain to the origin block via RPC
+    '''
+    def __init__(self): # TODO allow caller to set a batch size to get blocks in batches
+        self.next_block_hash, self.height = get_top_block()
 
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        block = get_block(self.next_block_hash)
+        self.next_block_hash = block['prev_id']
+        self.height = block['miner_tx']['vin'][0]['gen']['height']
+        return block
+
+if __name__ == '__main__':
 
     empty_block_counter = 0
     blocks_found = 0
     total_blocks_scanned = 0
 
-    non_miner_txs = []
-    height = top_block_height
-    next_block_hash = top_block_hash
-    while height > 1: # speed could be improved by batching the network requests
-        block = get_block(next_block_hash)
+    for block in BlockchainRPCIterator():
         non_miner_txs = block['tx_hashes']
-        next_block_hash = block['prev_id']
         total_blocks_scanned += 1
-    
+
         if block['tx_hashes']:
             blocks_found += 1
             # print(block)
-            height = block['miner_tx']['vin'][0]['gen']['height']
             print(f'{empty_block_counter} block searched since last block')
             print(f'{blocks_found} / {total_blocks_scanned} are not empty ({(float(blocks_found)/float(total_blocks_scanned))*100.0}%)')
             empty_block_counter = 0 # reset counter to get gap until next non-empty block
         else:
             empty_block_counter += 1
 
-    print(f'{blocks_found} / {total_blocks_scanned} are not empty ({(float(blocks_found)/float(total_blocks_scanned))*100.0}%)')
+    print(f'{100.0 - ((float(blocks_found)/float(total_blocks_scanned))*100.0)}% blocks are empty')
