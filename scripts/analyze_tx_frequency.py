@@ -3,29 +3,30 @@ import requests
 
 DAEMON_HOST = 'http://127.0.0.1:17566/json_rpc'
 
-def get_top_block() -> (str, int):
-    r = requests.post(DAEMON_HOST, json={'method': 'get_info'})
-    return r.json()['result']['top_block_hash'], r.json()['result']['height']
-
-def get_block(block_hash:str) -> dict:
-    r = requests.post(DAEMON_HOST, json={'method': 'get_block', 'params': {'hash': block_hash}})
-    return json.loads(r.json()['result']['json'])
-
 class BlockchainRPCIterator:
     '''
     Iterate from the top of the chain to the origin block via RPC
     '''
-    def __init__(self): # TODO allow caller to set a batch size to get blocks in batches
-        self.next_block_hash, self.height = get_top_block()
+    def __init__(self):
+        self.session = requests.Session()
+        self.next_block_hash, self.height = self.get_top_block()
 
     def __iter__(self):
         return self
 
     def __next__(self):
-        block = get_block(self.next_block_hash)
+        block = self.get_block(self.next_block_hash)
         self.next_block_hash = block['prev_id']
         self.height = block['miner_tx']['vin'][0]['gen']['height']
         return block
+
+    def get_top_block(self) -> (str, int):
+        r = self.session.post(DAEMON_HOST, json={'method': 'get_info'})
+        return r.json()['result']['top_block_hash'], r.json()['result']['height']
+
+    def get_block(self, block_hash:str) -> dict:
+        r = self.session.post(DAEMON_HOST, json={'method': 'get_block', 'params': {'hash': block_hash}})
+        return json.loads(r.json()['result']['json'])
 
 if __name__ == '__main__':
 
