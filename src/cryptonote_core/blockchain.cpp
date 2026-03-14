@@ -1259,14 +1259,20 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
   }
 
   uint64_t total_reward = base_reward + fee;
-  if (b.uncle_hash != crypto::null_hash)
+  if (version >= HF_VERSION_SECOR && b.uncle_hash != crypto::null_hash)
   {
+    if (b.miner_tx.vout.size() != 2)
+    {
+      MERROR("miner tx from a block which includes an uncle hash must contain two separate outputs with separate recipients");
+      return false;
+    }
+
     total_reward += base_reward / SECOR_NEPHEW_REWARD_RATIO;
     total_reward += base_reward / SECOR_UNCLE_REWARD_RATIO;
     // make sure that the uncle reward uses the output key from the uncle block miner tx and is for the correct amount - dont let the nephew miner steal the uncle reward
     cryptonote::block uncle_block;
     get_block_by_hash(b.uncle_hash, uncle_block);
-    // TODO: enforce nephew reward at index 0 and uncle reward at index 1
+    // nephew reward at index 0 and uncle reward at index 1 is enforced
     if (boost::get<txout_to_key>(b.miner_tx.vout[1].target).key != boost::get<txout_to_key>(uncle_block.miner_tx.vout[0].target).key)
     {
       MERROR_VER("nephew block miner tx does not include proper uncle reward output key");
@@ -1277,7 +1283,23 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
       MERROR_VER("nephew block miner tx does not include proper uncle reward tx public key in tx extra");
       return false;
     }
+
+    if (b.miner_tx.vout[1].amount != base_reward / SECOR_UNCLE_REWARD_RATIO)
+    {
+      MERROR_VER("miner tx contains uncle reward but the uncle reward amount is incorrect. Amount found " << b.miner_tx.vout[1].amount << " vs amount expected " << base_reward / SECOR_UNCLE_REWARD_RATIO);
+      return false;
+    }
+
   }
+  else if (version >= HF_VERSION_SECOR && b.uncle_hash == crypto::null_hash)
+  {
+    if (b.miner_tx.vout.size() > 1)
+    {
+      MERROR("miner tx after v" << HF_VERSION_SECOR << " cannot contain more than 1 output without an uncle hash in the mined block");
+      return false;
+    }
+  }
+
   if(total_reward != money_in_use && already_generated_coins > 0)
   {
     MERROR_VER("coinbase transaction doesn't use full amount of block reward: spent " << money_in_use 
