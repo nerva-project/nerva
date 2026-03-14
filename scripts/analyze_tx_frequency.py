@@ -16,6 +16,8 @@ class BlockchainRPCIterator:
 
     def __next__(self):
         block = self.get_block(self.next_block_hash)
+        if not block:
+            raise StopIteration
         self.next_block_hash = block['prev_id']
         self.height = block['miner_tx']['vin'][0]['gen']['height']
         return block
@@ -25,8 +27,11 @@ class BlockchainRPCIterator:
         return r.json()['result']['top_block_hash'], r.json()['result']['height']
 
     def get_block(self, block_hash:str) -> dict:
-        r = self.session.post(DAEMON_HOST, json={'method': 'get_block', 'params': {'hash': block_hash}})
-        return json.loads(r.json()['result']['json'])
+        try:
+            r = self.session.post(DAEMON_HOST, json={'method': 'get_block', 'params': {'hash': block_hash}})
+            return json.loads(r.json()['result']['json'])
+        except KeyError:
+            return
 
 if __name__ == '__main__':
 
