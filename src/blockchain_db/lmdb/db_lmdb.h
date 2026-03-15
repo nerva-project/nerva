@@ -66,7 +66,21 @@ typedef struct mdb_block_info_4
   uint64_t bi_long_term_block_weight;
 } mdb_block_info_4;
 
-typedef mdb_block_info_4 mdb_block_info;
+typedef struct mdb_block_info_5
+{
+  uint64_t bi_height;
+  uint64_t bi_timestamp;
+  uint64_t bi_coins;
+  uint64_t bi_weight;
+  uint64_t bi_diff_hi;
+  uint64_t bi_diff_lo;
+  crypto::hash bi_hash;
+  uint64_t bi_cum_rct;
+  uint64_t bi_long_term_block_weight;
+  crypto::hash uncle_blk_hash;
+} mdb_block_info_5;
+
+typedef mdb_block_info_5 mdb_block_info;
 
 typedef struct txindex {
     crypto::hash key;
@@ -348,6 +362,7 @@ public:
                             , const difficulty_type_128& cumulative_difficulty
                             , const uint64_t& coins_generated
                             , const std::vector<std::pair<transaction, blobdata>>& txs
+                            , const crypto::hash& uncle_blk_hash
                             );
 
   virtual void set_batch_transactions(bool batch_transactions);
@@ -402,6 +417,7 @@ private:
                 , const uint64_t& coins_generated
                 , uint64_t num_rct_outs
                 , const crypto::hash& block_hash
+                , const crypto::hash& uncle_blk_hash
                 );
 
   virtual void remove_block();

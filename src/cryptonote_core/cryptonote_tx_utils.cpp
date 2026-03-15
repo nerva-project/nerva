@@ -81,7 +81,7 @@ namespace cryptonote
   }
   //---------------------------------------------------------------
   bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, const account_public_address &miner_address, 
-    transaction& tx, const blobdata& extra_nonce, size_t max_outs, uint8_t hard_fork_version) {
+    transaction& tx, const blobdata& extra_nonce, size_t max_outs, uint8_t hard_fork_version, bool uncle_reward) {
     tx.vin.clear();
     tx.vout.clear();
     tx.extra.clear();
@@ -108,6 +108,7 @@ namespace cryptonote
     LOG_PRINT_L1("Creating block template: reward " << block_reward <<
       ", fee " << fee);
 #endif
+    if (uncle_reward) block_reward += block_reward / SECOR_NEPHEW_REWARD_RATIO;
     block_reward += fee;
 
     crypto::key_derivation derivation = AUTO_VAL_INIT(derivation);
@@ -136,6 +137,24 @@ namespace cryptonote
 
     //LOG_PRINT("MINER_TX generated ok, block_reward=" << print_money(block_reward) << "("  << print_money(block_reward - fee) << "+" << print_money(fee)
     //  << "), current_block_size=" << current_block_size << ", already_generated_coins=" << already_generated_coins << ", tx_id=" << get_transaction_hash(tx), LOG_LEVEL_2);
+    return true;
+  }
+  //---------------------------------------------------------------
+  bool construct_uncle_miner_tx(uint64_t amount, crypto::public_key out_eph_public_key, crypto::public_key tx_pubkey, transaction& tx)
+  {
+    add_tx_pub_key_to_extra(tx, tx_pubkey);
+
+    txout_to_key tk;
+    tk.key = out_eph_public_key;
+
+    tx_out out;
+    out.amount = amount / SECOR_UNCLE_REWARD_RATIO;
+    out.target = tk;
+    tx.vout.push_back(out);
+
+    //lock
+    tx.invalidate_hashes();
+
     return true;
   }
   //---------------------------------------------------------------
