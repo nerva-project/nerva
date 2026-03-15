@@ -24,16 +24,12 @@ If an uncle block is included in the block, then the miner transaction must incl
 
 In order to generate a transaction on behalf of another miner in a non-interactive way without compromising privacy, we re-use the keys associated with the original uncle block miner transaction in the nephew block.
 
-The uncle block transaction public key from the uncle block transaction extra field should be included in nephew miner transaction at index 1. The output key from the uncle block should be re-used at nephew miner transaction output index 1. Since output index is a part of the stealth address generation algorithm,
-```
-Hs(aR|i)*G + B = Hs(rA|i) + B 
-```
-(see cryptonote whitepaper section 4.3),
+The uncle block transaction public key from the uncle block transaction extra field should be included in nephew miner transaction at index 1. The output key from the uncle block should be re-used at nephew miner transaction output index 1. Since output index is a part of the stealth address generation algorithm, `Hs(aR|i)*G + B = Hs(rA|i)G + B` (see cryptonote whitepaper section 4.3),
 wallets should use index 0 to compute the shared secret for both outputs in a nephew block miner reward transaction.
 
 ### Block Reward Bonuses
 
-I use the reward constants proposed in the original SECOR paper: +5% of the base reward amount to the nephew miner and 20% of the base reward amount to the uncle miner. The impact of this is detailed in the "Block Reward Rationale" section.
+I use the reward constants proposed in the original SECOR paper: +5% of the base reward amount to the nephew miner and 50% of the base reward amount to the uncle miner. The impact of this is detailed in the "Block Reward Rationale" section.
 
 The optimal reward for Nerva's implementation is still an active research question.
 
@@ -75,6 +71,87 @@ If we think that uncle blocks will be included in half of the main chain blocks 
 0.3 = X + (11X/40)
 0.3 = 51X / 40
 X = (0.3 * 40) / 51 = 0.23529411764
+```
+
+## Modeling Orphan/Uncle Block Frequencies
+
+Mining is essentially an [IID process](https://en.wikipedia.org/wiki/Independent_and_identically_distributed_random_variables) as the output of the hashing function used for mining should be an IID random variable. Each time the miner chooses a nonce and produces a hash, the miner has either found a valid block for the given difficulty, or they have not and must attempt again with a successive independent trial. The probabilities for this kind of binary problem follow a [bernoulli distribution](https://en.wikipedia.org/wiki/Bernoulli_distribution). Therefore, a [binomial distribution](https://en.wikipedia.org/wiki/Binomial_distribution) where k=1, aka a [geometric distribution](https://en.wikipedia.org/wiki/Geometric_distribution), can be used to model the cumulative probability of finding a block after mining `n` hashes.
+
+A block difficulty target is used to control the rate at which blockchain can be written to. Nerva currently has a block time target of 1 block per minute. If there are 10 miners on the network, each mining at a rate of 5 hashes/second, then the target difficulty should eventualy fit to about `10*5*60`.
+
+#### Scenario A - Few miners, low difficulty.
+```
+Suppose:
+There is a target block time of 60 seconds.
+There are 2 miners, miner A and miner B, on the network, each mining at a rate of 1 H/s.
+
+Then:
+The network difficulty should be 1*2*60=120
+The probability that miner A finds a block after 1 second of hashing is 1/120.
+The probability that miner B has found a block after 1 second of hashing is also 1/120.
+
+The probability that miner A finds a block after 2 seconds of hashing is 2/120.
+The probability that miner B has found a block after 2 seconds of hashing is also 1/120.
+
+The probability that miner A and miner B both find a block after 1 second of mining (at the same time) is (1/120)*(1/120) per IID joint probability.
+
+The cumulative probability that miner A finds a block after 2 seconds of mining is 1 - (1-(1/120))^2 per geometric CDF
+The cumulative probability that miner B finds a block after 2 seconds of mining is 1 - (1-(1/120))^2 per geometric CDF
+
+The probability that miner A and miner B have both found a block after 2 seconds of mining is (1 - (1-(1/120))^2)^2
+
+The probability that miner A and miner B have both found a block after 10 seconds of mining is (1 - (1-(1/120))^10)^2
+
+The probability that a given miner finds a block after mining for 1 minute is 1 - ((1-(1/120))^60), roughly 40%.
+
+The probability that both miners have each found a block after 1 minute of mining is (1 - ((1-(1/120))^60))^2, which is roughly 15%.
+```
+
+#### Scenario B - Few miners, higher difficulty.
+```
+Suppose:
+There is a target block time of 60 seconds.
+There are 2 miners, miner A and miner B, on the network, each mining at a rate of 1,000 H/s.
+
+Then:
+The network difficulty should be 1000*2*60=120000
+The probability that miner A finds a block after mining a single hash is 1/120000.
+The probability that miner B has found a block after mining a single is also 1/120000.
+
+The probability that miner A and miner B both find a block at the same time after each mining a single hash is (1/120000)^2 per IID joint probability.
+
+The probability that a given miner finds a block after mining for 1 second is 1 - ((1-(1/120000))^1000) per geometric CDF.
+
+The probability that miner A and miner B have both found a block after mining 10 hashes is (1 - (1-(1/120000))^10)^2
+
+The probability that miner A and miner B have both found after 1 second of mining is (1 - (1-(1/120000))^1000)^2
+
+The probability that a given miner finds a block after mining for 1 minute is 1 - ((1-(1/120000))^60000), which is roughly 40%. This is the same as when the network hashrate is only 2 H/s.
+
+The probability that both miners have each found a block after mining for 1 minute is (1 - ((1-(1/120000))^60000))^2, which is roughly 15%.
+```
+
+#### Scenario C - Many miners
+```
+Suppose:
+There is a target block time of 60 seconds.
+There are 100 miners on the network, each mining at a rate of 1,000 H/s.
+
+Then:
+The network difficulty should be 1000*100*60=6000000
+The probability that a given miner finds a block after mining a single hash is 1/6000000.
+
+The probability that 2 miners both find a block at the same time after each mining a single hash is (1/6000000)^2 per IID joint probability.
+
+The probability that a given miner finds a block after mining for 1 second is 1 - ((1-(1/6000000))^1000) per geometric CDF.
+
+The probability that two miners have both found a block after mining 10 hashes is (1 - (1-(1/6000000))^10)^2
+
+The probability that two miners have both found after 1 second of mining is (1 - (1-(1/6000000))^1000)^2
+
+The cumulative probability that a given miner finds a block after mining for 1 minute is 1 - ((1-(1/6000000))^60000), which is just less than 1%.
+
+The probability that a two miners have each find a block after mining for 1 minute is (1 - ((1-(1/6000000))^60000))^2, which is less than 0.01%.
 ```
 
 ## Status
