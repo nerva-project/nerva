@@ -1289,7 +1289,6 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
       MERROR_VER("miner tx contains uncle reward but the uncle reward amount is incorrect. Amount found " << b.miner_tx.vout[1].amount << " vs amount expected " << base_reward / SECOR_UNCLE_REWARD_RATIO);
       return false;
     }
-
   }
   else if (version >= HF_VERSION_SECOR && b.uncle_hash == crypto::null_hash)
   {
@@ -1925,7 +1924,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
         bvc.m_verifivation_failed = true;
       return r;
     }
-    else if (block_height == top_block_height && reinterpret_cast<uint32_t&>(pow_top_block) < reinterpret_cast<uint32_t&>(proof_of_work)) // TODO: enforce this when processing nephew blocks in handle block to main chain
+    else if (block_height == top_block_height && reinterpret_cast<uint32_t&>(proof_of_work) < reinterpret_cast<uint32_t&>(pow_top_block))
     {
       MGINFO_GREEN("###### REORGANIZE DUE TO UNCLE BLOCK on height: " << alt_chain.front().height << " of " << m_db->height() - 1 << " with cum_difficulty " << m_db->get_block_cumulative_difficulty(m_db->height() - 1) << std::endl << " alternative blockchain size: " << alt_chain.size() << " with cum_difficulty " << bei.cumulative_difficulty);
 
@@ -3809,7 +3808,27 @@ leave:
     crypto::hash uncle_pow;
     memset(uncle_pow.data, 0xff, sizeof(uncle_pow.data));
     get_block_longhash(m_hash_context, this, uncle_block, uncle_pow, m_db->height()-2);
-    check_hash(uncle_pow, (uint64_t)uncle_difficulty); // is this safe?
+    if(!check_hash(uncle_pow, (uint64_t)uncle_difficulty)) // is this safe?
+    {
+      MERROR_VER("proof-of-work for uncle block failed verification");
+      bvc.m_verifivation_failed = true;
+      return_tx_to_pool(txs);
+      goto leave;
+    }
+
+    // the main chain block at the uncle block height should have a smaller PoW hash than the uncle block
+    cryptonote::block uncle_sibling_block;
+    get_block_by_hash(get_block_id_by_height(m_db->height()-2), uncle_sibling_block);
+    crypto::hash pow_uncle_sibling;
+    memset(pow_uncle_sibling.data, 0xff, sizeof(pow_uncle_sibling.data));
+    get_block_longhash(m_hash_context, this, uncle_sibling_block, pow_uncle_sibling, m_db->height()-2);
+    if (reinterpret_cast<uint32_t&>(uncle_sibling_block) >= reinterpret_cast<uint32_t&>(uncle_pow))
+    {
+      MERROR_VER("the proof-of-work hash for an uncle block must be greater than that of its main chain sibling");
+      bvc.m_verifivation_failed = true;
+      return_tx_to_pool(txs);
+      goto leave;
+    }
 
     // add block difficulty for uncle block(s) to chain cumulative difficulty
     cumulative_difficulty += uncle_difficulty;
