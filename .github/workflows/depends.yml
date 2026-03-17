@@ -94,7 +94,7 @@ jobs:
                         packages: "clang-8 gperf cmake python3-zmq libdbus-1-dev libharfbuzz-dev"
                     -   name: "ARMv8 Android"
                         host: "aarch64-linux-android"
-                        packages: "gperf cmake python3"
+                        packages: "gperf cmake python3 unzip"
         name: ${{ matrix.toolchain.name }}
         steps:
             -   name: Set apt conf
