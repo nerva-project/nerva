@@ -31,6 +31,8 @@ name: ci/gh-actions/depends
 
 on:
     push:
+        branches:
+            - master
         paths-ignore:
             - 'docs/**'
             - '**/README.md'
