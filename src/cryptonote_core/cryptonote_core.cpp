@@ -219,6 +219,12 @@ namespace cryptonote
   , false
   };
 
+  const command_line::arg_descriptor<bool> arg_track_block_recvd_times  = {
+    "track-block-recvd-times"
+  , "Record the local timestamp at which each block received was seen from each peer to blocks_recvd_data.csv"
+  , false
+  };
+
   //-----------------------------------------------------------------------------------------------
   core::core(i_cryptonote_protocol* pprotocol):
               m_mempool(m_blockchain_storage),
@@ -330,6 +336,7 @@ namespace cryptonote
     command_line::add_arg(desc, arg_reorg_notify);
     command_line::add_arg(desc, arg_block_rate_notify);
     command_line::add_arg(desc, arg_keep_alt_blocks);
+    command_line::add_arg(desc, arg_track_block_recvd_times);
 
     miner::init_options(desc);
     BlockchainDB::init_options(desc);
