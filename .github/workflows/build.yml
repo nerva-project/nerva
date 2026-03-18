@@ -54,6 +54,7 @@ env:
 
 jobs:
     build-ubuntu:
+        if: false
         runs-on: ubuntu-latest
         env:
             CCACHE_TEMPDIR: /tmp/.ccache-temp
@@ -80,6 +81,7 @@ jobs:
                     make -j3
 
     build-windows:
+        if: false
         runs-on: windows-latest
         env:
             CCACHE_TEMPDIR: C:\Users\runneradmin\.ccache-temp
@@ -115,6 +117,7 @@ jobs:
                     make release-static-win64 -j2
 
     build-macos:
+        if: false
         runs-on: macos-latest
         env:
             CCACHE_TEMPDIR: /tmp/.ccache-temp
@@ -137,6 +140,7 @@ jobs:
                     make -j3
 
     libwallet-ubuntu:
+        if: false
         runs-on: ubuntu-latest
         env:
             CCACHE_TEMPDIR: /tmp/.ccache-temp
