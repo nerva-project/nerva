@@ -107,7 +107,7 @@ namespace cryptonote
     m_sync_pruned_blocks = command_line::get_arg(vm, cryptonote::arg_sync_pruned_blocks);
     m_track_block_recvd_times = command_line::get_arg(vm, cryptonote::arg_track_block_recvd_times);
 
-    if (m_track_block_recvd_times_fstream)
+    if (m_track_block_recvd_times)
       m_track_block_recvd_times_fstream = std::ofstream(tools::get_default_data_dir() + "/blocks_recvd_data.csv", std::ios::app);
 
     return true;
