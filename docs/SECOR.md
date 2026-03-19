@@ -27,6 +27,8 @@ In order to generate a transaction on behalf of another miner in a non-interacti
 The uncle block transaction public key from the uncle block transaction extra field should be included in nephew miner transaction at index 1. The output key from the uncle block should be re-used at nephew miner transaction output index 1. Since output index is a part of the stealth address generation algorithm, `Hs(aR|i)*G + B = Hs(rA|i)G + B` (see cryptonote whitepaper section 4.3),
 wallets should use index 0 to compute the shared secret for both outputs in a nephew block miner reward transaction.
 
+TODO: This should all be easier if we instead enforce that the uncle reward is placed at index 0 and place the nephew reward at index 1
+
 ### Block Reward Bonuses
 
 I use the reward constants proposed in the original SECOR paper: +5% of the base reward amount to the nephew miner and 50% of the base reward amount to the uncle miner. The impact of this is detailed in the "Block Reward Rationale" section.
@@ -151,8 +153,10 @@ The probability that two miners have both found after 1 second of mining is (1 -
 
 The cumulative probability that a given miner finds a block after mining for 1 minute is 1 - ((1-(1/6000000))^60000), which is just less than 1%.
 
-The probability that a two miners have each find a block after mining for 1 minute is (1 - ((1-(1/6000000))^60000))^2, which is less than 0.01%.
+The probability that a two miners have each find a block after mining for 1 minute is (100*99/2)*((1-(1-(1/6000000))^(60000))^2)*(((1-(1/6000000))^(60000))^98), per binomial distribution (100, 2) which is about 18%
 ```
+
+Overall, the network difficulty adjusts in a way that adding miners to the network doesnt affect the probability of chain splits significantly assuming that mining power is distributed evenly among miners. This model does not account for the fact that adding miners to the network increases the amount of work required for block propogation across all miners on the network.
 
 ## Status
 
@@ -163,6 +167,8 @@ This proposal is a work in progress. I am seeking community feedback to see if I
 #### Coding
 
 * Address the TODO comments
+
+* revisit miner reward tx format
 
 * graceful database migration - currently a sync from scratch is required after upgrading
 
