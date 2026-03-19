@@ -464,7 +464,8 @@ bool ssl_options_t::handshake(
   boost::asio::ssl::stream<boost::asio::ip::tcp::socket> &socket,
   boost::asio::ssl::stream_base::handshake_type type,
   const std::string& host,
-  std::chrono::milliseconds timeout) const
+  std::chrono::milliseconds timeout,
+  boost::asio::io_context& io_context) const
 {
   socket.next_layer().set_option(boost::asio::ip::tcp::no_delay(true));
 
@@ -494,7 +495,11 @@ bool ssl_options_t::handshake(
       // preverified means it passed system or user CA check. System CA is never loaded
       // when fingerprints are whitelisted.
       const bool verified = preverified &&
+#if BOOST_VERSION >= 107300
+        (verification != ssl_verification_t::system_ca || host.empty() || boost::asio::ssl::host_name_verification(host)(preverified, ctx));
+#else
         (verification != ssl_verification_t::system_ca || host.empty() || boost::asio::ssl::rfc2818_verification(host)(preverified, ctx));
+#endif
 
       if (!verified && !has_fingerprint(ctx))
       {
@@ -510,8 +515,7 @@ bool ssl_options_t::handshake(
     });
   }
 
-  auto& io_service = GET_IO_SERVICE(socket);
-  boost::asio::steady_timer deadline(io_service, timeout);
+  boost::asio::steady_timer deadline(io_context, timeout);
   deadline.async_wait([&socket](const boost::system::error_code& error) {
     if (error != boost::asio::error::operation_aborted)
     {
@@ -521,17 +525,17 @@ bool ssl_options_t::handshake(
 
   boost::system::error_code ec = boost::asio::error::would_block;
   socket.async_handshake(type, boost::lambda::var(ec) = boost::lambda::_1);
-  if (io_service.stopped())
+  if (io_context.stopped())
   {
-    io_service.reset();
+    io_context.restart();
   }
-  while (ec == boost::asio::error::would_block && !io_service.stopped())
+  while (ec == boost::asio::error::would_block && !io_context.stopped())
   {
     // should poll_one(), can't run_one() because it can block if there is
-    // another worker thread executing io_service's tasks
+    // another worker thread executing io_context's tasks
     // TODO: once we get Boost 1.66+, replace with run_one_for/run_until
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
-    io_service.poll_one();
+    io_context.poll_one();
   }
 
   if (ec)

@@ -928,8 +928,8 @@ std::string get_nix_version_display_string()
     }
 
     // resolve to IP
-    boost::asio::io_service io_service;
-    boost::asio::ip::tcp::resolver resolver(io_service);
+    boost::asio::io_context io_context;
+    boost::asio::ip::tcp::resolver resolver(io_context);
     boost::asio::ip::tcp::resolver::query query(u_c.host, "");
     boost::asio::ip::tcp::resolver::iterator i = resolver.resolve(query);
     while (i != boost::asio::ip::tcp::resolver::iterator())

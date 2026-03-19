@@ -107,30 +107,7 @@ jobs:
                 uses: msys2/setup-msys2@v2
                 with:
                     update: false
-                    install: mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-ccache mingw-w64-x86_64-openssl mingw-w64-x86_64-zeromq mingw-w64-x86_64-libsodium mingw-w64-x86_64-hidapi mingw-w64-x86_64-unbound git
-            -   name: Cache pinned MSYS2 packages
-                id: cache-pinned-pkgs
-                uses: actions/cache@v5
-                with:
-                    path: C:\msys2-pkg-cache
-                    key: msys2-pinned-pkgs-boost1.86.0-7-icu75.1-2
-            -   name: Download pinned Boost and ICU packages
-                if: steps.cache-pinned-pkgs.outputs.cache-hit != 'true'
-                shell: msys2 {0}
-                run: |
-                    mkdir -p /c/msys2-pkg-cache
-                    cd /c/msys2-pkg-cache
-                    curl -O https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-icu-75.1-2-any.pkg.tar.zst
-                    curl -O https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-icu-75.1-2-any.pkg.tar.zst.sig
-                    curl -O https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-boost-1.86.0-7-any.pkg.tar.zst
-                    curl -O https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-boost-1.86.0-7-any.pkg.tar.zst.sig
-            -   name: Verify and install pinned packages
-                shell: msys2 {0}
-                run: |
-                    cd /c/msys2-pkg-cache
-                    gpg --homedir /etc/pacman.d/gnupg --verify mingw-w64-x86_64-icu-75.1-2-any.pkg.tar.zst.sig
-                    gpg --homedir /etc/pacman.d/gnupg --verify mingw-w64-x86_64-boost-1.86.0-7-any.pkg.tar.zst.sig
-                    pacman --noconfirm -U mingw-w64-x86_64-icu-75.1-2-any.pkg.tar.zst mingw-w64-x86_64-boost-1.86.0-7-any.pkg.tar.zst
+                    install: mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-ccache mingw-w64-x86_64-boost mingw-w64-x86_64-icu mingw-w64-x86_64-openssl mingw-w64-x86_64-zeromq mingw-w64-x86_64-libsodium mingw-w64-x86_64-hidapi mingw-w64-x86_64-unbound git
             -   uses: ./.github/actions/set-make-job-count
             -   name: Build
                 run: |
@@ -155,8 +132,8 @@ jobs:
                         ccache-${{ runner.os }}-build-
             -   name: Install dependencies
                 run: |
-                    HOMEBREW_NO_AUTO_UPDATE=1 brew install boost@1.85 hidapi zmq libpgm miniupnpc ldns expat libunwind-headers protobuf@21 ccache
-                    brew link protobuf@21 boost@1.85
+                    HOMEBREW_NO_AUTO_UPDATE=1 brew install boost hidapi zmq libpgm miniupnpc ldns expat libunwind-headers protobuf@21 ccache
+                    brew link protobuf@21 boost
             -   uses: ./.github/actions/set-make-job-count
             -   name: Build
                 run: |

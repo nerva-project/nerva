@@ -153,7 +153,7 @@ namespace net_utils
 			std::string mSubject;
 			std::string mMessage;
 			unsigned int mPort;
-			boost::asio::io_service mIOService;
+			boost::asio::io_context mIOService;
 			tcp::resolver mResolver;
 			tcp::socket mSocket;
 			boost::asio::streambuf mRequest;

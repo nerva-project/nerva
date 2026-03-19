@@ -34,6 +34,7 @@
 #include <string>
 #include <vector>
 #include <boost/utility/string_ref.hpp>
+#include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/system/error_code.hpp>
@@ -132,8 +133,9 @@ namespace net_utils
     bool handshake(
       boost::asio::ssl::stream<boost::asio::ip::tcp::socket> &socket,
       boost::asio::ssl::stream_base::handshake_type type,
-      const std::string& host = {},
-      std::chrono::milliseconds timeout = std::chrono::seconds(15)) const;
+      const std::string& host,
+      std::chrono::milliseconds timeout,
+      boost::asio::io_context& io_context) const;
   };
 
         // https://security.stackexchange.com/questions/34780/checking-client-hello-for-https-classification

@@ -44,7 +44,7 @@ namespace epee
     inline
     bool is_ipv6_local(const std::string& ip)
     {
-      auto addr = boost::asio::ip::address_v6::from_string(ip);
+      auto addr = boost::asio::ip::make_address_v6(ip);
 
       // ipv6 link-local unicast addresses are fe80::/10
       bool is_link_local = addr.is_link_local();
@@ -61,7 +61,7 @@ namespace epee
     bool is_ipv6_loopback(const std::string& ip)
     {
       // ipv6 loopback is ::1
-      return boost::asio::ip::address_v6::from_string(ip).is_loopback();
+      return boost::asio::ip::make_address_v6(ip).is_loopback();
     }
 
     inline
