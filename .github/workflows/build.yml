@@ -74,10 +74,11 @@ jobs:
                 run: sudo apt update
             -   name: Install dependencies
                 run: sudo apt install -y build-essential cmake ccache pkg-config libboost-all-dev libssl-dev libzmq3-dev libpgm-dev libunbound-dev libsodium-dev git
+            -   uses: ./.github/actions/set-make-job-count
             -   name: Build
                 run: |
                     ${{env.CCACHE_SETTINGS}}
-                    make -j3
+                    make -j${{env.MAKE_JOB_COUNT}}
 
     build-windows:
         runs-on: windows-latest
@@ -109,10 +110,11 @@ jobs:
                     gpg --homedir /etc/pacman.d/gnupg --verify mingw-w64-x86_64-icu-75.1-2-any.pkg.tar.zst.sig
                     gpg --homedir /etc/pacman.d/gnupg --verify mingw-w64-x86_64-boost-1.86.0-7-any.pkg.tar.zst.sig
                     pacman --noconfirm -U mingw-w64-x86_64-icu-75.1-2-any.pkg.tar.zst mingw-w64-x86_64-boost-1.86.0-7-any.pkg.tar.zst
+            -   uses: ./.github/actions/set-make-job-count
             -   name: Build
                 run: |
                     ${{env.CCACHE_SETTINGS}}
-                    make release-static-win64 -j2
+                    make release-static-win64 -j${{env.MAKE_JOB_COUNT}}
 
     build-macos:
         runs-on: macos-latest
@@ -131,10 +133,11 @@ jobs:
                 run: |
                     HOMEBREW_NO_AUTO_UPDATE=1 brew install boost@1.85 hidapi zmq libpgm miniupnpc ldns expat libunwind-headers protobuf@21 ccache
                     brew link protobuf@21 boost@1.85
+            -   uses: ./.github/actions/set-make-job-count
             -   name: Build
                 run: |
                     ${{env.CCACHE_SETTINGS}}
-                    make -j3
+                    make -j${{env.MAKE_JOB_COUNT}}
 
     libwallet-ubuntu:
         runs-on: ubuntu-latest
@@ -157,8 +160,9 @@ jobs:
                 run: sudo apt update
             -   name: Install dependencies
                 run: sudo apt install -y build-essential cmake ccache pkg-config libboost-all-dev libssl-dev libzmq3-dev libpgm-dev libunbound-dev libsodium-dev git
+            -   uses: ./.github/actions/set-make-job-count
             -   name: Build
                 run: |
                     ${{env.CCACHE_SETTINGS}}
                     cmake .
-                    make wallet_api -j3
+                    make wallet_api -j${{env.MAKE_JOB_COUNT}}

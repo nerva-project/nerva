@@ -126,10 +126,11 @@ jobs:
                 run: |
                     update-alternatives --set ${{ matrix.toolchain.host }}-g++ $(which ${{ matrix.toolchain.host }}-g++-posix)
                     update-alternatives --set ${{ matrix.toolchain.host }}-gcc $(which ${{ matrix.toolchain.host }}-gcc-posix)
+            -   uses: ./.github/actions/set-make-job-count
             -   name: Build
                 run: |
                     ${{env.CCACHE_SETTINGS}}
-                    make depends target=${{ matrix.toolchain.host }} -j2
+                    make depends target=${{ matrix.toolchain.host }} -j${{env.MAKE_JOB_COUNT}}
             -   uses: actions/upload-artifact@v4
                 with:
                     name: ${{ matrix.toolchain.name }}
