@@ -137,6 +137,7 @@ int main(int argc, char const * argv[])
       // Settings
       command_line::add_arg(core_settings, daemon_args::arg_noanalytics);
       command_line::add_arg(core_settings, daemon_args::arg_nodns);
+      command_line::add_arg(core_settings, daemon_args::arg_dns_server);
       command_line::add_arg(core_settings, daemon_args::arg_log_file);
       command_line::add_arg(core_settings, daemon_args::arg_log_level);
       command_line::add_arg(core_settings, daemon_args::arg_max_log_file_size);
@@ -375,6 +376,15 @@ int main(int argc, char const * argv[])
     {
       MGINFO("DNS disabled.");
       dns_config::disable_dns(nodns);
+    }
+
+    if (!vm["dns-server"].defaulted())
+    {
+      const auto dns_servers = command_line::get_arg(vm, daemon_args::arg_dns_server);
+      if (!dns_servers.empty())
+      {
+        dns_config::set_dns_servers(dns_servers);
+      }
     }
 
     blacklist::read_blacklist_from_url();

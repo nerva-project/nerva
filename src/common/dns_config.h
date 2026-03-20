@@ -92,6 +92,9 @@ namespace dns_config
     void disable_dns(bool disable);
     bool is_dns_disabled();
 
+    void set_dns_servers(const std::vector<std::string>& servers);
+    std::vector<std::string> get_dns_servers();
+
     struct dns_config_t
     {
         std::vector<std::string> const SEED_NODES;

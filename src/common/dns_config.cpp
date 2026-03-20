@@ -44,6 +44,7 @@ namespace dns_config
     std::vector<std::string> m_analytics;
     bool m_dnssec_ok;
     bool m_is_dns_disabled = false;
+    std::vector<std::string> m_custom_dns_servers;
 
     void init(const bool testnet)
     {
@@ -114,5 +115,8 @@ namespace dns_config
     bool is_dnssec_ok() { return m_dnssec_ok; }
 
     void disable_dns(bool disable) { m_is_dns_disabled = disable; }
-    bool is_dns_disabled() { return m_is_dns_disabled; }    
+    bool is_dns_disabled() { return m_is_dns_disabled; }
+
+    void set_dns_servers(const std::vector<std::string>& servers) { m_custom_dns_servers = servers; }
+    std::vector<std::string> get_dns_servers() { return m_custom_dns_servers; }
 }

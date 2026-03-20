@@ -54,6 +54,7 @@ using namespace epee;
 #include "multisig/multisig.h"
 #include "common/boost_serialization_helper.h"
 #include "common/command_line.h"
+#include "common/dns_config.h"
 #include "common/threadpool.h"
 #include "int-util.h"
 #include "profile_tools.h"
@@ -277,6 +278,7 @@ struct options {
   const command_line::arg_descriptor<std::string> hw_device_derivation_path = {"hw-device-deriv-path", tools::wallet2::tr("HW device wallet derivation path (e.g., SLIP-10)"), ""};
   const command_line::arg_descriptor<std::string> tx_notify = { "tx-notify" , "Run a program for each new incoming transaction, '%s' will be replaced by the transaction hash" , "" };
   const command_line::arg_descriptor<bool> no_dns = {"no-dns", tools::wallet2::tr("Do not use DNS"), false};
+  const command_line::arg_descriptor<std::vector<std::string>> dns_server = {"dns-server", tools::wallet2::tr("Use specified DNS server(s) instead of the defaults")};
   const command_line::arg_descriptor<bool> offline = {"offline", tools::wallet2::tr("Do not connect to a daemon, nor use DNS"), false};
   const command_line::arg_descriptor<std::string> extra_entropy = {"extra-entropy", tools::wallet2::tr("File containing extra entropy to initialize the PRNG (any data, aim for 256 bits of entropy to be useful, which typically means more than 256 bits of data)")};
 };
@@ -478,6 +480,13 @@ std::unique_ptr<tools::wallet2> make_basic(const boost::program_options::variabl
 
   if (command_line::get_arg(vm, opts.no_dns))
     wallet->enable_dns(false);
+
+  if (!vm["dns-server"].defaulted())
+  {
+    const auto dns_servers = command_line::get_arg(vm, opts.dns_server);
+    if (!dns_servers.empty())
+      dns_config::set_dns_servers(dns_servers);
+  }
 
   if (command_line::get_arg(vm, opts.offline))
     wallet->set_offline();
@@ -1188,6 +1197,7 @@ void wallet2::init_options(boost::program_options::options_description& desc_par
   command_line::add_arg(desc_params, opts.hw_device_derivation_path);
   command_line::add_arg(desc_params, opts.tx_notify);
   command_line::add_arg(desc_params, opts.no_dns);
+  command_line::add_arg(desc_params, opts.dns_server);
   command_line::add_arg(desc_params, opts.offline);
   command_line::add_arg(desc_params, opts.extra_entropy);
 }

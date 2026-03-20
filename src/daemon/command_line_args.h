@@ -145,6 +145,11 @@ namespace daemon_args
   , false
   };
 
+  const command_line::arg_descriptor<std::vector<std::string>> arg_dns_server = {
+    "dns-server"
+  , "Use specified DNS server(s) instead of the defaults (e.g. --dns-server=9.9.9.9 --dns-server=149.112.112.112)"
+  };
+
 }  // namespace daemon_args
 
 #endif // DAEMON_COMMAND_LINE_ARGS_H
