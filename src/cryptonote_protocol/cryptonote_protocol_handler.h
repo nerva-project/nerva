@@ -169,6 +169,10 @@ namespace cryptonote
     uint64_t m_sync_download_chain_size, m_sync_download_objects_size;
     size_t m_block_download_max_size;
     bool m_sync_pruned_blocks;
+    // if tracking block receive times, should write to blocks_recvd_data.csv in the format
+    // block_height,block_hash,peer_ip:peer_port,local_timestamp_block_received
+    bool m_track_block_recvd_times;
+    std::ofstream m_track_block_recvd_times_fstream;
 
     boost::mutex m_buffer_mutex;
     double get_avg_block_size();
