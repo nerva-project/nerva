@@ -702,7 +702,7 @@ namespace net_utils
 			// No deadline is required until the first socket operation is started. We
 			// set the deadline to positive infinity so that the actor takes no action
 			// until a specific deadline is set.
-			m_send_deadline.expires_at(boost::posix_time::pos_infin);
+			m_send_deadline.expires_at(std::chrono::steady_clock::time_point::max());
 
 			// Start the persistent actor that checks for deadline expiry.
 			check_send_deadline();
@@ -711,7 +711,7 @@ namespace net_utils
 		{
 			m_send_deadline.cancel();
 		}
-		
+
 		bool shutdown()
 		{
 			blocked_mode_client::shutdown();
@@ -719,44 +719,22 @@ namespace net_utils
 			return true;
 		}
 
-		inline 
+		inline
 			bool send(const void* data, size_t sz)
 		{
 			try
 			{
-				/*
-				m_send_deadline.expires_from_now(boost::posix_time::milliseconds(m_reciev_timeout));
-
-				// Set up the variable that receives the result of the asynchronous
-				// operation. The error code is set to would_block to signal that the
-				// operation is incomplete. Asio guarantees that its asynchronous
-				// operations will never fail with would_block, so any other value in
-				// ec indicates completion.
-				boost::system::error_code ec = boost::asio::error::would_block;
-
-				// Start the asynchronous operation itself. The boost::lambda function
-				// object is used as a callback and will update the ec variable when the
-				// operation completes. The blocking_udp_client.cpp example shows how you
-				// can use boost::bind rather than boost::lambda.
-				boost::asio::async_write(m_socket, boost::asio::buffer(data, sz), boost::lambda::var(ec) = boost::lambda::_1);
-
-				// Block until the asynchronous operation has completed.
-				while(ec == boost::asio::error::would_block)
-				{
-					m_io_service.run_one();
-				}*/
-				
 				boost::system::error_code ec;
 
 				size_t writen = write(data, sz, ec);
-				
+
 				if (!writen || ec)
 				{
 					LOG_PRINT_L3("Problems at write: " << ec.message());
 					return false;
 				}else
 				{
-					m_send_deadline.expires_at(boost::posix_time::pos_infin);
+					m_send_deadline.expires_at(std::chrono::steady_clock::time_point::max());
 				}
 			}
 
@@ -777,14 +755,14 @@ namespace net_utils
 
 	private:
 
-		boost::asio::deadline_timer m_send_deadline;
+		boost::asio::steady_timer m_send_deadline;
 
 		void check_send_deadline()
 		{
 			// Check whether the deadline has passed. We compare the deadline against
 			// the current time since a new asynchronous operation may have moved the
 			// deadline before this actor had a chance to run.
-			if (m_send_deadline.expires_at() <= boost::asio::deadline_timer::traits_type::now())
+			if (m_send_deadline.expiry() <= std::chrono::steady_clock::now())
 			{
 				// The deadline has passed. The socket is closed so that any outstanding
 				// asynchronous operations are cancelled. This allows the blocked
@@ -794,7 +772,7 @@ namespace net_utils
 
 				// There is no longer an active deadline. The expiry is set to positive
 				// infinity so that the actor takes no action until a new deadline is set.
-				m_send_deadline.expires_at(boost::posix_time::pos_infin);
+				m_send_deadline.expires_at(std::chrono::steady_clock::time_point::max());
 			}
 
 			// Put the actor back to sleep.

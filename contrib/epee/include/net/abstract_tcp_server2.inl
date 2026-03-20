@@ -988,8 +988,7 @@ PRAGMA_WARNING_DISABLE_VS(4355)
     try
     {
       boost::asio::ip::tcp::resolver resolver(io_context_);
-      boost::asio::ip::tcp::resolver::query query(address, boost::lexical_cast<std::string>(port), boost::asio::ip::tcp::resolver::query::canonical_name);
-      boost::asio::ip::tcp::endpoint endpoint = *resolver.resolve(query);
+      boost::asio::ip::tcp::endpoint endpoint = *resolver.resolve(address, boost::lexical_cast<std::string>(port)).begin();
       acceptor_.open(endpoint.protocol());
 #if !defined(_WIN32)
       acceptor_.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
@@ -1024,8 +1023,7 @@ PRAGMA_WARNING_DISABLE_VS(4355)
       {
         if (port_ipv6 == 0) port_ipv6 = port; // default arg means bind to same port as ipv4
         boost::asio::ip::tcp::resolver resolver(io_context_);
-        boost::asio::ip::tcp::resolver::query query(address_ipv6, boost::lexical_cast<std::string>(port_ipv6), boost::asio::ip::tcp::resolver::query::canonical_name);
-        boost::asio::ip::tcp::endpoint endpoint = *resolver.resolve(query);
+        boost::asio::ip::tcp::endpoint endpoint = *resolver.resolve(address_ipv6, boost::lexical_cast<std::string>(port_ipv6)).begin();
         acceptor_ipv6.open(endpoint.protocol());
 #if !defined(_WIN32)
         acceptor_ipv6.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
@@ -1464,13 +1462,12 @@ POP_WARNINGS
     bool try_ipv6 = false;
 
     boost::asio::ip::tcp::resolver resolver(io_context_);
-    boost::asio::ip::tcp::resolver::query query(boost::asio::ip::tcp::v4(), adr, port, boost::asio::ip::tcp::resolver::query::canonical_name);
     boost::system::error_code resolve_error;
-    boost::asio::ip::tcp::resolver::iterator iterator;
+    boost::asio::ip::tcp::resolver::results_type resolve_results;
     try
     {
       //resolving ipv4 address as ipv6 throws, catch here and move on
-      iterator = resolver.resolve(query, resolve_error);
+      resolve_results = resolver.resolve(boost::asio::ip::tcp::v4(), adr, port, resolve_error);
     }
     catch (const boost::system::system_error& e)
     {
@@ -1488,8 +1485,7 @@ POP_WARNINGS
 
     std::string bind_ip_to_use;
 
-    boost::asio::ip::tcp::resolver::iterator end;
-    if(iterator == end)
+    if(resolve_results.empty())
     {
       if (!m_use_ipv6)
       {
@@ -1509,11 +1505,9 @@ POP_WARNINGS
 
     if (try_ipv6)
     {
-      boost::asio::ip::tcp::resolver::query query6(boost::asio::ip::tcp::v6(), adr, port, boost::asio::ip::tcp::resolver::query::canonical_name);
+      resolve_results = resolver.resolve(boost::asio::ip::tcp::v6(), adr, port, resolve_error);
 
-      iterator = resolver.resolve(query6, resolve_error);
-
-      if(iterator == end)
+      if(resolve_results.empty())
       {
         _erro("Failed to resolve " << adr);
         return false;
@@ -1535,8 +1529,7 @@ POP_WARNINGS
 
     MDEBUG("Trying to connect to " << adr << ":" << port << ", bind_ip = " << bind_ip_to_use);
 
-    //boost::asio::ip::tcp::endpoint remote_endpoint(boost::asio::ip::make_address(addr.c_str()), port);
-    boost::asio::ip::tcp::endpoint remote_endpoint(*iterator);
+    boost::asio::ip::tcp::endpoint remote_endpoint = *resolve_results.begin();
 
     auto try_connect_result = try_connect(new_connection_l, adr, port, sock_, remote_endpoint, bind_ip_to_use, conn_timeout, ssl_support);
     if (try_connect_result == CONNECT_FAILURE)
@@ -1589,13 +1582,12 @@ POP_WARNINGS
     bool try_ipv6 = false;
 
     boost::asio::ip::tcp::resolver resolver(io_context_);
-    boost::asio::ip::tcp::resolver::query query(boost::asio::ip::tcp::v4(), adr, port, boost::asio::ip::tcp::resolver::query::canonical_name);
     boost::system::error_code resolve_error;
-    boost::asio::ip::tcp::resolver::iterator iterator;
+    boost::asio::ip::tcp::resolver::results_type resolve_results;
     try
     {
       //resolving ipv4 address as ipv6 throws, catch here and move on
-      iterator = resolver.resolve(query, resolve_error);
+      resolve_results = resolver.resolve(boost::asio::ip::tcp::v4(), adr, port, resolve_error);
     }
     catch (const boost::system::system_error& e)
     {
@@ -1611,8 +1603,7 @@ POP_WARNINGS
       throw;
     }
 
-    boost::asio::ip::tcp::resolver::iterator end;
-    if(iterator == end)
+    if(resolve_results.empty())
     {
       if (!try_ipv6)
       {
@@ -1627,11 +1618,9 @@ POP_WARNINGS
 
     if (try_ipv6)
     {
-      boost::asio::ip::tcp::resolver::query query6(boost::asio::ip::tcp::v6(), adr, port, boost::asio::ip::tcp::resolver::query::canonical_name);
+      resolve_results = resolver.resolve(boost::asio::ip::tcp::v6(), adr, port, resolve_error);
 
-      iterator = resolver.resolve(query6, resolve_error);
-
-      if(iterator == end)
+      if(resolve_results.empty())
       {
         _erro("Failed to resolve " << adr);
         return false;
@@ -1639,7 +1628,7 @@ POP_WARNINGS
     }
 
 
-    boost::asio::ip::tcp::endpoint remote_endpoint(*iterator);
+    boost::asio::ip::tcp::endpoint remote_endpoint = *resolve_results.begin();
      
     sock_.open(remote_endpoint.protocol());
     if(bind_ip != "0.0.0.0" && bind_ip != "0" && bind_ip != "" )

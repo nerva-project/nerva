@@ -94,7 +94,7 @@ namespace socks
     class client
     {
         boost::asio::ip::tcp::socket proxy_;
-        boost::asio::io_context::strand strand_;
+        boost::asio::strand<boost::asio::any_io_executor> strand_;
         std::uint16_t buffer_size_;
         std::uint8_t buffer_[1024];
         socks::version ver_;

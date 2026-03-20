@@ -180,7 +180,7 @@ namespace socks
     {
         std::shared_ptr<client> self_;
 
-        static boost::asio::mutable_buffers_1 get_buffer(client& self) noexcept
+        static boost::asio::mutable_buffer get_buffer(client& self) noexcept
         {
             static_assert(sizeof(v4_header) <= sizeof(self.buffer_), "buffer too small for v4 response");
             return boost::asio::buffer(self.buffer_, sizeof(v4_header));
@@ -205,7 +205,7 @@ namespace socks
     {
         std::shared_ptr<client> self_;
 
-        static boost::asio::const_buffers_1 get_buffer(client const& self) noexcept
+        static boost::asio::const_buffer get_buffer(client const& self) noexcept
         {
             return boost::asio::buffer(self.buffer_, self.buffer_size_);
         }
