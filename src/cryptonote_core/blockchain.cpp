@@ -1272,19 +1272,25 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
     // make sure that the uncle reward uses the output key from the uncle block miner tx and is for the correct amount - dont let the nephew miner steal the uncle reward
     cryptonote::block uncle_block;
     get_block_by_hash(b.uncle_hash, uncle_block);
-    // nephew reward at index 0 and uncle reward at index 1 is enforced
-    if (boost::get<txout_to_key>(b.miner_tx.vout[1].target).key != boost::get<txout_to_key>(uncle_block.miner_tx.vout[0].target).key)
+    // nephew reward at index 1 and uncle reward at index 0 is enforced
+    crypto::public_key uncle_out_key;
+    crypto::public_key uncle_tx_key;
+    get_uncle_block_original_miner_details(uncle_block, uncle_out_key, uncle_tx_key);
+    crypto::public_key mainchain_out_key;
+    crypto::public_key mainchain_tx_key;
+    get_mainchain_block_original_miner_details(b, mainchain_out_key, mainchain_tx_key);
+    if (boost::get<txout_to_key>(b.miner_tx.vout[0].target).key != uncle_out_key)
     {
       MERROR_VER("nephew block miner tx does not include proper uncle reward output key");
       return false;
     }
-    if (get_tx_pub_key_from_extra(b.miner_tx, 1) != get_tx_pub_key_from_extra(uncle_block.miner_tx, 0))
+    if (get_tx_pub_key_from_extra(b.miner_tx, 0) != uncle_tx_key)
     {
       MERROR_VER("nephew block miner tx does not include proper uncle reward tx public key in tx extra");
       return false;
     }
 
-    if (b.miner_tx.vout[1].amount != base_reward / SECOR_UNCLE_REWARD_RATIO)
+    if (b.miner_tx.vout[0].amount != base_reward / SECOR_UNCLE_REWARD_RATIO)
     {
       MERROR_VER("miner tx contains uncle reward but the uncle reward amount is incorrect. Amount found " << b.miner_tx.vout[1].amount << " vs amount expected " << base_reward / SECOR_UNCLE_REWARD_RATIO);
       return false;
@@ -1572,15 +1578,20 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
    block weight, so first miner transaction generated with fake amount of money, and with phase we know think we know expected block weight
    */
   //make blocks coin-base tx looks close to real coinbase tx to get truthful blob size
-  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, 0, hf_version, b.uncle_hash != crypto::null_hash);
+  bool r;
+  int uncle_out_idx;
+  crypto::public_key uncle_out;
+  crypto::public_key uncle_tx_pubkey;
   if (b.uncle_hash != crypto::null_hash)
   {
     cryptonote::block uncle_block;
     get_block_by_hash(b.uncle_hash, uncle_block);
-    crypto::public_key uncle_out = boost::get<txout_to_key>(uncle_block.miner_tx.vout[0].target).key;
-    crypto::public_key uncle_tx_pubkey = get_tx_pub_key_from_extra(uncle_block.miner_tx);
-    construct_uncle_miner_tx(expected_reward, uncle_out, uncle_tx_pubkey, b.miner_tx); // should we be using the reward calculated from previous hieght / uncle chain ?
+    uncle_out_idx = get_uncle_block_original_miner_details(uncle_block, uncle_out, uncle_tx_pubkey);
+    r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, 0, hf_version, &uncle_out, &uncle_tx_pubkey, &uncle_out_idx);
   }
+  else
+    r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, 0, hf_version);
+
   CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
   size_t cumulative_weight = txs_weight + get_transaction_weight(b.miner_tx);
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -1589,15 +1600,11 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
 #endif
   for (size_t try_count = 0; try_count != 10; ++try_count)
   {
-    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, miner_address, b.miner_tx, ex_nonce, 0, hf_version, b.uncle_hash != crypto::null_hash);
     if (b.uncle_hash != crypto::null_hash)
-    {
-      cryptonote::block uncle_block;
-      get_block_by_hash(b.uncle_hash, uncle_block);
-      crypto::public_key uncle_out = boost::get<txout_to_key>(uncle_block.miner_tx.vout[0].target).key;
-      crypto::public_key uncle_tx_pubkey = get_tx_pub_key_from_extra(uncle_block.miner_tx);
-      construct_uncle_miner_tx(expected_reward, uncle_out, uncle_tx_pubkey, b.miner_tx); // should we be using the reward calculated from previous hieght / uncle chain ?
-    }
+      r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, miner_address, b.miner_tx, ex_nonce, 0, hf_version, &uncle_out, &uncle_tx_pubkey, &uncle_out_idx);
+    else
+      r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, miner_address, b.miner_tx, ex_nonce, 0, hf_version);
+
     CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, second chance");
     size_t coinbase_weight = get_transaction_weight(b.miner_tx);
     if (coinbase_weight > cumulative_weight - txs_weight)
@@ -1891,6 +1898,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     data.already_generated_coins = bei.already_generated_coins;
     m_db->add_alt_block(id, data, cryptonote::block_to_blob(bei.bl));
     alt_chain.push_back(bei);
+    LOG_PRINT_L0("pushing uncle block candidate: " << id << " " << data.height);
     m_uncle_candidates.push_back(std::make_pair(id, data.height)); // TODO: free old data at some point
 
     uint64_t top_block_height = m_db->height()-1;
@@ -3807,8 +3815,8 @@ leave:
     difficulty_type_128 uncle_difficulty = m_db->get_block_cumulative_difficulty(blockchain_height-2) - m_db->get_block_cumulative_difficulty(blockchain_height-3);
     crypto::hash uncle_pow;
     memset(uncle_pow.data, 0xff, sizeof(uncle_pow.data));
-    get_block_longhash(m_hash_context, this, uncle_block, uncle_pow, m_db->height()-2);
-    if(!check_hash(uncle_pow, (uint64_t)uncle_difficulty)) // is this safe?
+    get_block_longhash(m_hash_context, this, uncle_block, uncle_pow, m_db->height()-1);
+    if(!check_hash(uncle_pow, uncle_difficulty.convert_to<std::uint64_t>()))
     {
       MERROR_VER("proof-of-work for uncle block failed verification");
       bvc.m_verifivation_failed = true;

@@ -1707,11 +1707,7 @@ void wallet2::scan_output(const cryptonote::transaction &tx, bool miner_tx, cons
   }
   else
   {
-    bool r;
-    if (miner_tx && i > 0)
-      r = cryptonote::generate_key_image_helper_precomp(m_account.get_keys(), boost::get<cryptonote::txout_to_key>(tx.vout[i].target).key, tx_scan_info.received->derivation, 0, {0, 0}, tx_scan_info.in_ephemeral, tx_scan_info.ki, m_account.get_device());
-    else
-      r = cryptonote::generate_key_image_helper_precomp(m_account.get_keys(), boost::get<cryptonote::txout_to_key>(tx.vout[i].target).key, tx_scan_info.received->derivation, i, tx_scan_info.received->index, tx_scan_info.in_ephemeral, tx_scan_info.ki, m_account.get_device());
+    bool r = cryptonote::generate_key_image_helper_precomp(m_account.get_keys(), boost::get<cryptonote::txout_to_key>(tx.vout[i].target).key, tx_scan_info.received->derivation, i, tx_scan_info.received->index, tx_scan_info.in_ephemeral, tx_scan_info.ki, m_account.get_device());
     THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to generate key image");
     THROW_WALLET_EXCEPTION_IF(tx_scan_info.in_ephemeral.pub != boost::get<cryptonote::txout_to_key>(tx.vout[i].target).key,
         error::wallet_internal_error, "key_image generated ephemeral public key not matched with output_key");
@@ -1843,19 +1839,16 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
         memcpy(&derivation, rct::identity().bytes, sizeof(derivation));
       }
 
-    // additional tx pubkeys and derivations for multi-destination transfers involving one or more subaddresses
-      if (pk_index == 1)
+      // additional tx pubkeys and derivations for multi-destination transfers involving one or more subaddresses
+      if (find_tx_extra_field_by_type(tx_extra_fields, additional_tx_pub_keys))
       {
-        if (find_tx_extra_field_by_type(tx_extra_fields, additional_tx_pub_keys))
+        for (size_t i = 0; i < additional_tx_pub_keys.data.size(); ++i)
         {
-          for (size_t i = 0; i < additional_tx_pub_keys.data.size(); ++i)
+          additional_derivations.push_back({});
+          if (!hwdev.generate_key_derivation(additional_tx_pub_keys.data[i], keys.m_view_secret_key, additional_derivations.back()))
           {
-            additional_derivations.push_back({});
-            if (!hwdev.generate_key_derivation(additional_tx_pub_keys.data[i], keys.m_view_secret_key, additional_derivations.back()))
-            {
-              MWARNING("Failed to generate key derivation from additional tx pubkey in " << txid << ", skipping");
-              memcpy(&additional_derivations.back(), rct::identity().bytes, sizeof(crypto::key_derivation));
-            }
+            MWARNING("Failed to generate key derivation from additional tx pubkey in " << txid << ", skipping");
+            memcpy(&additional_derivations.back(), rct::identity().bytes, sizeof(crypto::key_derivation));
           }
         }
       }
@@ -1866,13 +1859,10 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
           error::wallet_internal_error, "pk_index out of range of tx_cache_data");
       is_out_data_ptr = &tx_cache_data.primary[pk_index - 1];
       derivation = tx_cache_data.primary[pk_index - 1].derivation;
-      if (pk_index == 1)
+      for (size_t n = 0; n < tx_cache_data.additional.size(); ++n)
       {
-        for (size_t n = 0; n < tx_cache_data.additional.size(); ++n)
-        {
-          additional_tx_pub_keys.data.push_back(tx_cache_data.additional[n].pkey);
-          additional_derivations.push_back(tx_cache_data.additional[n].derivation);
-        }
+        additional_tx_pub_keys.data.push_back(tx_cache_data.additional[n].pkey);
+        additional_derivations.push_back(tx_cache_data.additional[n].derivation);
       }
     }
 
@@ -1935,47 +1925,15 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
     {
       for (size_t i = 0; i < tx.vout.size(); ++i)
       {
-        if (miner_tx && i > 0)
+        check_acc_out_precomp_once(tx.vout[i], derivation, additional_derivations, i, is_out_data_ptr, tx_scan_info[i], output_found[i]);
+        THROW_WALLET_EXCEPTION_IF(tx_scan_info[i].error, error::acc_outs_lookup_error, tx, tx_pub_key, m_account.get_keys());
+        if (tx_scan_info[i].received)
         {
-          crypto::key_derivation additional_key_derivation;
           hw::device &hwdev = m_account.get_device();
           boost::unique_lock<hw::device> hwdev_lock (hwdev);
-          hwdev.set_mode(hw::device::TRANSACTION_PARSE);
-          crypto::public_key additional_tx_pubkey = get_tx_pub_key_from_extra(tx, i);
-          if (!hwdev.generate_key_derivation(additional_tx_pubkey, keys.m_view_secret_key, additional_key_derivation))
-          {
-            std::cout << "Failed to generate key derivation from additional tx pubkey in " << txid << std::endl;
-            MWARNING("Failed to generate key derivation from additional tx pubkey in " << txid);
-          }
-          check_acc_out_precomp(tx.vout[i], additional_key_derivation, additional_derivations, 0, tx_scan_info[i]);
-          THROW_WALLET_EXCEPTION_IF(tx_scan_info[i].error, error::acc_outs_lookup_error, tx, additional_tx_pubkey, m_account.get_keys());
-          if (tx_scan_info[i].received)
-          {
-            LOG_PRINT_L0("Scanning potential uncle reward");
-            auto vouts_start = num_vouts_received;
-            hw::device &hwdev = m_account.get_device();
-            boost::unique_lock<hw::device> hwdev_lock (hwdev);
-            hwdev.set_mode(hw::device::NONE);
-            hwdev.conceal_derivation(tx_scan_info[i].received->derivation, additional_tx_pubkey, additional_tx_pub_keys.data, additional_key_derivation, additional_derivations);
-            scan_output(tx, miner_tx, additional_tx_pubkey, i, tx_scan_info[i], num_vouts_received, tx_money_got_in_outs, outs, pool);
-            if (num_vouts_received > vouts_start)
-            {
-              LOG_PRINT_L0("Found uncle reward");
-            }
-          }
-        }
-        else
-        {
-          check_acc_out_precomp(tx.vout[i], derivation, additional_derivations, i, is_out_data_ptr, tx_scan_info[i]);
-          THROW_WALLET_EXCEPTION_IF(tx_scan_info[i].error, error::acc_outs_lookup_error, tx, tx_pub_key, m_account.get_keys());
-          if (tx_scan_info[i].received)
-          {
-            hw::device &hwdev = m_account.get_device();
-            boost::unique_lock<hw::device> hwdev_lock (hwdev);
-            hwdev.set_mode(hw::device::NONE);
-            hwdev.conceal_derivation(tx_scan_info[i].received->derivation, tx_pub_key, additional_tx_pub_keys.data, derivation, additional_derivations);
-            scan_output(tx, miner_tx, tx_pub_key, i, tx_scan_info[i], num_vouts_received, tx_money_got_in_outs, outs, pool);
-          }
+          hwdev.set_mode(hw::device::NONE);
+          hwdev.conceal_derivation(tx_scan_info[i].received->derivation, tx_pub_key, additional_tx_pub_keys.data, derivation, additional_derivations);
+          scan_output(tx, miner_tx, tx_pub_key, i, tx_scan_info[i], num_vouts_received, tx_money_got_in_outs, outs, pool);
         }
       }
     }

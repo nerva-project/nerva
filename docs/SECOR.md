@@ -22,12 +22,13 @@ Miner transactions should include only 1 reward output if the uncle_hash is null
 
 If an uncle block is included in the block, then the miner transaction must include a secondary transaction output.
 
-In order to generate a transaction on behalf of another miner in a non-interactive way without compromising privacy, we re-use the keys associated with the original uncle block miner transaction in the nephew block.
+In order to generate a transaction on behalf of another miner in a non-interactive way without compromising privacy, we re-use the keys associated with the original uncle block miner transaction from the alt chain into the nephew block.
 
-The uncle block transaction public key from the uncle block transaction extra field should be included in nephew miner transaction at index 1. The output key from the uncle block should be re-used at nephew miner transaction output index 1. Since output index is a part of the stealth address generation algorithm, `Hs(aR|i)*G + B = Hs(rA|i)G + B` (see cryptonote whitepaper section 4.3),
-wallets should use index 0 to compute the shared secret for both outputs in a nephew block miner reward transaction.
+Since output index is a part of the stealth address generation algorithm, `Hs(aR|i)*G + B = Hs(rA|i)G + B` (see cryptonote whitepaper section 4.3), the ordering of the output destinations in the transaction is important.
 
-TODO: This should all be easier if we instead enforce that the uncle reward is placed at index 0 and place the nephew reward at index 1
+If a block doesn't reference an uncle block, then there should be only one output in the reward transaction, which should be used to reward the person who mined the block. If that block is then included into a nephew block as an uncle block, then the nephew block must place the reward for the uncle miner, using the output key from the uncle block miner tx, into the nephew block miner transaction at index 0. The reward for the person who found the nephew block should be placed at index 1 in the reward transaction.
+
+If an uncle block references an uncle block itself, then the reward to the true uncle miner should be at index 1 in the uncle block. To accomodate this, the reward to the nephew miner in the main chain should be addressed to output index 0 so that the uncle reward from index 1 may be recycled.
 
 ### Block Reward Bonuses
 
@@ -153,7 +154,7 @@ The probability that two miners have both found after 1 second of mining is (1 -
 
 The cumulative probability that a given miner finds a block after mining for 1 minute is 1 - ((1-(1/6000000))^60000), which is just less than 1%.
 
-The probability that a two miners have each find a block after mining for 1 minute is (100*99/2)*((1-(1-(1/6000000))^(60000))^2)*(((1-(1/6000000))^(60000))^98), per binomial distribution (100, 2) which is about 18%
+The probability that any two miners have each found a block after mining for 1 minute is (100*99/2)*((1-(1-(1/6000000))^(60000))^2)*(((1-(1/6000000))^(60000))^98), per binomial distribution (100, 2) which is about 18%
 ```
 
 Overall, the network difficulty adjusts in a way that adding miners to the network doesnt affect the probability of chain splits significantly assuming that mining power is distributed evenly among miners. This model does not account for the fact that adding miners to the network increases the amount of work required for block propogation across all miners on the network.
@@ -168,8 +169,6 @@ This proposal is a work in progress. I am seeking community feedback to see if I
 
 * Address the TODO comments
 
-* revisit miner reward tx format
-
 * graceful database migration - currently a sync from scratch is required after upgrading
 
 #### Research
@@ -177,6 +176,7 @@ This proposal is a work in progress. I am seeking community feedback to see if I
 * How does changing the difficulty target affect the rest of the difficulty algo parameters ?
     * CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1 references this. TX locking can be done with unix timestamps instead of blocks. This should be consistent.
     * DIFFICULTY_BLOCKS_COUNT - should the DIFFICULTY_WINDOW be adjusted ?
+    * CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT_V6 should probably be adjusted
 
 * How long does it currently take for a block to propogate throughout the network ?
 
