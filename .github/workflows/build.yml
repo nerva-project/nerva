@@ -63,7 +63,7 @@ jobs:
                     submodules: recursive
             -   uses: actions/cache@v4
                 with:
-                    path: ~/.ccache
+                    path: ~/.cache/ccache
                     key: ccache-${{ runner.os }}-build-${{ github.ref }}-${{ github.run_number }}
                     restore-keys: |
                         ccache-${{ runner.os }}-build-${{ github.ref }}-
@@ -172,7 +172,7 @@ jobs:
                     submodules: recursive
             -   uses: actions/cache@v4
                 with:
-                    path: ~/.ccache
+                    path: ~/.cache/ccache
                     key: ccache-${{ runner.os }}-libwallet-${{ github.ref }}-${{ github.run_number }}
                     restore-keys: |
                         ccache-${{ runner.os }}-libwallet-${{ github.ref }}-
