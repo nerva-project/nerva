@@ -173,7 +173,7 @@ namespace levin
           connection(boost::uuids::nil_uuid())
       {}
 
-      // `asio::io_context::strand` cannot be copied or moved
+      // `asio::strand` cannot be copied or moved
       noise_channel(const noise_channel&) = delete;
       noise_channel& operator=(const noise_channel&) = delete;
 
@@ -181,7 +181,7 @@ namespace levin
 
       epee::byte_slice active;
       std::deque<epee::byte_slice> queue;
-      boost::asio::io_context::strand strand;
+      boost::asio::strand<boost::asio::io_context::executor_type> strand;
       boost::asio::steady_timer next_noise;
       boost::uuids::uuid connection;
     };
@@ -208,7 +208,7 @@ namespace levin
       const std::shared_ptr<connections> p2p;
       const epee::byte_slice noise; //!< `!empty()` means zone is using noise channels
       boost::asio::steady_timer next_epoch;
-      boost::asio::io_context::strand strand;
+      boost::asio::strand<boost::asio::io_context::executor_type> strand;
       net::dandelionpp::connection_map map;//!< Tracks outgoing uuid's for noise channels or Dandelion++ stems
       std::deque<noise_channel> channels;  //!< Never touch after init; only update elements on `noise_channel.strand`
       std::atomic<std::size_t> connection_count; //!< Only update in strand, can be read at any time
