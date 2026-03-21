@@ -103,18 +103,18 @@ jobs:
                 run: apt update; apt -y install build-essential libtool cmake autotools-dev automake pkg-config bsdmainutils curl git ca-certificates ccache ${{ matrix.toolchain.packages }}
             -   name: Configure git
                 run: git config --global --add safe.directory '*'
-            -   uses: actions/checkout@v4
+            -   uses: actions/checkout@v6
                 with:
                     fetch-depth: 0
                     submodules: recursive
             -   name: Ccache
-                uses: actions/cache@v4
+                uses: actions/cache@v5
                 with:
                     path: ~/.ccache
                     key: ccache-${{ matrix.toolchain.host }}-${{ github.sha }}
                     restore-keys: ccache-${{ matrix.toolchain.host }}-
             -   name: Depends cache
-                uses: actions/cache@v4
+                uses: actions/cache@v5
                 with:
                     path: contrib/depends/built
                     key: depends-${{ matrix.toolchain.host }}-${{ hashFiles('contrib/depends/packages/*') }}
@@ -131,7 +131,7 @@ jobs:
                 run: |
                     ${{env.CCACHE_SETTINGS}}
                     make depends target=${{ matrix.toolchain.host }} -j${{env.MAKE_JOB_COUNT}}
-            -   uses: actions/upload-artifact@v4
+            -   uses: actions/upload-artifact@v7
                 with:
                     name: ${{ matrix.toolchain.name }}
                     path: |
