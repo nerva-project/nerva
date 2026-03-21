@@ -87,6 +87,7 @@ jobs:
         runs-on: windows-latest
         env:
             CCACHE_TEMPDIR: C:\Users\runneradmin\.ccache-temp
+            CCACHE_DIR: C:\ccache
         defaults:
             run:
                 shell: msys2 {0}
@@ -96,7 +97,7 @@ jobs:
                     submodules: recursive
             -   uses: actions/cache@v4
                 with:
-                    path: C:\Users\runneradmin\.ccache
+                    path: C:\ccache
                     key: ccache-${{ runner.os }}-build-${{ github.ref }}-${{ github.run_number }}
                     restore-keys: |
                         ccache-${{ runner.os }}-build-${{ github.ref }}-
