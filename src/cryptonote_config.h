@@ -130,7 +130,7 @@
 #define P2P_IDLE_CONNECTION_KILL_INTERVAL                               (5 * 60)
 #define P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT                               45
 #define P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT                       4
-#define P2P_DEFAULT_LIMIT_RATE_UP                                       2048
+#define P2P_DEFAULT_LIMIT_RATE_UP                                       8192
 #define P2P_DEFAULT_LIMIT_RATE_DOWN                                     8192
 
 #define P2P_SUPPORT_FLAG_FLUFFY_BLOCKS                                  0x01
