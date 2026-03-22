@@ -5138,9 +5138,7 @@ void simple_wallet::on_money_received(uint64_t height, const crypto::hash &txid,
     print_money(amount) << ", " <<
     tr("idx ") << subaddr_index;
 
-  if (m_auto_refresh_refreshing)
-    m_cmd_binder.print_prompt();
-  else
+  if (!m_auto_refresh_refreshing)
     m_refresh_progress_reporter.update(height, true);
 }
 //----------------------------------------------------------------------------------------------------
@@ -5160,9 +5158,7 @@ void simple_wallet::on_money_spent(uint64_t height, const crypto::hash &txid, co
     tr("txid ") << txid << ", " <<
     tr("spent ") << print_money(amount) << ", " <<
     tr("idx ") << subaddr_index;
-  if (m_auto_refresh_refreshing)
-    m_cmd_binder.print_prompt();
-  else
+  if (!m_auto_refresh_refreshing)
     m_refresh_progress_reporter.update(height, true);
 }
 //----------------------------------------------------------------------------------------------------
@@ -5180,7 +5176,6 @@ boost::optional<epee::wipeable_string> simple_wallet::on_get_password(const char
   if (!m_in_manual_refresh.load(std::memory_order_relaxed))
   {
     message_writer(console_color_red, false) << boost::format(tr("Password needed (%s) - use the refresh command")) % reason;
-    m_cmd_binder.print_prompt();
     return boost::none;
   }
 

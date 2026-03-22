@@ -105,6 +105,10 @@ namespace cryptonote
 
     m_block_download_max_size = command_line::get_arg(vm, cryptonote::arg_block_download_max_size);
     m_sync_pruned_blocks = command_line::get_arg(vm, cryptonote::arg_sync_pruned_blocks);
+    m_track_block_recvd_times = command_line::get_arg(vm, cryptonote::arg_track_block_recvd_times);
+
+    if (m_track_block_recvd_times)
+      m_track_block_recvd_times_fstream = std::ofstream(tools::get_default_data_dir() + "/blocks_recvd_data.csv", std::ios::app);
 
     return true;
   }
@@ -432,8 +436,15 @@ namespace cryptonote
   template<class t_core>
   int t_cryptonote_protocol_handler<t_core>::handle_notify_new_block(int command, NOTIFY_NEW_BLOCK::request& arg, cryptonote_connection_context& context)
   {
+    crypto::hash hash;
     cryptonote::block b;
-    MLOGIF_P2P_MESSAGE(crypto::hash hash; b; bool ret = cryptonote::parse_and_validate_block_from_blob(arg.b.block, b, &hash);, ret, "Received NOTIFY_NEW_BLOCK " << hash << " (height " << arg.current_blockchain_height << ", " << arg.b.txs.size() << " txes)");
+    bool ret = cryptonote::parse_and_validate_block_from_blob(arg.b.block, b, &hash);
+    MLOGIF_P2P_MESSAGE(hash; b; ;, ret, "Received NOTIFY_NEW_BLOCK " << hash << " (height " << arg.current_blockchain_height << ", " << arg.b.txs.size() << " txes)");
+
+    time_t ts = time(NULL);
+    if (m_track_block_recvd_times)
+      m_track_block_recvd_times_fstream << arg.current_blockchain_height-1 << "," << hash << "," << context.m_remote_address.str() << "," << ts << std::endl;
+
     if(context.m_state != cryptonote_connection_context::state_normal)
       return 1;
     if(!is_synchronized() || m_no_sync) // can happen if a peer connection goes to normal but another thread still hasn't finished adding queued blocks
@@ -509,7 +520,15 @@ namespace cryptonote
   template<class t_core>
   int t_cryptonote_protocol_handler<t_core>::handle_notify_new_fluffy_block(int command, NOTIFY_NEW_FLUFFY_BLOCK::request& arg, cryptonote_connection_context& context)
   {
-    MLOGIF_P2P_MESSAGE(crypto::hash hash; cryptonote::block b; bool ret = cryptonote::parse_and_validate_block_from_blob(arg.b.block, b, &hash);, ret, "Received NOTIFY_NEW_FLUFFY_BLOCK " << hash << " (height " << arg.current_blockchain_height << ", " << arg.b.txs.size() << " txes)");
+    crypto::hash hash;
+    cryptonote::block b;
+    bool ret = cryptonote::parse_and_validate_block_from_blob(arg.b.block, b, &hash);
+    MLOGIF_P2P_MESSAGE(hash; b; ;, ret, "Received NOTIFY_NEW_FLUFFY_BLOCK " << hash << " (height " << arg.current_blockchain_height << ", " << arg.b.txs.size() << " txes)");
+
+    time_t ts = time(NULL);
+    if (m_track_block_recvd_times)
+      m_track_block_recvd_times_fstream << arg.current_blockchain_height-1 << "," << hash << "," << context.m_remote_address.str() << "," << ts << std::endl;
+
     if(context.m_state != cryptonote_connection_context::state_normal)
       return 1;
     if(!is_synchronized() || m_no_sync) // can happen if a peer connection goes to normal but another thread still hasn't finished adding queued blocks

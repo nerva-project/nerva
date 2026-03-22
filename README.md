@@ -41,8 +41,8 @@ Check out the project [documentation][nerva-docs-link], create an [issue][nerva-
 
 [LICENSE](LICENSE)
 
-Copyright (c) 2018-2024 The Nerva Project.  
-Copyright (c) 2014-2024 The Monero Project.  
+Copyright (c) 2018-2026 The Nerva Project.  
+Copyright (c) 2014-2026 The Monero Project.  
 Copyright (c) 2017-2018 The Masari Project.  
 Portions Copyright (c) 2012-2013 The Cryptonote developers. 
 

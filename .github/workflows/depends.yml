@@ -31,6 +31,8 @@ name: ci/gh-actions/depends
 
 on:
     push:
+        branches:
+            - master
         paths-ignore:
             - 'docs/**'
             - '**/README.md'
@@ -42,18 +44,23 @@ on:
 
 env:
     APT_SET_CONF: |
-        echo "Acquire::Retries \"3\";"         | sudo tee -a /etc/apt/apt.conf.d/80-custom
-        echo "Acquire::http::Timeout \"120\";" | sudo tee -a /etc/apt/apt.conf.d/80-custom
-        echo "Acquire::ftp::Timeout \"120\";"  | sudo tee -a /etc/apt/apt.conf.d/80-custom
+        tee -a /etc/apt/apt.conf.d/80-custom << EOF
+        Acquire::Retries "3";
+        Acquire::http::Timeout "120";
+        Acquire::ftp::Timeout "120";
+        EOF
     CCACHE_SETTINGS: |
         ccache --max-size=150M
         ccache --set-config=compression=true
 
 jobs:
     build-cross:
-        runs-on: ubuntu-20.04
-        env:
-            CCACHE_TEMPDIR: /tmp/.ccache-temp
+        runs-on: ubuntu-latest
+        container:
+            image: ubuntu:20.04
+            env:
+                DEBIAN_FRONTEND: noninteractive
+                CCACHE_TEMPDIR: /tmp/.ccache-temp
         strategy:
             fail-fast: false
             matrix:
@@ -61,69 +68,167 @@ jobs:
                     -   name: "ARM v7"
                         host: "arm-linux-gnueabihf"
                         packages: "python3 gperf g++-arm-linux-gnueabihf"
+                        artifact-name: "nerva-linux-armv7"
                     -   name: "ARM v8"
                         host: "aarch64-linux-gnu"
                         packages: "python3 gperf g++-aarch64-linux-gnu"
+                        artifact-name: "nerva-linux-armv8"
                     -   name: "i686 Win"
                         host: "i686-w64-mingw32"
                         packages: "python3 g++-mingw-w64-i686"
+                        artifact-name: "nerva-windows-x32"
                     -   name: "i686 Linux"
                         host: "i686-pc-linux-gnu"
                         packages: "gperf cmake g++-multilib python3-zmq"
+                        artifact-name: "nerva-linux-i686"
                     -   name: "Win64"
                         host: "x86_64-w64-mingw32"
                         packages: "cmake python3 g++-mingw-w64-x86-64"
+                        artifact-name: "nerva-windows-x64"
                     -   name: "x86_64 Linux"
                         host: "x86_64-unknown-linux-gnu"
                         packages: "gperf cmake python3-zmq libdbus-1-dev libharfbuzz-dev"
+                        artifact-name: "nerva-linux-x86_64"
                     -   name: "Cross-Mac x86_64"
                         host: "x86_64-apple-darwin"
-                        packages: "cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python-dev python3-setuptools-git"
+                        packages: "cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python-dev python3-setuptools-git libtinfo5"
+                        artifact-name: "nerva-macos-x64"
                     -   name: "Cross-Mac aarch64"
                         host: "aarch64-apple-darwin"
-                        packages: "cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python-dev python3-setuptools-git"
+                        packages: "cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python-dev python3-setuptools-git libtinfo5"
+                        artifact-name: "nerva-macos-armv8"
                     -   name: "x86_64 Freebsd"
                         host: "x86_64-unknown-freebsd"
                         packages: "clang-8 gperf cmake python3-zmq libdbus-1-dev libharfbuzz-dev"
+                        artifact-name: "nerva-freebsd-x86_64"
                     -   name: "ARMv8 Android"
                         host: "aarch64-linux-android"
-                        packages: "gperf cmake python3"
+                        packages: "gperf cmake python3 unzip python-is-python3"
+                        artifact-name: "nerva-android-armv8"
         name: ${{ matrix.toolchain.name }}
         steps:
-            -   uses: actions/checkout@v4
+            -   name: Set apt conf
+                run: ${{env.APT_SET_CONF}}
+            -   name: Install dependencies
+                run: apt update; apt -y install build-essential libtool cmake autotools-dev automake pkg-config bsdmainutils curl git ca-certificates ccache ${{ matrix.toolchain.packages }}
+            -   name: Configure git
+                run: git config --global --add safe.directory '*'
+            -   uses: actions/checkout@v6
                 with:
                     fetch-depth: 0
                     submodules: recursive
             -   name: Ccache
-                uses: actions/cache@v4
+                uses: actions/cache@v5
                 with:
                     path: ~/.ccache
                     key: ccache-${{ matrix.toolchain.host }}-${{ github.sha }}
                     restore-keys: ccache-${{ matrix.toolchain.host }}-
             -   name: Depends cache
-                uses: actions/cache@v4
+                uses: actions/cache@v5
                 with:
                     path: contrib/depends/built
                     key: depends-${{ matrix.toolchain.host }}-${{ hashFiles('contrib/depends/packages/*') }}
                     restore-keys: |
                         depends-${{ matrix.toolchain.host }}-${{ hashFiles('contrib/depends/packages/*') }}
                         depends-${{ matrix.toolchain.host }}-
-            -   name: Set apt conf
-                run: ${{env.APT_SET_CONF}}
-            -   name: Install dependencies
-                run: sudo apt update; sudo apt -y install build-essential libtool cmake autotools-dev automake pkg-config bsdmainutils curl git ca-certificates ccache ${{ matrix.toolchain.packages }}
             -   name: Prepare w64-mingw32
                 if: ${{ matrix.toolchain.host == 'x86_64-w64-mingw32' || matrix.toolchain.host == 'i686-w64-mingw32' }}
                 run: |
-                    sudo update-alternatives --set ${{ matrix.toolchain.host }}-g++ $(which ${{ matrix.toolchain.host }}-g++-posix)
-                    sudo update-alternatives --set ${{ matrix.toolchain.host }}-gcc $(which ${{ matrix.toolchain.host }}-gcc-posix)
+                    update-alternatives --set ${{ matrix.toolchain.host }}-g++ $(which ${{ matrix.toolchain.host }}-g++-posix)
+                    update-alternatives --set ${{ matrix.toolchain.host }}-gcc $(which ${{ matrix.toolchain.host }}-gcc-posix)
+            -   uses: ./.github/actions/set-make-job-count
             -   name: Build
                 run: |
                     ${{env.CCACHE_SETTINGS}}
-                    make depends target=${{ matrix.toolchain.host }} -j2
-            -   uses: actions/upload-artifact@v4
-                # if: ${{ matrix.toolchain.host == 'x86_64-w64-mingw32' || matrix.toolchain.host == 'x86_64-apple-darwin' || matrix.toolchain.host == 'aarch64-apple-darwin' || matrix.toolchain.host == 'x86_64-unknown-linux-gnu' }}
+                    make depends target=${{ matrix.toolchain.host }} -j${{env.MAKE_JOB_COUNT}}
+            -   uses: actions/upload-artifact@v7
                 with:
-                    name: ${{ matrix.toolchain.name }}
+                    name: ${{ matrix.toolchain.artifact-name }}
                     path: |
-                        /home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}/build/${{ matrix.toolchain.host }}/release/bin/nerva*
+                        build/${{ matrix.toolchain.host }}/release/bin/nerva*
+
+    # Post a PR comment with artifact download links after all matrix jobs complete.
+    # NOTE: The target list below is coupled to the matrix above — update both together.
+    post-artifact-links:
+        needs: build-cross
+        if: always() && github.event_name == 'pull_request'
+        runs-on: ubuntu-latest
+        permissions:
+            pull-requests: write
+        steps:
+            -   name: Post artifact links
+                uses: actions/github-script@v7
+                with:
+                    script: |
+                        const targets = [
+                            'nerva-linux-armv7',
+                            'nerva-linux-armv8',
+                            'nerva-windows-x32',
+                            'nerva-linux-i686',
+                            'nerva-windows-x64',
+                            'nerva-linux-x86_64',
+                            'nerva-macos-x64',
+                            'nerva-macos-armv8',
+                            'nerva-freebsd-x86_64',
+                            'nerva-android-armv8',
+                        ];
+
+                        const { data: { artifacts } } = await github.rest.actions.listWorkflowRunArtifacts({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            run_id: context.runId,
+                            per_page: 100,
+                        });
+
+                        const artifactMap = new Map(artifacts.map(a => [a.name, a]));
+                        let succeeded = 0;
+                        let failed = 0;
+
+                        const rows = targets.map(target => {
+                            const artifact = artifactMap.get(target);
+                            if (artifact) {
+                                succeeded++;
+                                const url = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}/artifacts/${artifact.id}`;
+                                return `| ${target} | :white_check_mark: | [Download](${url}) |`;
+                            } else {
+                                failed++;
+                                return `| ${target} | :x: | Build failed |`;
+                            }
+                        });
+
+                        const body = [
+                            '<!-- nerva-artifact-links -->',
+                            '## Build Artifacts',
+                            '',
+                            '| Target | Status | Download |',
+                            '|--------|--------|----------|',
+                            ...rows,
+                            '',
+                            '---',
+                            `*${succeeded} succeeded, ${failed} failed* | [View workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+                        ].join('\n');
+
+                        const prNumber = context.payload.pull_request.number;
+                        const { data: comments } = await github.rest.issues.listComments({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            issue_number: prNumber,
+                            per_page: 100,
+                        });
+
+                        const existing = comments.find(c => c.body.includes('<!-- nerva-artifact-links -->'));
+                        if (existing) {
+                            await github.rest.issues.updateComment({
+                                owner: context.repo.owner,
+                                repo: context.repo.repo,
+                                comment_id: existing.id,
+                                body,
+                            });
+                        } else {
+                            await github.rest.issues.createComment({
+                                owner: context.repo.owner,
+                                repo: context.repo.repo,
+                                issue_number: prNumber,
+                                body,
+                            });
+                        }

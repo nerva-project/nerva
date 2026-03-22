@@ -452,8 +452,12 @@ namespace cryptonote
     if (threads_count == 0)
     {
       m_threads_autodetect.clear();
+#ifdef __ANDROID__
+      m_threads_total = 1;
+#else
       m_threads_autodetect.push_back({epee::misc_utils::get_ns_count(), m_total_hashes});
       m_threads_total = 1;
+#endif
     }
     m_starter_nonce = crypto::rand<uint32_t>();
     CRITICAL_REGION_LOCAL(m_threads_lock);
@@ -482,7 +486,13 @@ namespace cryptonote
     }
 
     if (threads_count == 0)
+    {
+#ifdef __ANDROID__
+      MGUSER_CYAN("Mining has started with 1 thread (mobile default). Set threads manually to use more, good luck!");
+#else
       MGUSER_CYAN("Mining has started, autodetecting optimal number of threads, good luck!" );
+#endif
+    }
     else
       MGUSER_CYAN("Mining has started with " << threads_count << " threads, good luck!" );
 
