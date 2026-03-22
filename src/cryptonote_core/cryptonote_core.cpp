@@ -1159,10 +1159,21 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   size_t core::get_block_sync_size(uint64_t height) const
   {
-    if (block_sync_size == 0)
-      return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT;
+    if (block_sync_size > 0)
+      return block_sync_size;
 
-    return block_sync_size;
+    // Adaptive mode: scale batch size by distance to target
+    const uint64_t target = get_target_blockchain_height();
+    if (target > height)
+    {
+      const uint64_t blocks_behind = target - height;
+      if (blocks_behind > COMMAND_RPC_GET_BLOCKS_FAST_MAX_COUNT)
+        return COMMAND_RPC_GET_BLOCKS_FAST_MAX_COUNT;
+      if (blocks_behind > BLOCKS_SYNCHRONIZING_DEFAULT_COUNT)
+        return (size_t)blocks_behind;
+    }
+
+    return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT;
   }
   //-----------------------------------------------------------------------------------------------
   bool core::are_key_images_spent_in_pool(const std::vector<crypto::key_image>& key_im, std::vector<bool> &spent) const
