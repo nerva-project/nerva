@@ -159,6 +159,14 @@ The probability that any two miners have each found a block after mining for 1 m
 
 Overall, the network difficulty adjusts in a way that adding miners to the network doesnt affect the probability of chain splits significantly assuming that mining power is distributed evenly among miners. This model does not account for the fact that adding miners to the network increases the amount of work required for block propogation across all miners on the network.
 
+### Mining Difficulty Considerations
+
+The current difficulty algorithm adjusts based on the observed difference between block timestamps of recently found blocks compared against the target solve time. We will be lowering that target solve time from 60 seconds to 15 seconds. The algorithm should adjust quickly, but it will be a bit wonky for the first ~60 blocks after hard forking.
+
+Currently the LWMA algorithm uses the parameter N=60 so we are using the most recent 60 blocks when calculating the weighted average. Since we are lowering the target block time, that means we will only be using 15 minutes worth of block histories instead of the last 1 hour worth of blocks. Is this OK?
+
+The "future time limit" used in the difficulty algorithm is intended to be 500 seconds according to the comments in the code. Currently this is, in fact, hard coded to 300 seconds (`CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT_V6`). Since we are lowering the target solve time, the (FTL / T) ratio increases. Should this be adjusted?
+
 ## Status
 
 This proposal is a work in progress. I am seeking community feedback to see if I should continue working on this idea, and to get an idea of what people want to do about the block reward.
@@ -173,10 +181,7 @@ This proposal is a work in progress. I am seeking community feedback to see if I
 
 #### Research
 
-* How does changing the difficulty target affect the rest of the difficulty algo parameters ?
-    * CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1 references this. TX locking can be done with unix timestamps instead of blocks. This should be consistent.
-    * DIFFICULTY_BLOCKS_COUNT - should the DIFFICULTY_WINDOW be adjusted ?
-    * CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT_V6 should probably be adjusted
+* Confirm that the difficulty algorithm doesnt require further adjustment
 
 * How long does it currently take for a block to propogate throughout the network ?
 

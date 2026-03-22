@@ -1443,19 +1443,7 @@ namespace cryptonote
     CHECK_AND_ASSERT_MES(!bvc.m_verifivation_failed, false, "mined block failed verification");
     if(bvc.m_added_to_main_chain)
     {
-      if (b.uncle_hash != crypto::null_hash)
-      {
-        // first relay uncle blocks if an uncle block hash is included in the block
-        cryptonote_connection_context exclude_context = {};
-        NOTIFY_NEW_BLOCK::request arg = AUTO_VAL_INIT(arg);
-        arg.current_blockchain_height = m_blockchain_storage.get_current_blockchain_height()-1; // -1 per uncle block definition
-        cryptonote::block uncle_block;
-        get_block_by_hash(b.uncle_hash, uncle_block);
-        block_to_blob(uncle_block, arg.b.block);
-        m_pprotocol->relay_block(arg, exclude_context);
-        // TODO: this should be recursive - if the uncle's prev_id isnt in the main chain then continue relaying the alt chain history until a common ancestor is found
-      }
-
+      relay_uncle_blocks(b, m_blockchain_storage.get_current_blockchain_height());
       cryptonote_connection_context exclude_context = {};
       NOTIFY_NEW_BLOCK::request arg = AUTO_VAL_INIT(arg);
       arg.current_blockchain_height = m_blockchain_storage.get_current_blockchain_height();
@@ -1850,6 +1838,22 @@ namespace cryptonote
     }
 
     return true;
+  }
+  //-----------------------------------------------------------------------------------------------
+  void core::relay_uncle_blocks(const cryptonote::block &b, uint64_t height)
+  {
+    // first relay uncle blocks if an uncle block hash is included in the block
+    if (b.uncle_hash != crypto::null_hash)
+    {
+      cryptonote::block uncle_block;
+      get_block_by_hash(b.uncle_hash, uncle_block);
+      relay_uncle_blocks(uncle_block, height-2); // -2 for uncle of an uncle
+      cryptonote_connection_context exclude_context = {};
+      NOTIFY_NEW_BLOCK::request arg = AUTO_VAL_INIT(arg);
+      arg.current_blockchain_height = height-1; // -1 per uncle block definition
+      block_to_blob(uncle_block, arg.b.block);
+      m_pprotocol->relay_block(arg, exclude_context);
+    }
   }
   //-----------------------------------------------------------------------------------------------
   bool core::contact_server()

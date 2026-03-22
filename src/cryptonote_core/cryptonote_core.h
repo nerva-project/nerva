@@ -851,6 +851,8 @@ namespace cryptonote
       */
      void flush_bad_txs_cache();
 
+     void relay_uncle_blocks(const cryptonote::block &b, uint64_t height);
+
    private:
 
      /**

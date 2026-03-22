@@ -484,16 +484,7 @@ namespace cryptonote
     if(bvc.m_added_to_main_chain)
     {
       //TODO: Add here announce protocol usage
-      if (b.uncle_hash != crypto::null_hash)
-      {
-        cryptonote_connection_context exclude_context = {};
-        NOTIFY_NEW_BLOCK::request arg_uncle_request = AUTO_VAL_INIT(arg_uncle_request);
-        arg_uncle_request.current_blockchain_height = arg.current_blockchain_height-1; // -1 per uncle block definition
-        cryptonote::block uncle_block;
-        m_core.get_block_by_hash(b.uncle_hash, uncle_block);
-        block_to_blob(uncle_block, arg_uncle_request.b.block);
-        relay_block(arg_uncle_request, exclude_context);
-      }
+      m_core.relay_uncle_blocks(b, arg.current_blockchain_height); // relay uncle blocks BEFORE main block
       relay_block(arg, context);
     }else if(bvc.m_marked_as_orphaned)
     {
@@ -772,16 +763,7 @@ namespace cryptonote
         if( bvc.m_added_to_main_chain )
         {
           //TODO: Add here announce protocol usage
-          if (new_block.uncle_hash != crypto::null_hash)
-          {
-            cryptonote_connection_context exclude_context = {};
-            NOTIFY_NEW_BLOCK::request arg_uncle_request = AUTO_VAL_INIT(arg_uncle_request);
-            arg_uncle_request.current_blockchain_height = arg.current_blockchain_height-1; // -1 per uncle block definition
-            cryptonote::block uncle_block;
-            m_core.get_block_by_hash(new_block.uncle_hash, uncle_block);
-            block_to_blob(uncle_block, arg_uncle_request.b.block);
-            relay_block(arg_uncle_request, exclude_context);
-          }
+          m_core.relay_uncle_blocks(new_block, arg.current_blockchain_height); // relay uncle blocks BEFORE main block
           NOTIFY_NEW_BLOCK::request reg_arg = AUTO_VAL_INIT(reg_arg);
           reg_arg.current_blockchain_height = arg.current_blockchain_height;
           reg_arg.b = b;
