@@ -103,6 +103,11 @@
 #define BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT                          10000
 #define BLOCKS_SYNCHRONIZING_DEFAULT_COUNT                              100
 #define BLOCKS_SYNCHRONIZING_MAX_COUNT                                  2048
+// CNA PoW variants (v3/v4/v5) read block data from height-256. When a batch
+// write transaction is open, those blocks are invisible to new read-only txns
+// opened inside the hash functions. Capping the batch at 256 ensures every
+// block in a batch only looks up data that was committed before the batch began.
+#define BLOCKS_SYNCHRONIZING_SAFE_BATCH_COUNT                          256
 #define CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT                      500
 
 #define CRYPTONOTE_MEMPOOL_TX_LIVETIME                                  (86400 * 3)

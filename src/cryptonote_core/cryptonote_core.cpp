@@ -1162,13 +1162,16 @@ namespace cryptonote
     if (block_sync_size > 0)
       return block_sync_size;
 
-    // Adaptive mode: scale batch size by distance to target
+    // Adaptive mode: scale batch size by distance to target.
+    // Capped at BLOCKS_SYNCHRONIZING_SAFE_BATCH_COUNT (256) so that CNA PoW
+    // variants, which look up block data at height-256, never request data
+    // that is still inside the current uncommitted LMDB write batch.
     const uint64_t target = get_target_blockchain_height();
     if (target > height)
     {
       const uint64_t blocks_behind = target - height;
-      if (blocks_behind > CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT)
-        return CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT;
+      if (blocks_behind > BLOCKS_SYNCHRONIZING_SAFE_BATCH_COUNT)
+        return BLOCKS_SYNCHRONIZING_SAFE_BATCH_COUNT;
       if (blocks_behind > BLOCKS_SYNCHRONIZING_DEFAULT_COUNT)
         return (size_t)blocks_behind;
     }
