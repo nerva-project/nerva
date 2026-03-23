@@ -253,16 +253,27 @@ DNSResolver::DNSResolver() : m_data(new DNSResolverData())
     return;
   }
 
-  char* DNS_PUBLIC = getenv("DNS_PUBLIC");
-  if (DNS_PUBLIC)
+  // Check for user-specified DNS servers (--dns-server CLI option)
+  std::vector<std::string> custom_servers = dns_config::get_dns_servers();
+  if (!custom_servers.empty())
   {
-    dns_public_addr = tools::dns_utils::parse_dns_public(std::string(DNS_PUBLIC));
-    if (dns_public_addr.empty())
-      MERROR("Failed to parse DNS_PUBLIC");
+    dns_public_addr = custom_servers;
   }
+  else
+  {
+    // Check DNS_PUBLIC environment variable
+    char* DNS_PUBLIC = getenv("DNS_PUBLIC");
+    if (DNS_PUBLIC)
+    {
+      dns_public_addr = tools::dns_utils::parse_dns_public(std::string(DNS_PUBLIC));
+      if (dns_public_addr.empty())
+        MERROR("Failed to parse DNS_PUBLIC");
+    }
 
-  for (size_t i = 0; i < sizeof(DEFAULT_DNS_PUBLIC_ADDR) / sizeof(DEFAULT_DNS_PUBLIC_ADDR[0]); ++i)
-    dns_public_addr.push_back(DEFAULT_DNS_PUBLIC_ADDR[i]);
+    // Append default DNS servers as fallback
+    for (size_t i = 0; i < sizeof(DEFAULT_DNS_PUBLIC_ADDR) / sizeof(DEFAULT_DNS_PUBLIC_ADDR[0]); ++i)
+      dns_public_addr.push_back(DEFAULT_DNS_PUBLIC_ADDR[i]);
+  }
   LOG_PRINT_L0("Using public DNS server(s): " << boost::join(dns_public_addr, ", ") << " (TCP)");
 
   // init libunbound context
