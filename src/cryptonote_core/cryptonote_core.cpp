@@ -1167,8 +1167,8 @@ namespace cryptonote
     if (target > height)
     {
       const uint64_t blocks_behind = target - height;
-      if (blocks_behind > COMMAND_RPC_GET_BLOCKS_FAST_MAX_COUNT)
-        return COMMAND_RPC_GET_BLOCKS_FAST_MAX_COUNT;
+      if (blocks_behind > CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT)
+        return CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT;
       if (blocks_behind > BLOCKS_SYNCHRONIZING_DEFAULT_COUNT)
         return (size_t)blocks_behind;
     }

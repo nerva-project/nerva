@@ -103,6 +103,7 @@
 #define BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT                          10000
 #define BLOCKS_SYNCHRONIZING_DEFAULT_COUNT                              100
 #define BLOCKS_SYNCHRONIZING_MAX_COUNT                                  2048
+#define CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT                      500
 
 #define CRYPTONOTE_MEMPOOL_TX_LIVETIME                                  (86400 * 3)
 #define CRYPTONOTE_MEMPOOL_TX_FROM_ALT_BLOCK_LIVETIME                   604800
