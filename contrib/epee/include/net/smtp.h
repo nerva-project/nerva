@@ -60,9 +60,8 @@ namespace net_utils
 			smtp_client(std::string pServer,unsigned int pPort,std::string pUser,std::string pPassword):
 			  mServer(pServer),mPort(pPort),mUserName(pUser),mPassword(pPassword),mSocket(mIOService),mResolver(mIOService)
 			  {
-				  tcp::resolver::query qry(mServer,boost::lexical_cast<std::string>( mPort ));
-				  mResolver.async_resolve(qry,boost::bind(&smtp_client::handleResolve,this,boost::asio::placeholders::error,
-					  boost::asio::placeholders::iterator));
+				  mResolver.async_resolve(mServer,boost::lexical_cast<std::string>( mPort ),boost::bind(&smtp_client::handleResolve,this,boost::asio::placeholders::error,
+					  boost::placeholders::_2));
 			  }
 			  bool Send(std::string pFrom,std::string pTo,std::string pSubject,std::string pMessage)
 			  {
@@ -82,13 +81,13 @@ namespace net_utils
 				std::copy(base64_text(pData.c_str()),base64_text(pData.c_str()+sz),std::ostream_iterator<char>(os));
 				return os.str();
 			}
-			void handleResolve(const boost::system::error_code& err,tcp::resolver::iterator endpoint_iterator)
+			void handleResolve(const boost::system::error_code& err,tcp::resolver::results_type endpoints)
 			{
 				if(!err)
 				{
-					tcp::endpoint endpoint=*endpoint_iterator;
-					mSocket.async_connect(endpoint,
-						boost::bind(&smtp_client::handleConnect,this,boost::asio::placeholders::error,++endpoint_iterator));
+					boost::asio::async_connect(mSocket, endpoints,
+						boost::bind(&smtp_client::handleConnect,this,boost::asio::placeholders::error,
+							boost::placeholders::_2));
 				}
 				else
 				{
@@ -110,7 +109,7 @@ namespace net_utils
 				std::istream response_stream(&response);
 				response_stream >> pData;
 			}
-			void handleConnect(const boost::system::error_code& err,tcp::resolver::iterator endpoint_iterator)
+			void handleConnect(const boost::system::error_code& err,tcp::endpoint endpoint)
 			{
 				if (!err)
 				{
@@ -153,7 +152,7 @@ namespace net_utils
 			std::string mSubject;
 			std::string mMessage;
 			unsigned int mPort;
-			boost::asio::io_service mIOService;
+			boost::asio::io_context mIOService;
 			tcp::resolver mResolver;
 			tcp::socket mSocket;
 			boost::asio::streambuf mRequest;

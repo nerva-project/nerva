@@ -149,7 +149,7 @@ namespace cryptonote
     {
       // always parse IP here for error consistency
       boost::system::error_code ec{};
-      const auto parsed_ip = boost::asio::ip::address::from_string(config.bind_ip, ec);
+      const auto parsed_ip = boost::asio::ip::make_address(config.bind_ip, ec);
       if (ec)
       {
         LOG_ERROR(tr("Invalid IP address given for --") << arg.rpc_bind_ip.name);
@@ -177,7 +177,7 @@ namespace cryptonote
 
       // always parse IP here for error consistency
       boost::system::error_code ec{};
-      const auto parsed_ip = boost::asio::ip::address::from_string(config.bind_ipv6_address, ec);
+      const auto parsed_ip = boost::asio::ip::make_address(config.bind_ipv6_address, ec);
       if (ec)
       {
         LOG_ERROR(tr("Invalid IP address given for --") << arg.rpc_bind_ipv6_address.name);
@@ -195,7 +195,7 @@ namespace cryptonote
       }
 
       if (!(config.auth_type == epee::net_utils::http::http_auth_digest
-        || (parsed_ip.is_v4() && epee::net_utils::is_ip_local(static_cast<uint32_t>(parsed_ip.to_v4().to_ulong())))))
+        || (parsed_ip.is_v4() && epee::net_utils::is_ip_local(static_cast<uint32_t>(parsed_ip.to_v4().to_uint())))))
       {
         if (!command_line::get_arg(vm, arg.confirm_cleartext_auth))
         {

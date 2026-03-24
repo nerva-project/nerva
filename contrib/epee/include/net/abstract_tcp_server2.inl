@@ -32,6 +32,8 @@
 
 
 
+#include <boost/asio/bind_executor.hpp>
+#include <boost/asio/post.hpp>
 #include <boost/foreach.hpp>
 #include <boost/uuid/random_generator.hpp>
 #include <boost/chrono.hpp>
@@ -81,12 +83,12 @@ namespace net_utils
 PRAGMA_WARNING_DISABLE_VS(4355)
 
   template<class t_protocol_handler>
-  connection<t_protocol_handler>::connection( boost::asio::io_service& io_service,
+  connection<t_protocol_handler>::connection( boost::asio::io_context& io_context,
                 std::shared_ptr<shared_state> state,
 		t_connection_type connection_type,
 		ssl_support_t ssl_support
 	)
-	: connection(boost::asio::ip::tcp::socket{io_service}, std::move(state), connection_type, ssl_support)
+	: connection(boost::asio::ip::tcp::socket{io_context}, std::move(state), connection_type, ssl_support)
   {
   }
 
@@ -103,7 +105,7 @@ PRAGMA_WARNING_DISABLE_VS(4355)
 		m_connection_type( connection_type ),
 		m_throttle_speed_in("speed_in", "throttle_speed_in"),
 		m_throttle_speed_out("speed_out", "throttle_speed_out"),
-		m_timer(GET_IO_SERVICE(socket_)),
+		m_timer(socket_.get_executor()),
 		m_local(false),
 		m_ready_to_close(false)
   {
@@ -150,7 +152,7 @@ PRAGMA_WARNING_DISABLE_VS(4355)
 
     if (remote_ep.address().is_v4())
     {
-      const unsigned long ip_ = boost::asio::detail::socket_ops::host_to_network_long(remote_ep.address().to_v4().to_ulong());
+      const unsigned long ip_ = boost::asio::detail::socket_ops::host_to_network_long(remote_ep.address().to_v4().to_uint());
       return start(is_income, is_multithreaded, ipv4_network_address{uint32_t(ip_), remote_ep.port()});
     }
     else
@@ -208,13 +210,13 @@ PRAGMA_WARNING_DISABLE_VS(4355)
     if (is_income && m_ssl_support != epee::net_utils::ssl_support_t::e_ssl_support_disabled)
       socket().async_receive(boost::asio::buffer(buffer_),
         boost::asio::socket_base::message_peek,
-        strand_.wrap(
+        boost::asio::bind_executor(strand_,
           std::bind(&connection<t_protocol_handler>::handle_receive, self,
             std::placeholders::_1,
             std::placeholders::_2)));
     else
       async_read_some(boost::asio::buffer(buffer_),
-        strand_.wrap(
+        boost::asio::bind_executor(strand_,
           std::bind(&connection<t_protocol_handler>::handle_read, self,
             std::placeholders::_1,
             std::placeholders::_2)));
@@ -247,15 +249,15 @@ PRAGMA_WARNING_DISABLE_VS(4355)
     if(!self)
       return false;
 
-    strand_.post(boost::bind(&connection<t_protocol_handler>::call_back_starter, self));
+    boost::asio::post(strand_,boost::bind(&connection<t_protocol_handler>::call_back_starter, self));
     CATCH_ENTRY_L0("connection<t_protocol_handler>::request_callback()", false);
     return true;
   }
   //---------------------------------------------------------------------------------
   template<class t_protocol_handler>
-  boost::asio::io_service& connection<t_protocol_handler>::get_io_service()
+  boost::asio::io_context& connection<t_protocol_handler>::get_io_context()
   {
-    return GET_IO_SERVICE(socket());
+    return static_cast<boost::asio::io_context&>(socket().get_executor().context());
   }
   //---------------------------------------------------------------------------------
   template<class t_protocol_handler>
@@ -392,7 +394,7 @@ PRAGMA_WARNING_DISABLE_VS(4355)
       {
         reset_timer(get_timeout_from_bytes_read(bytes_transferred), false);
         async_read_some(boost::asio::buffer(buffer_),
-          strand_.wrap(
+          boost::asio::bind_executor(strand_,
             boost::bind(&connection<t_protocol_handler>::handle_read, connection<t_protocol_handler>::shared_from_this(),
               boost::asio::placeholders::error,
               boost::asio::placeholders::bytes_transferred)));
@@ -445,7 +447,7 @@ PRAGMA_WARNING_DISABLE_VS(4355)
     {
       socket().async_receive(boost::asio::buffer(buffer_.data() + buffer_ssl_init_fill, buffer_.size() - buffer_ssl_init_fill),
         boost::asio::socket_base::message_peek,
-        strand_.wrap(
+        boost::asio::bind_executor(strand_,
           boost::bind(&connection<t_protocol_handler>::handle_receive, connection<t_protocol_handler>::shared_from_this(),
             boost::asio::placeholders::error,
             boost::asio::placeholders::bytes_transferred)));
@@ -470,7 +472,7 @@ PRAGMA_WARNING_DISABLE_VS(4355)
     if (m_ssl_support == epee::net_utils::ssl_support_t::e_ssl_support_enabled)
     {
       // Handshake
-      if (!handshake(boost::asio::ssl::stream_base::server))
+      if (!handshake(boost::asio::ssl::stream_base::server, static_cast<boost::asio::io_context&>(socket().get_executor().context())))
       {
         MERROR("SSL handshake failed");
         boost::interprocess::ipcdetail::atomic_write32(&m_want_close_connection, 1);
@@ -487,7 +489,7 @@ PRAGMA_WARNING_DISABLE_VS(4355)
     }
 
     async_read_some(boost::asio::buffer(buffer_),
-      strand_.wrap(
+      boost::asio::bind_executor(strand_,
         boost::bind(&connection<t_protocol_handler>::handle_read, connection<t_protocol_handler>::shared_from_this(),
           boost::asio::placeholders::error,
           boost::asio::placeholders::bytes_transferred)));
@@ -506,7 +508,7 @@ PRAGMA_WARNING_DISABLE_VS(4355)
     if(!m_is_multithreaded)
     {
       //single thread model, we can wait in blocked call
-      size_t cnt = GET_IO_SERVICE(socket()).run_one();
+      size_t cnt = static_cast<boost::asio::io_context&>(socket().get_executor().context()).run_one();
       if(!cnt)//service is going to quit
         return false;
     }else
@@ -516,7 +518,7 @@ PRAGMA_WARNING_DISABLE_VS(4355)
       //if no handlers were called
       //TODO: Maybe we need to have have critical section + event + callback to upper protocol to
       //ask it inside(!) critical region if we still able to go in event wait...
-      size_t cnt = GET_IO_SERVICE(socket()).poll_one();
+      size_t cnt = static_cast<boost::asio::io_context&>(socket().get_executor().context()).poll_one();
       if(!cnt)
         misc_utils::sleep_no_w(1);
     }
@@ -686,7 +688,7 @@ PRAGMA_WARNING_DISABLE_VS(4355)
         CHECK_AND_ASSERT_MES( size_now == m_send_que.front().size(), false, "Unexpected queue size");
         reset_timer(get_default_timeout(), false);
             async_write(boost::asio::buffer(m_send_que.front().data(), size_now ) ,
-                                 strand_.wrap(
+                                 boost::asio::bind_executor(strand_,
                                  std::bind(&connection<t_protocol_handler>::handle_write, self, std::placeholders::_1, std::placeholders::_2)
                                  )
                                  );
@@ -879,7 +881,7 @@ PRAGMA_WARNING_DISABLE_VS(4355)
 			do_send_handler_write_from_queue(e, m_send_que.front().size() , m_send_que.size()); // (((H)))
 		CHECK_AND_ASSERT_MES( size_now == m_send_que.front().size(), void(), "Unexpected queue size");
 		  async_write(boost::asio::buffer(m_send_que.front().data(), size_now) , 
-           strand_.wrap(
+           boost::asio::bind_executor(strand_,
             std::bind(&connection<t_protocol_handler>::handle_write, connection<t_protocol_handler>::shared_from_this(), std::placeholders::_1, std::placeholders::_2)
 			  )
           );
@@ -915,12 +917,12 @@ PRAGMA_WARNING_DISABLE_VS(4355)
   template<class t_protocol_handler>
   boosted_tcp_server<t_protocol_handler>::boosted_tcp_server( t_connection_type connection_type ) :
     m_state(std::make_shared<typename connection<t_protocol_handler>::shared_state>()),
-    m_io_service_local_instance(new worker()),
-    io_service_(m_io_service_local_instance->io_service),
-    acceptor_(io_service_),
-    acceptor_ipv6(io_service_),
+    m_io_context_local_instance(new worker()),
+    io_context_(m_io_context_local_instance->io_context),
+    acceptor_(io_context_),
+    acceptor_ipv6(io_context_),
     default_remote(),
-    m_stop_signal_sent(false), m_port(0), 
+    m_stop_signal_sent(false), m_port(0),
     m_threads_count(0),
     m_thread_index(0),
 		m_connection_type( connection_type ),
@@ -932,11 +934,11 @@ PRAGMA_WARNING_DISABLE_VS(4355)
   }
 
   template<class t_protocol_handler>
-  boosted_tcp_server<t_protocol_handler>::boosted_tcp_server(boost::asio::io_service& extarnal_io_service, t_connection_type connection_type) :
+  boosted_tcp_server<t_protocol_handler>::boosted_tcp_server(boost::asio::io_context& extarnal_io_context, t_connection_type connection_type) :
     m_state(std::make_shared<typename connection<t_protocol_handler>::shared_state>()),
-    io_service_(extarnal_io_service),
-    acceptor_(io_service_),
-    acceptor_ipv6(io_service_),
+    io_context_(extarnal_io_context),
+    acceptor_(io_context_),
+    acceptor_ipv6(io_context_),
     default_remote(),
     m_stop_signal_sent(false), m_port(0),
     m_threads_count(0),
@@ -985,9 +987,8 @@ PRAGMA_WARNING_DISABLE_VS(4355)
     std::string ipv6_failed = "";
     try
     {
-      boost::asio::ip::tcp::resolver resolver(io_service_);
-      boost::asio::ip::tcp::resolver::query query(address, boost::lexical_cast<std::string>(port), boost::asio::ip::tcp::resolver::query::canonical_name);
-      boost::asio::ip::tcp::endpoint endpoint = *resolver.resolve(query);
+      boost::asio::ip::tcp::resolver resolver(io_context_);
+      boost::asio::ip::tcp::endpoint endpoint = *resolver.resolve(address, boost::lexical_cast<std::string>(port)).begin();
       acceptor_.open(endpoint.protocol());
 #if !defined(_WIN32)
       acceptor_.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
@@ -997,7 +998,7 @@ PRAGMA_WARNING_DISABLE_VS(4355)
       boost::asio::ip::tcp::endpoint binded_endpoint = acceptor_.local_endpoint();
       m_port = binded_endpoint.port();
       MDEBUG("start accept (IPv4)");
-      new_connection_.reset(new connection<t_protocol_handler>(io_service_, m_state, m_connection_type, m_state->ssl_options().support));
+      new_connection_.reset(new connection<t_protocol_handler>(io_context_, m_state, m_connection_type, m_state->ssl_options().support));
       acceptor_.async_accept(new_connection_->socket(),
       boost::bind(&boosted_tcp_server<t_protocol_handler>::handle_accept_ipv4, this,
       boost::asio::placeholders::error));
@@ -1021,9 +1022,8 @@ PRAGMA_WARNING_DISABLE_VS(4355)
       try
       {
         if (port_ipv6 == 0) port_ipv6 = port; // default arg means bind to same port as ipv4
-        boost::asio::ip::tcp::resolver resolver(io_service_);
-        boost::asio::ip::tcp::resolver::query query(address_ipv6, boost::lexical_cast<std::string>(port_ipv6), boost::asio::ip::tcp::resolver::query::canonical_name);
-        boost::asio::ip::tcp::endpoint endpoint = *resolver.resolve(query);
+        boost::asio::ip::tcp::resolver resolver(io_context_);
+        boost::asio::ip::tcp::endpoint endpoint = *resolver.resolve(address_ipv6, boost::lexical_cast<std::string>(port_ipv6)).begin();
         acceptor_ipv6.open(endpoint.protocol());
 #if !defined(_WIN32)
         acceptor_ipv6.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
@@ -1034,7 +1034,7 @@ PRAGMA_WARNING_DISABLE_VS(4355)
         boost::asio::ip::tcp::endpoint binded_endpoint = acceptor_ipv6.local_endpoint();
         m_port_ipv6 = binded_endpoint.port();
         MDEBUG("start accept (IPv6)");
-        new_connection_ipv6.reset(new connection<t_protocol_handler>(io_service_, m_state, m_connection_type, m_state->ssl_options().support));
+        new_connection_ipv6.reset(new connection<t_protocol_handler>(io_context_, m_state, m_connection_type, m_state->ssl_options().support));
         acceptor_ipv6.async_accept(new_connection_ipv6->socket(),
             boost::bind(&boosted_tcp_server<t_protocol_handler>::handle_accept_ipv6, this,
               boost::asio::placeholders::error));
@@ -1104,7 +1104,7 @@ POP_WARNINGS
     {
       try
       {
-        io_service_.run();
+        io_context_.run();
         return true;
       }
       catch(const std::exception& ex)
@@ -1240,7 +1240,7 @@ POP_WARNINGS
     }
     connections_.clear();
     connections_mutex.unlock();
-    io_service_.stop();
+    io_context_.stop();
     CATCH_ENTRY_L0("boosted_tcp_server<t_protocol_handler>::send_stop_signal()", void());
   }
   //---------------------------------------------------------------------------------
@@ -1287,7 +1287,7 @@ POP_WARNINGS
         (*current_new_connection)->setRpcStation(); // hopefully this is not needed actually
       }
       connection_ptr conn(std::move((*current_new_connection)));
-      (*current_new_connection).reset(new connection<t_protocol_handler>(io_service_, m_state, m_connection_type, conn->get_ssl_support()));
+      (*current_new_connection).reset(new connection<t_protocol_handler>(io_context_, m_state, m_connection_type, conn->get_ssl_support()));
       current_acceptor->async_accept((*current_new_connection)->socket(),
           boost::bind(accept_function_pointer, this,
             boost::asio::placeholders::error));
@@ -1322,7 +1322,7 @@ POP_WARNINGS
     assert(m_state != nullptr); // always set in constructor
     _erro("Some problems at accept: " << e.message() << ", connections_count = " << m_state->sock_count);
     misc_utils::sleep_no_w(100);
-    (*current_new_connection).reset(new connection<t_protocol_handler>(io_service_, m_state, m_connection_type, (*current_new_connection)->get_ssl_support()));
+    (*current_new_connection).reset(new connection<t_protocol_handler>(io_context_, m_state, m_connection_type, (*current_new_connection)->get_ssl_support()));
     current_acceptor->async_accept((*current_new_connection)->socket(),
         boost::bind(accept_function_pointer, this,
           boost::asio::placeholders::error));
@@ -1331,7 +1331,7 @@ POP_WARNINGS
   template<class t_protocol_handler>
   bool boosted_tcp_server<t_protocol_handler>::add_connection(t_connection_context& out, boost::asio::ip::tcp::socket&& sock, network_address real_remote, epee::net_utils::ssl_support_t ssl_support)
   {
-    if(std::addressof(get_io_service()) == std::addressof(GET_IO_SERVICE(sock)))
+    if(std::addressof(get_io_context()) == std::addressof(static_cast<boost::asio::io_context&>(sock.get_executor().context())))
     {
       connection_ptr conn(new connection<t_protocol_handler>(std::move(sock), m_state, m_connection_type, ssl_support));
       if(conn->start(false, 1 < m_threads_count, std::move(real_remote)))
@@ -1343,7 +1343,7 @@ POP_WARNINGS
     }
     else
     {
-	MWARNING(out << " was not added, socket/io_service mismatch");
+	MWARNING(out << " was not added, socket/io_context mismatch");
     }
     return false;
   }
@@ -1356,7 +1356,7 @@ POP_WARNINGS
     sock_.open(remote_endpoint.protocol());
     if(bind_ip != "0.0.0.0" && bind_ip != "0" && bind_ip != "" )
     {
-      boost::asio::ip::tcp::endpoint local_endpoint(boost::asio::ip::address::from_string(bind_ip.c_str()), 0);
+      boost::asio::ip::tcp::endpoint local_endpoint(boost::asio::ip::make_address(bind_ip.c_str()), 0);
       boost::system::error_code ec;
       sock_.bind(local_endpoint, ec);
       if (ec)
@@ -1425,7 +1425,7 @@ POP_WARNINGS
     {
       // Handshake
       MDEBUG("Handshaking SSL...");
-      if (!new_connection_l->handshake(boost::asio::ssl::stream_base::client))
+      if (!new_connection_l->handshake(boost::asio::ssl::stream_base::client, io_context_))
       {
         if (ssl_support == epee::net_utils::ssl_support_t::e_ssl_support_autodetect)
         {
@@ -1451,7 +1451,7 @@ POP_WARNINGS
   {
     TRY_ENTRY();
 
-    connection_ptr new_connection_l(new connection<t_protocol_handler>(io_service_, m_state, m_connection_type, ssl_support) );
+    connection_ptr new_connection_l(new connection<t_protocol_handler>(io_context_, m_state, m_connection_type, ssl_support) );
     connections_mutex.lock();
     connections_.insert(new_connection_l);
     MDEBUG("connections_ size now " << connections_.size());
@@ -1461,14 +1461,13 @@ POP_WARNINGS
 
     bool try_ipv6 = false;
 
-    boost::asio::ip::tcp::resolver resolver(io_service_);
-    boost::asio::ip::tcp::resolver::query query(boost::asio::ip::tcp::v4(), adr, port, boost::asio::ip::tcp::resolver::query::canonical_name);
+    boost::asio::ip::tcp::resolver resolver(io_context_);
     boost::system::error_code resolve_error;
-    boost::asio::ip::tcp::resolver::iterator iterator;
+    boost::asio::ip::tcp::resolver::results_type resolve_results;
     try
     {
       //resolving ipv4 address as ipv6 throws, catch here and move on
-      iterator = resolver.resolve(query, resolve_error);
+      resolve_results = resolver.resolve(boost::asio::ip::tcp::v4(), adr, port, resolve_error);
     }
     catch (const boost::system::system_error& e)
     {
@@ -1486,8 +1485,7 @@ POP_WARNINGS
 
     std::string bind_ip_to_use;
 
-    boost::asio::ip::tcp::resolver::iterator end;
-    if(iterator == end)
+    if(resolve_results.empty())
     {
       if (!m_use_ipv6)
       {
@@ -1507,11 +1505,9 @@ POP_WARNINGS
 
     if (try_ipv6)
     {
-      boost::asio::ip::tcp::resolver::query query6(boost::asio::ip::tcp::v6(), adr, port, boost::asio::ip::tcp::resolver::query::canonical_name);
+      resolve_results = resolver.resolve(boost::asio::ip::tcp::v6(), adr, port, resolve_error);
 
-      iterator = resolver.resolve(query6, resolve_error);
-
-      if(iterator == end)
+      if(resolve_results.empty())
       {
         _erro("Failed to resolve " << adr);
         return false;
@@ -1533,8 +1529,7 @@ POP_WARNINGS
 
     MDEBUG("Trying to connect to " << adr << ":" << port << ", bind_ip = " << bind_ip_to_use);
 
-    //boost::asio::ip::tcp::endpoint remote_endpoint(boost::asio::ip::address::from_string(addr.c_str()), port);
-    boost::asio::ip::tcp::endpoint remote_endpoint(*iterator);
+    boost::asio::ip::tcp::endpoint remote_endpoint = *resolve_results.begin();
 
     auto try_connect_result = try_connect(new_connection_l, adr, port, sock_, remote_endpoint, bind_ip_to_use, conn_timeout, ssl_support);
     if (try_connect_result == CONNECT_FAILURE)
@@ -1557,7 +1552,7 @@ POP_WARNINGS
     if (r)
     {
       new_connection_l->get_context(conn_context);
-      //new_connection_l.reset(new connection<t_protocol_handler>(io_service_, m_config, m_sock_count, m_pfilter));
+      //new_connection_l.reset(new connection<t_protocol_handler>(io_context_, m_config, m_sock_count, m_pfilter));
     }
     else
     {
@@ -1576,7 +1571,7 @@ POP_WARNINGS
   bool boosted_tcp_server<t_protocol_handler>::connect_async(const std::string& adr, const std::string& port, uint32_t conn_timeout, const t_callback &cb, const std::string& bind_ip, epee::net_utils::ssl_support_t ssl_support)
   {
     TRY_ENTRY();    
-    connection_ptr new_connection_l(new connection<t_protocol_handler>(io_service_, m_state, m_connection_type, ssl_support) );
+    connection_ptr new_connection_l(new connection<t_protocol_handler>(io_context_, m_state, m_connection_type, ssl_support) );
     connections_mutex.lock();
     connections_.insert(new_connection_l);
     MDEBUG("connections_ size now " << connections_.size());
@@ -1586,14 +1581,13 @@ POP_WARNINGS
     
     bool try_ipv6 = false;
 
-    boost::asio::ip::tcp::resolver resolver(io_service_);
-    boost::asio::ip::tcp::resolver::query query(boost::asio::ip::tcp::v4(), adr, port, boost::asio::ip::tcp::resolver::query::canonical_name);
+    boost::asio::ip::tcp::resolver resolver(io_context_);
     boost::system::error_code resolve_error;
-    boost::asio::ip::tcp::resolver::iterator iterator;
+    boost::asio::ip::tcp::resolver::results_type resolve_results;
     try
     {
       //resolving ipv4 address as ipv6 throws, catch here and move on
-      iterator = resolver.resolve(query, resolve_error);
+      resolve_results = resolver.resolve(boost::asio::ip::tcp::v4(), adr, port, resolve_error);
     }
     catch (const boost::system::system_error& e)
     {
@@ -1609,8 +1603,7 @@ POP_WARNINGS
       throw;
     }
 
-    boost::asio::ip::tcp::resolver::iterator end;
-    if(iterator == end)
+    if(resolve_results.empty())
     {
       if (!try_ipv6)
       {
@@ -1625,11 +1618,9 @@ POP_WARNINGS
 
     if (try_ipv6)
     {
-      boost::asio::ip::tcp::resolver::query query6(boost::asio::ip::tcp::v6(), adr, port, boost::asio::ip::tcp::resolver::query::canonical_name);
+      resolve_results = resolver.resolve(boost::asio::ip::tcp::v6(), adr, port, resolve_error);
 
-      iterator = resolver.resolve(query6, resolve_error);
-
-      if(iterator == end)
+      if(resolve_results.empty())
       {
         _erro("Failed to resolve " << adr);
         return false;
@@ -1637,12 +1628,12 @@ POP_WARNINGS
     }
 
 
-    boost::asio::ip::tcp::endpoint remote_endpoint(*iterator);
+    boost::asio::ip::tcp::endpoint remote_endpoint = *resolve_results.begin();
      
     sock_.open(remote_endpoint.protocol());
     if(bind_ip != "0.0.0.0" && bind_ip != "0" && bind_ip != "" )
     {
-      boost::asio::ip::tcp::endpoint local_endpoint(boost::asio::ip::address::from_string(bind_ip.c_str()), 0);
+      boost::asio::ip::tcp::endpoint local_endpoint(boost::asio::ip::make_address(bind_ip.c_str()), 0);
       boost::system::error_code ec;
       sock_.bind(local_endpoint, ec);
       if (ec)
@@ -1654,7 +1645,7 @@ POP_WARNINGS
       }
     }
     
-    boost::shared_ptr<boost::asio::deadline_timer> sh_deadline(new boost::asio::deadline_timer(io_service_));
+    boost::shared_ptr<boost::asio::deadline_timer> sh_deadline(new boost::asio::deadline_timer(io_context_));
     //start deadline
     sh_deadline->expires_from_now(boost::posix_time::milliseconds(conn_timeout));
     sh_deadline->async_wait([=](const boost::system::error_code& error)

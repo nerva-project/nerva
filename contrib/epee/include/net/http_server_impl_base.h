@@ -53,8 +53,8 @@ namespace epee
         : m_net_server(epee::net_utils::e_connection_type_RPC)
     {}
 
-    explicit http_server_impl_base(boost::asio::io_service& external_io_service)
-        : m_net_server(external_io_service)
+    explicit http_server_impl_base(boost::asio::io_context& external_io_context)
+        : m_net_server(external_io_context)
     {}
 
     bool init(std::function<void(size_t, uint8_t*)> rng, const std::string& bind_port = "0", const std::string& bind_ip = "0.0.0.0",

@@ -422,7 +422,7 @@ namespace nodetool
     m_use_ipv6 = command_line::get_arg(vm, arg_p2p_use_ipv6);
     m_require_ipv4 = !command_line::get_arg(vm, arg_p2p_ignore_ipv4);
     public_zone.m_notifier = cryptonote::levin::notify{
-      public_zone.m_net_server.get_io_service(), public_zone.m_net_server.get_config_shared(), nullptr, true
+      public_zone.m_net_server.get_io_context(), public_zone.m_net_server.get_config_shared(), nullptr, true
     };
 
     if (command_line::has_arg(vm, arg_p2p_add_peer))
@@ -544,7 +544,7 @@ namespace nodetool
       }
 
       zone.m_notifier = cryptonote::levin::notify{
-        zone.m_net_server.get_io_service(), zone.m_net_server.get_config_shared(), std::move(this_noise), false
+        zone.m_net_server.get_io_context(), zone.m_net_server.get_config_shared(), std::move(this_noise), false
       };
     }
 
@@ -614,20 +614,18 @@ namespace nodetool
     }
     MINFO("Resolving node address: host=" << host << ", port=" << port);
 
-    io_service io_srv;
+    boost::asio::io_context io_srv;
     ip::tcp::resolver resolver(io_srv);
-    ip::tcp::resolver::query query(host, port, boost::asio::ip::tcp::resolver::query::canonical_name);
     boost::system::error_code ec;
-    ip::tcp::resolver::iterator i = resolver.resolve(query, ec);
+    auto resolve_results = resolver.resolve(host, port, ec);
     CHECK_AND_ASSERT_MES(!ec, false, "Failed to resolve host name '" << host << "': " << ec.message() << ':' << ec.value());
 
-    ip::tcp::resolver::iterator iend;
-    for (; i != iend; ++i)
+    for (const auto& entry : resolve_results)
     {
-      ip::tcp::endpoint endpoint = *i;
+      ip::tcp::endpoint endpoint = entry.endpoint();
       if (endpoint.address().is_v4())
       {
-        epee::net_utils::network_address na{epee::net_utils::ipv4_network_address{boost::asio::detail::socket_ops::host_to_network_long(endpoint.address().to_v4().to_ulong()), endpoint.port()}};
+        epee::net_utils::network_address na{epee::net_utils::ipv4_network_address{boost::asio::detail::socket_ops::host_to_network_long(endpoint.address().to_v4().to_uint()), endpoint.port()}};
         seed_nodes.push_back(na);
         MINFO("Added node: " << na.str());
       }
@@ -649,7 +647,7 @@ namespace nodetool
       return zone_->second;
 
     network_zone& public_zone = m_network_zones[epee::net_utils::zone::public_];
-    return m_network_zones.emplace_hint(zone_, std::piecewise_construct, std::make_tuple(zone), std::tie(public_zone.m_net_server.get_io_service()))->second;
+    return m_network_zones.emplace_hint(zone_, std::piecewise_construct, std::make_tuple(zone), std::tie(public_zone.m_net_server.get_io_context()))->second;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -2955,7 +2953,7 @@ namespace nodetool
   boost::optional<p2p_connection_context_t<typename t_payload_net_handler::connection_context>>
   node_server<t_payload_net_handler>::socks_connect(network_zone& zone, const epee::net_utils::network_address& remote, epee::net_utils::ssl_support_t ssl_support)
   {
-    auto result = socks_connect_internal(zone.m_net_server.get_stop_signal(), zone.m_net_server.get_io_service(), zone.m_proxy_address, remote);
+    auto result = socks_connect_internal(zone.m_net_server.get_stop_signal(), zone.m_net_server.get_io_context(), zone.m_proxy_address, remote);
     if (result) // if no error
     {
       p2p_connection_context context{};

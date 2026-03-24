@@ -1125,7 +1125,20 @@ if (MINGW)
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wa,-mbig-obj")
     set(EXTRA_LIBRARIES mswsock;ws2_32;iphlpapi;crypt32;bcrypt)
     if (NOT DEPENDS)
-        set(ICU_LIBRARIES icuio icuin icuuc icudt icutu iconv)
+        # MSYS2's boost_locale is built against ICU shared libs, so we must
+        # link the DLL import libraries even in static builds
+        find_library(ICU_UC_LIBRARY NAMES icuuc PATHS ${MSYS2_FOLDER}/mingw64/lib NO_DEFAULT_PATH)
+        if (ICU_UC_LIBRARY AND STATIC)
+            set(ICU_LIBRARIES
+                ${MSYS2_FOLDER}/mingw64/lib/libicuio.dll.a
+                ${MSYS2_FOLDER}/mingw64/lib/libicuin.dll.a
+                ${MSYS2_FOLDER}/mingw64/lib/libicuuc.dll.a
+                ${MSYS2_FOLDER}/mingw64/lib/libicudt.dll.a
+                ${MSYS2_FOLDER}/mingw64/lib/libicutu.dll.a
+                iconv)
+        else ()
+            set(ICU_LIBRARIES icuio icuin icuuc icudt icutu iconv)
+        endif ()
     endif ()
 elseif (APPLE OR OPENBSD OR ANDROID)
     set(EXTRA_LIBRARIES "")
