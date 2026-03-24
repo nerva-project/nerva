@@ -33,6 +33,9 @@
 
 #include <boost/program_options/options_description.hpp>
 #include <boost/program_options/variables_map.hpp>
+#include <boost/thread/thread.hpp>
+#include <boost/thread/mutex.hpp>
+#include <boost/thread/condition_variable.hpp>
 #include <string>
 #include "common/util.h"
 #include "net/http_server_impl_base.h"
@@ -266,6 +269,7 @@ namespace tools
       bool validate_transfer(const std::list<wallet_rpc::transfer_destination>& destinations, const std::string& payment_id, std::vector<cryptonote::tx_destination_entry>& dsts, std::vector<uint8_t>& extra, bool at_least_one_destination, epee::json_rpc::error& er);
 
       void check_background_mining();
+      void wallet_idle_thread();
 
       wallet2 *m_wallet;
       std::string m_wallet_dir;
@@ -275,5 +279,11 @@ namespace tools
       const boost::program_options::variables_map *m_vm;
       uint32_t m_auto_refresh_period;
       boost::posix_time::ptime m_last_auto_refresh_time;
+      boost::thread m_idle_thread;
+      boost::mutex m_idle_mutex;
+      boost::condition_variable m_idle_cond;
+      boost::condition_variable m_refresh_done_cond;
+      std::atomic<bool> m_idle_run;
+      std::atomic<bool> m_do_refresh;
   };
 }
