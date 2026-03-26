@@ -1261,6 +1261,7 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
   uint64_t total_reward = base_reward + fee;
   if (version >= HF_VERSION_SECOR && b.uncle_hash != crypto::null_hash)
   {
+    MDEBUG("beginning validation of miner tx for a block which references an uncle block");
     if (b.miner_tx.vout.size() != 2)
     {
       MERROR("miner tx from a block which includes an uncle hash must contain two separate outputs with separate recipients");
@@ -1271,26 +1272,31 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
     total_reward += base_reward / SECOR_UNCLE_REWARD_RATIO;
     // make sure that the uncle reward uses the output key from the uncle block miner tx and is for the correct amount - dont let the nephew miner steal the uncle reward
     cryptonote::block uncle_block;
-    get_block_by_hash(b.uncle_hash, uncle_block);
+    if (!get_block_by_hash(b.uncle_hash, uncle_block))
+    {
+      MERROR("couldn't find uncle block " << b.uncle_hash << " in the database");
+      return false;
+    }
     // nephew reward at index 1 and uncle reward at index 0 is enforced
     crypto::public_key uncle_out_key;
     crypto::public_key uncle_tx_key;
     get_uncle_block_original_miner_details(uncle_block, uncle_out_key, uncle_tx_key);
     crypto::public_key mainchain_out_key;
     crypto::public_key mainchain_tx_key;
-    get_mainchain_block_original_miner_details(b, mainchain_out_key, mainchain_tx_key);
-    if (boost::get<txout_to_key>(b.miner_tx.vout[0].target).key != uncle_out_key)
+    int mainchain_miner_idx = get_mainchain_block_original_miner_details(b, mainchain_out_key, mainchain_tx_key);
+    int mainchain_uncle_idx = mainchain_miner_idx ? 0 : 1;
+    if (boost::get<txout_to_key>(b.miner_tx.vout[mainchain_uncle_idx].target).key != uncle_out_key)
     {
       MERROR_VER("nephew block miner tx does not include proper uncle reward output key");
       return false;
     }
-    if (get_tx_pub_key_from_extra(b.miner_tx, 0) != uncle_tx_key)
+    if (get_tx_pub_key_from_extra(b.miner_tx, mainchain_uncle_idx) != uncle_tx_key)
     {
       MERROR_VER("nephew block miner tx does not include proper uncle reward tx public key in tx extra");
       return false;
     }
 
-    if (b.miner_tx.vout[0].amount != base_reward / SECOR_UNCLE_REWARD_RATIO)
+    if (b.miner_tx.vout[mainchain_uncle_idx].amount != base_reward / SECOR_UNCLE_REWARD_RATIO)
     {
       MERROR_VER("miner tx contains uncle reward but the uncle reward amount is incorrect. Amount found " << b.miner_tx.vout[1].amount << " vs amount expected " << base_reward / SECOR_UNCLE_REWARD_RATIO);
       return false;
@@ -3807,15 +3813,29 @@ leave:
 
   if (bl.uncle_hash != crypto::null_hash)
   {
+    MINFO("beginning validation of uncle block " << bl.uncle_hash);
     CHECK_AND_ASSERT_MES(blockchain_height, 0, "blockchain_height is NULL");
+
     cryptonote::block uncle_block;
-    get_block_by_hash(bl.uncle_hash, uncle_block);
+    if (!get_block_by_hash(bl.uncle_hash, uncle_block))
+    {
+      MERROR_VER("uncle block with hash " << bl.uncle_hash << " could not be found in the blockchain database");
+      bvc.m_verifivation_failed = true;
+      return_tx_to_pool(txs);
+      goto leave;
+    }
 
     // validate uncle block PoW
     difficulty_type_128 uncle_difficulty = m_db->get_block_cumulative_difficulty(blockchain_height-2) - m_db->get_block_cumulative_difficulty(blockchain_height-3);
     crypto::hash uncle_pow;
     memset(uncle_pow.data, 0xff, sizeof(uncle_pow.data));
-    get_block_longhash(m_hash_context, this, uncle_block, uncle_pow, m_db->height()-1);
+    if (!get_block_longhash(m_hash_context, this, uncle_block, uncle_pow, m_db->height()-1))
+    {
+      MERROR_VER("could not generate PoW hash for uncle block " << bl.uncle_hash);
+      bvc.m_verifivation_failed = true;
+      return_tx_to_pool(txs);
+      goto leave;
+    }
     if(!check_hash(uncle_pow, uncle_difficulty.convert_to<std::uint64_t>()))
     {
       MERROR_VER("proof-of-work for uncle block failed verification");
@@ -3826,13 +3846,27 @@ leave:
 
     // the main chain block at the uncle block height should have a smaller PoW hash than the uncle block
     cryptonote::block uncle_sibling_block;
-    get_block_by_hash(get_block_id_by_height(m_db->height()-2), uncle_sibling_block);
+    crypto::hash uncle_sibling_hash = get_block_id_by_height(m_db->height()-1);
+    MDEBUG("verifying that uncle block " << bl.uncle_hash << " PoW is less than its sibling block " << uncle_sibling_hash);
+    if (!get_block_by_hash(uncle_sibling_hash, uncle_sibling_block))
+    {
+      MERROR_VER("could not find uncle block sibling " << uncle_sibling_hash << " by hash in the database");
+      bvc.m_verifivation_failed = true;
+      return_tx_to_pool(txs);
+      goto leave;
+    }
     crypto::hash pow_uncle_sibling;
     memset(pow_uncle_sibling.data, 0xff, sizeof(pow_uncle_sibling.data));
-    get_block_longhash(m_hash_context, this, uncle_sibling_block, pow_uncle_sibling, m_db->height()-2);
-    if (reinterpret_cast<uint32_t&>(uncle_sibling_block) >= reinterpret_cast<uint32_t&>(uncle_pow))
+    if(!get_block_longhash(m_hash_context, this, uncle_sibling_block, pow_uncle_sibling, m_db->height()-1))
     {
-      MERROR_VER("the proof-of-work hash for an uncle block must be greater than that of its main chain sibling");
+      MERROR_VER("failed to calculate block long hash for uncle block sibling");
+      bvc.m_verifivation_failed = true;
+      return_tx_to_pool(txs);
+      goto leave;
+    }
+    if (reinterpret_cast<uint32_t&>(uncle_pow) >= reinterpret_cast<uint32_t&>(pow_uncle_sibling))
+    {
+      MERROR_VER("the proof-of-work hash for an uncle block must be smaller than that of its main chain sibling");
       bvc.m_verifivation_failed = true;
       return_tx_to_pool(txs);
       goto leave;
@@ -3840,8 +3874,6 @@ leave:
 
     // add block difficulty for uncle block(s) to chain cumulative difficulty
     cumulative_difficulty += uncle_difficulty;
-
-    // TODO: support extended ancestry ?
   }
 
   TIME_MEASURE_FINISH(block_processing_time);
