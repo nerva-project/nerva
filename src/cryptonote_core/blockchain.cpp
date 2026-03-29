@@ -3731,7 +3731,8 @@ leave:
   TIME_MEASURE_FINISH(addblock);
 
   // do this after updating the hard fork state since the size limit may change due to fork
-  if (!update_next_cumulative_weight_limit(nullptr, precomputed_long_term_median ? &precomputed_long_term_median : nullptr))
+  const bool mid_batch = m_prepare_nblocks > 1 && new_height < m_prepare_height + m_prepare_nblocks;
+  if (!update_next_cumulative_weight_limit(nullptr, precomputed_long_term_median ? &precomputed_long_term_median : nullptr, mid_batch))
   {
     MERROR("Failed to update next cumulative weight limit");
     pop_block_from_blockchain();
@@ -3813,7 +3814,7 @@ uint64_t Blockchain::get_next_long_term_block_weight(uint64_t block_weight, uint
   return long_term_block_weight;
 }
 //------------------------------------------------------------------
-bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effective_median_block_weight, const uint64_t *precomputed_long_term_median)
+bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effective_median_block_weight, const uint64_t *precomputed_long_term_median, bool mid_batch)
 {
   PERF_TIMER(update_next_cumulative_weight_limit);
 
@@ -3866,6 +3867,12 @@ bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effecti
       long_term_median = m_long_term_block_weights_cache_rolling_median.median();
     }
     m_long_term_effective_median_block_weight = std::max<uint64_t>(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE, long_term_median);
+
+    // For mid-batch blocks during sync, skip the short-term median recomputation and
+    // weight limit update — the 50k-block long-term median barely changes within a batch,
+    // so the stale limit is safe for validating the next block in the same batch.
+    if (mid_batch)
+      return true;
 
     std::vector<uint64_t> weights;
     get_last_n_blocks_weights(weights, CRYPTONOTE_REWARD_BLOCKS_WINDOW);

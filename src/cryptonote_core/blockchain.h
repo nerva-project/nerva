@@ -1432,7 +1432,7 @@ namespace cryptonote
      *
      * @return true
      */
-    bool update_next_cumulative_weight_limit(uint64_t *long_term_effective_median_block_weight = NULL, const uint64_t *precomputed_long_term_median = nullptr);
+    bool update_next_cumulative_weight_limit(uint64_t *long_term_effective_median_block_weight = NULL, const uint64_t *precomputed_long_term_median = nullptr, bool mid_batch = false);
     void return_tx_to_pool(std::vector<std::pair<transaction, blobdata>> &txs);
 
     /**
