@@ -3699,11 +3699,12 @@ leave:
   rtxn_guard.stop();
   TIME_MEASURE_START(addblock);
   uint64_t new_height = 0;
+  uint64_t precomputed_long_term_median = 0;
   if (!bvc.m_verifivation_failed)
   {
     try
     {
-      uint64_t long_term_block_weight = get_next_long_term_block_weight(block_weight);
+      uint64_t long_term_block_weight = get_next_long_term_block_weight(block_weight, &precomputed_long_term_median);
       cryptonote::blobdata bd = cryptonote::block_to_blob(bl);
       new_height = m_db->add_block(std::make_pair(std::move(bl), std::move(bd)), block_weight, long_term_block_weight, cumulative_difficulty, already_generated_coins, txs);
     }
@@ -3733,7 +3734,7 @@ leave:
   TIME_MEASURE_FINISH(addblock);
 
   // do this after updating the hard fork state since the size limit may change due to fork
-  if (!update_next_cumulative_weight_limit())
+  if (!update_next_cumulative_weight_limit(nullptr, precomputed_long_term_median ? &precomputed_long_term_median : nullptr))
   {
     MERROR("Failed to update next cumulative weight limit");
     pop_block_from_blockchain();
@@ -3792,7 +3793,7 @@ bool Blockchain::check_blockchain_pruning()
   return m_db->check_pruning();
 }
 //------------------------------------------------------------------
-uint64_t Blockchain::get_next_long_term_block_weight(uint64_t block_weight) const
+uint64_t Blockchain::get_next_long_term_block_weight(uint64_t block_weight, uint64_t *out_long_term_median) const
 {
   PERF_TIMER(get_next_long_term_block_weight);
 
@@ -3804,6 +3805,9 @@ uint64_t Blockchain::get_next_long_term_block_weight(uint64_t block_weight) cons
     return block_weight;
 
   uint64_t long_term_median = get_long_term_block_weight_median(db_height - nblocks, nblocks);
+  if (out_long_term_median)
+    *out_long_term_median = long_term_median;
+
   uint64_t long_term_effective_median_block_weight = std::max<uint64_t>(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE, long_term_median);
 
   uint64_t short_term_constraint = long_term_effective_median_block_weight + long_term_effective_median_block_weight * 2 / 5;
@@ -3812,7 +3816,7 @@ uint64_t Blockchain::get_next_long_term_block_weight(uint64_t block_weight) cons
   return long_term_block_weight;
 }
 //------------------------------------------------------------------
-bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effective_median_block_weight)
+bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effective_median_block_weight, const uint64_t *precomputed_long_term_median)
 {
   PERF_TIMER(update_next_cumulative_weight_limit);
 
@@ -3836,6 +3840,10 @@ bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effecti
     if (db_height == 1)
     {
       long_term_median = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE;
+    }
+    else if (precomputed_long_term_median)
+    {
+      long_term_median = *precomputed_long_term_median;
     }
     else
     {
