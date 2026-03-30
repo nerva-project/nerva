@@ -2418,11 +2418,14 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
 
 void BlockchainLMDB::get_cna_v2_data(cn_random_values_t *rv, uint64_t height, uint32_t scratchpad_size)
 {
-  crypto::hash h0 = get_block_hash_from_height(height);
-  crypto::hash h1 = get_block_hash_from_height(height - (uint64_t)((uint8_t)h0.data[0] ^ (uint8_t)h0.data[16]));
-  crypto::hash h2 = get_block_hash_from_height(height - (uint64_t)((uint8_t)h0.data[4] ^ (uint8_t)h0.data[20]));
-  crypto::hash h3 = get_block_hash_from_height(height - (uint64_t)((uint8_t)h0.data[8] ^ (uint8_t)h0.data[24]));
-  crypto::hash h4 = get_block_hash_from_height(height - (uint64_t)((uint8_t)h0.data[12] ^ (uint8_t)h0.data[28]));
+  // Use block cache for the 5 hash lookups to avoid 5 random LMDB reads per block.
+  // build_block_cache is a no-op if the cache is already current (called by get_cna_v5_data too).
+  build_block_cache(height + 1);
+  const crypto::hash &h0 = m_block_cache[height].hash;
+  const crypto::hash h1 = m_block_cache[height - (uint64_t)((uint8_t)h0.data[0] ^ (uint8_t)h0.data[16])].hash;
+  const crypto::hash h2 = m_block_cache[height - (uint64_t)((uint8_t)h0.data[4] ^ (uint8_t)h0.data[20])].hash;
+  const crypto::hash h3 = m_block_cache[height - (uint64_t)((uint8_t)h0.data[8] ^ (uint8_t)h0.data[24])].hash;
+  const crypto::hash h4 = m_block_cache[height - (uint64_t)((uint8_t)h0.data[12] ^ (uint8_t)h0.data[28])].hash;
 
   uint8_t buffer[16];
   for (size_t i = 0; i < 32; i += 4)
