@@ -416,7 +416,9 @@ namespace cryptonote
       }
     }
 
-    size_t max_blocks = COMMAND_RPC_GET_BLOCKS_FAST_MAX_COUNT;
+    size_t max_blocks = (req.max_count > 0 && req.max_count < COMMAND_RPC_GET_BLOCKS_FAST_MAX_COUNT)
+      ? (size_t)req.max_count
+      : COMMAND_RPC_GET_BLOCKS_FAST_MAX_COUNT;
 
     std::vector<std::pair<std::pair<cryptonote::blobdata, crypto::hash>, std::vector<std::pair<crypto::hash, cryptonote::blobdata> > > > bs;
     if(!m_core.find_blockchain_supplement(req.start_height, req.block_ids, bs, res.current_height, res.start_height, req.prune, !req.no_miner_tx, max_blocks))
