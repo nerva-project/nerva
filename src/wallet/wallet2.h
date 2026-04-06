@@ -32,6 +32,7 @@
 #pragma once
 
 #include <memory>
+#include "common/threadpool.h"
 
 #include <boost/program_options/options_description.hpp>
 #include <boost/program_options/variables_map.hpp>
@@ -1389,6 +1390,8 @@ private:
     std::unordered_map<crypto::public_key, crypto::key_image> m_cold_key_images;
 
     std::atomic<bool> m_run;
+
+    std::unique_ptr<tools::threadpool> m_scan_threadpool;
 
     boost::recursive_mutex m_daemon_rpc_mutex;
 

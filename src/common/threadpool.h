@@ -51,6 +51,9 @@ public:
   static threadpool *getNewForUnitTests(unsigned max_threads = 0) {
     return new threadpool(max_threads);
   }
+  static threadpool *getNew(unsigned max_threads = 0) {
+    return new threadpool(max_threads);
+  }
 
   // The waiter lets the caller know when all of its
   // tasks are completed.
