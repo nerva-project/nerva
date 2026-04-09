@@ -438,11 +438,13 @@ namespace cryptonote
   {
     crypto::hash hash;
     cryptonote::block b;
-    bool ret = cryptonote::parse_and_validate_block_from_blob(arg.b.block, b, &hash);
+    bool ret = false;
+    if (m_track_block_recvd_times || ELPP->vRegistry()->allowed(el::Level::Info, "net.p2p.msg"))
+      ret = cryptonote::parse_and_validate_block_from_blob(arg.b.block, b, &hash);
     MLOGIF_P2P_MESSAGE(hash; b; ;, ret, "Received NOTIFY_NEW_BLOCK " << hash << " (height " << arg.current_blockchain_height << ", " << arg.b.txs.size() << " txes)");
 
     time_t ts = time(NULL);
-    if (m_track_block_recvd_times)
+    if (m_track_block_recvd_times && arg.current_blockchain_height > 0)
     {
       boost::unique_lock<boost::mutex> lock(m_track_block_recvd_times_mutex);
       m_track_block_recvd_times_fstream << arg.current_blockchain_height-1 << "," << hash << "," << context.m_remote_address.str() << "," << ts << std::endl;
@@ -524,11 +526,13 @@ namespace cryptonote
   {
     crypto::hash hash;
     cryptonote::block b;
-    bool ret = cryptonote::parse_and_validate_block_from_blob(arg.b.block, b, &hash);
+    bool ret = false;
+    if (m_track_block_recvd_times || ELPP->vRegistry()->allowed(el::Level::Info, "net.p2p.msg"))
+      ret = cryptonote::parse_and_validate_block_from_blob(arg.b.block, b, &hash);
     MLOGIF_P2P_MESSAGE(hash; b; ;, ret, "Received NOTIFY_NEW_FLUFFY_BLOCK " << hash << " (height " << arg.current_blockchain_height << ", " << arg.b.txs.size() << " txes)");
 
     time_t ts = time(NULL);
-    if (m_track_block_recvd_times)
+    if (m_track_block_recvd_times && arg.current_blockchain_height > 0)
     {
       boost::unique_lock<boost::mutex> lock(m_track_block_recvd_times_mutex);
       m_track_block_recvd_times_fstream << arg.current_blockchain_height-1 << "," << hash << "," << context.m_remote_address.str() << "," << ts << std::endl;
