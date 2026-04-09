@@ -443,7 +443,10 @@ namespace cryptonote
 
     time_t ts = time(NULL);
     if (m_track_block_recvd_times)
+    {
+      boost::unique_lock<boost::mutex> lock(m_track_block_recvd_times_mutex);
       m_track_block_recvd_times_fstream << arg.current_blockchain_height-1 << "," << hash << "," << context.m_remote_address.str() << "," << ts << std::endl;
+    }
 
     if(context.m_state != cryptonote_connection_context::state_normal)
       return 1;
@@ -526,7 +529,10 @@ namespace cryptonote
 
     time_t ts = time(NULL);
     if (m_track_block_recvd_times)
+    {
+      boost::unique_lock<boost::mutex> lock(m_track_block_recvd_times_mutex);
       m_track_block_recvd_times_fstream << arg.current_blockchain_height-1 << "," << hash << "," << context.m_remote_address.str() << "," << ts << std::endl;
+    }
 
     if(context.m_state != cryptonote_connection_context::state_normal)
       return 1;
