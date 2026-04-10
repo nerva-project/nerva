@@ -173,6 +173,7 @@ namespace cryptonote
     // block_height,block_hash,peer_ip:peer_port,local_timestamp_block_received
     bool m_track_block_recvd_times;
     std::ofstream m_track_block_recvd_times_fstream;
+    boost::mutex m_track_block_recvd_times_mutex;
 
     boost::mutex m_buffer_mutex;
     double get_avg_block_size();
