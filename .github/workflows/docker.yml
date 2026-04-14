@@ -50,10 +50,18 @@ jobs:
                 with:
                     username: ${{ secrets.DOCKERHUB_USERNAME }}
                     password: ${{ secrets.DOCKERHUB_TOKEN }}
+            -   name: Docker meta
+                id: meta
+                uses: docker/metadata-action@v5
+                with:
+                    images: sn1f3rt/nerva
+                    tags: |
+                        type=ref,event=tag
+                        type=raw,value=latest,enable=${{ !contains(github.ref_name, 'rc') && !contains(github.ref_name, 'alpha') && !contains(github.ref_name, 'beta') }}
             -   name: Build and push
                 uses: docker/build-push-action@v6
                 with:
                     context: .
                     platforms: linux/amd64,linux/arm64
                     push: true
-                    tags: sn1f3rt/nerva:latest, sn1f3rt/nerva:${{ github.ref_name }}
+                    tags: ${{ steps.meta.outputs.tags }}
