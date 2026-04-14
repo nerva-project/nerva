@@ -29,6 +29,11 @@ RUN set -ex && \
         arm64) BUILD_TARGET="aarch64-linux-gnu" ;; \
         *)     BUILD_TARGET="x86_64-linux-gnu" ;; \
     esac && \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+        for tool in gcc g++ ar ranlib strip nm; do \
+            ln -sf /usr/bin/$tool /usr/local/bin/aarch64-linux-gnu-$tool ; \
+        done ; \
+    fi && \
     git submodule init && git submodule update && \
     rm -rf build && \
     if [ -z "$NPROC" ] ; \
