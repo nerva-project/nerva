@@ -23,13 +23,24 @@ WORKDIR /src
 COPY . .
 
 ARG NPROC
+ARG TARGETARCH
 RUN set -ex && \
+    case "$TARGETARCH" in \
+        arm64) BUILD_TARGET="aarch64-linux-gnu" ;; \
+        *)     BUILD_TARGET="x86_64-linux-gnu" ;; \
+    esac && \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+        for tool in gcc g++ ar ranlib strip nm; do \
+            ln -sf /usr/bin/$tool /usr/local/bin/aarch64-linux-gnu-$tool ; \
+        done ; \
+    fi && \
     git submodule init && git submodule update && \
     rm -rf build && \
     if [ -z "$NPROC" ] ; \
-    then make -j$(nproc) depends target=x86_64-linux-gnu ; \
-    else make -j$NPROC depends target=x86_64-linux-gnu ; \
-    fi
+    then make -j$(nproc) depends target=$BUILD_TARGET ; \
+    else make -j$NPROC depends target=$BUILD_TARGET ; \
+    fi && \
+    cp -r /src/build/${BUILD_TARGET}/release/bin /src/build/out
 
 # runtime stage
 FROM ubuntu:20.04
@@ -39,7 +50,7 @@ RUN set -ex && \
     apt-get --no-install-recommends --yes install ca-certificates && \
     apt-get clean && \
     rm -rf /var/lib/apt
-COPY --from=builder /src/build/x86_64-linux-gnu/release/bin /usr/local/bin/
+COPY --from=builder /src/build/out /usr/local/bin/
 
 # Create nerva user
 RUN adduser --system --group --disabled-password nerva && \
