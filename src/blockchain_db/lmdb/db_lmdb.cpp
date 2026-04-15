@@ -2388,10 +2388,25 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
 
   m_block_cache.reserve(height);
 
+  // During batch sync, blocks are written inside a batch write transaction that
+  // is not committed until the batch ends. A fresh read-only transaction can
+  // only see committed data, so it would fail to read blocks that have been
+  // added in the current batch but not yet committed. Reuse m_write_txn when
+  // one is active so we can see those uncommitted blocks. This matches the
+  // TXN_BLOCK_PREFIX pattern used elsewhere in this file.
   MDB_txn *txn;
   MDB_cursor *cur;
-  if (auto r = lmdb_txn_begin(m_env, NULL, MDB_RDONLY, &txn))
-    throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", r).c_str()));
+  bool own_txn = false;
+  if (m_batch_active || m_write_txn)
+  {
+    txn = m_write_txn->m_txn;
+  }
+  else
+  {
+    if (auto r = lmdb_txn_begin(m_env, NULL, MDB_RDONLY, &txn))
+      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", r).c_str()));
+    own_txn = true;
+  }
 
   int err = mdb_cursor_open(txn, m_block_info, &cur); check_error(err);
 
@@ -2409,11 +2424,11 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
   }
 
   mdb_cursor_close(cur);
-  mdb_txn_abort(txn);
-
-  CRITICAL_REGION_END();
+  if (own_txn)
+    mdb_txn_abort(txn);
 
   m_block_cache_height.store(height, std::memory_order_release);
+  CRITICAL_REGION_END();
 }
 
 void BlockchainLMDB::get_cna_v2_data(cn_random_values_t *rv, uint64_t height, uint32_t scratchpad_size)
