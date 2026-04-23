@@ -3,7 +3,7 @@
 [![ci/gh-actions/build](https://github.com/nerva-project/nerva/actions/workflows/build.yml/badge.svg)](https://github.com/nerva-project/nerva/actions/workflows/build.yml)
 [![ci/gh-actions/depends](https://github.com/nerva-project/nerva/actions/workflows/depends.yml/badge.svg)](https://github.com/nerva-project/nerva/actions/workflows/depends.yml)
 
-**Latest release: [v0.2.0.0 `Legacy Reborn`][nerva-releases-link]**
+**Latest release: [v0.2.1.0 `Legacy Reborn`][nerva-releases-link]**
 
 ## Table of Contents
 
