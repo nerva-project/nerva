@@ -1849,19 +1849,16 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
         memcpy(&derivation, rct::identity().bytes, sizeof(derivation));
       }
 
-    // additional tx pubkeys and derivations for multi-destination transfers involving one or more subaddresses
-      if (pk_index == 1)
+      // additional tx pubkeys and derivations for multi-destination transfers involving one or more subaddresses
+      if (find_tx_extra_field_by_type(tx_extra_fields, additional_tx_pub_keys))
       {
-        if (find_tx_extra_field_by_type(tx_extra_fields, additional_tx_pub_keys))
+        for (size_t i = 0; i < additional_tx_pub_keys.data.size(); ++i)
         {
-          for (size_t i = 0; i < additional_tx_pub_keys.data.size(); ++i)
+          additional_derivations.push_back({});
+          if (!hwdev.generate_key_derivation(additional_tx_pub_keys.data[i], keys.m_view_secret_key, additional_derivations.back()))
           {
-            additional_derivations.push_back({});
-            if (!hwdev.generate_key_derivation(additional_tx_pub_keys.data[i], keys.m_view_secret_key, additional_derivations.back()))
-            {
-              MWARNING("Failed to generate key derivation from additional tx pubkey in " << txid << ", skipping");
-              memcpy(&additional_derivations.back(), rct::identity().bytes, sizeof(crypto::key_derivation));
-            }
+            MWARNING("Failed to generate key derivation from additional tx pubkey in " << txid << ", skipping");
+            memcpy(&additional_derivations.back(), rct::identity().bytes, sizeof(crypto::key_derivation));
           }
         }
       }
@@ -1872,13 +1869,10 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
           error::wallet_internal_error, "pk_index out of range of tx_cache_data");
       is_out_data_ptr = &tx_cache_data.primary[pk_index - 1];
       derivation = tx_cache_data.primary[pk_index - 1].derivation;
-      if (pk_index == 1)
+      for (size_t n = 0; n < tx_cache_data.additional.size(); ++n)
       {
-        for (size_t n = 0; n < tx_cache_data.additional.size(); ++n)
-        {
-          additional_tx_pub_keys.data.push_back(tx_cache_data.additional[n].pkey);
-          additional_derivations.push_back(tx_cache_data.additional[n].derivation);
-        }
+        additional_tx_pub_keys.data.push_back(tx_cache_data.additional[n].pkey);
+        additional_derivations.push_back(tx_cache_data.additional[n].derivation);
       }
     }
 
@@ -5873,7 +5867,7 @@ bool wallet2::is_tx_spendtime_unlocked(uint64_t unlock_time, uint64_t block_heig
     uint64_t current_time = static_cast<uint64_t>(time(NULL));
     // XXX: this needs to be fast, so we'd need to get the starting heights
     // from the daemon to be correct once voting kicks in
-    uint64_t leeway = CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1;
+    uint64_t leeway = CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1; // TODO: the correct threshold depends on hard fork version
     if(current_time + leeway >= unlock_time)
       return true;
     else
@@ -9477,7 +9471,10 @@ bool wallet2::sanity_check(const std::vector<wallet2::pending_tx> &ptx_vector, s
         std::string proof = get_tx_proof(ptx.tx, ptx.tx_key, ptx.additional_tx_keys, address, r.second.second, "automatic-sanity-check");
         check_tx_proof(ptx.tx, address, r.second.second, "automatic-sanity-check", proof, received);
       }
-      catch (const std::exception &e) { received = 0; }
+      catch (const std::exception &e) {
+        MDEBUG("tx proof failed sanity check");
+        received = 0;
+      }
       total_received += received;
     }
 

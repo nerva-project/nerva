@@ -81,12 +81,12 @@
 #define DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD                            ((uint64_t)10000000000000)
 
 #define DIFFICULTY_TARGET                                               60
+#define DIFFICULTY_TARGET_SECOR                                         15
 #define DIFFICULTY_WINDOW                                               720
 #define DIFFICULTY_LAG                                                  15
 #define DIFFICULTY_CUT                                                  60
 #define DIFFICULTY_BLOCKS_COUNT                                         DIFFICULTY_WINDOW + DIFFICULTY_LAG
 
-#define DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN                             DIFFICULTY_TARGET
 #define DIFFICULTY_WINDOW_V2                                            17
 #define DIFFICULTY_CUT_V2                                               6
 #define DIFFICULTY_BLOCKS_COUNT_V2                                      DIFFICULTY_WINDOW_V2 + DIFFICULTY_CUT_V2 * 2
@@ -98,6 +98,7 @@
 #define DIFFICULTY_BLOCKS_COUNT_V6                                      DIFFICULTY_WINDOW_V6 + 1
 
 #define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1                   DIFFICULTY_TARGET *CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS
+#define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_SECOR                DIFFICULTY_TARGET_SECOR *CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS
 #define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS                       1
 
 #define BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT                          10000
@@ -170,6 +171,10 @@
 #define CRYPTONOTE_NOISE_CHANNELS                                       2 
 
 #define CRYPTONOTE_MAX_FRAGMENTS                                        20
+
+#define HF_VERSION_SECOR                                                13
+#define SECOR_UNCLE_REWARD_RATIO                                        2
+#define SECOR_NEPHEW_REWARD_RATIO                                       20
 
 #define DONATION_ADDR "NV1aMtARDQjK8j7XeoQ66S7XQe5ZS8CX92XqXmJxSZMpSDf2i11NQyqgHzghmRsDHR1LwYv3bEnE3VoqqbmyRdrR2MMBfdXvY"
 
@@ -258,7 +263,8 @@ namespace config
             { 9, 570},
             {10, 580},
             {11, 590},
-            {12, 700}
+            {12, 700},
+            {13, 800}
         };
     }
 }

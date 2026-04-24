@@ -791,7 +791,7 @@ crypto::hash Blockchain::get_pending_block_id_by_height(uint64_t height) const
   return get_block_id_by_height(height);
 }
 //------------------------------------------------------------------
-bool Blockchain::get_block_by_hash(const crypto::hash &h, block &blk, bool *orphan) const
+bool Blockchain::get_block_by_hash(const crypto::hash &h, block &blk, bool *orphan, bool *uncle) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
@@ -802,6 +802,8 @@ bool Blockchain::get_block_by_hash(const crypto::hash &h, block &blk, bool *orph
     blk = m_db->get_block(h);
     if (orphan)
       *orphan = false;
+    if (uncle)
+      *uncle = false;
     return true;
   }
   // try to find block in alternative chain
@@ -816,8 +818,22 @@ bool Blockchain::get_block_by_hash(const crypto::hash &h, block &blk, bool *orph
         MERROR("Found block " << h << " in alt chain, but failed to parse it");
         throw std::runtime_error("Found block in alt chain, but failed to parse it");
       }
+
+      if (data.height >= m_db->height()-1) // if the block has a height equal to that of the top block, then it can not be an uncle
+      {
+        if (orphan)
+          *orphan = true;
+        if (uncle)
+          *uncle = false;
+        return true;
+      }
+      cryptonote::block nephew_candidate = m_db->get_block(m_db->get_block_hash_from_height(data.height+1));
+
       if (orphan)
-        *orphan = true;
+        *orphan = nephew_candidate.uncle_hash != h;
+      if (uncle)
+        *uncle = nephew_candidate.uncle_hash == h;
+
       return true;
     }
   }
@@ -919,7 +935,7 @@ uint64_t Blockchain::get_difficulty_for_next_block()
     m_timestamps = timestamps;
     m_difficulties = difficulties;
   }
-  size_t target = DIFFICULTY_TARGET;
+  size_t target = version >= HF_VERSION_SECOR ? DIFFICULTY_TARGET_SECOR : DIFFICULTY_TARGET;
   uint64_t diff;
   if (version == 1) {
     diff = next_difficulty(timestamps, difficulties, target);
@@ -1173,7 +1189,7 @@ uint64_t Blockchain::get_next_difficulty_for_alternative_chain(const std::list<b
   }
 
   // FIXME: This will fail if fork activation heights are subject to voting
-  size_t target = DIFFICULTY_TARGET;
+  size_t target = version >= HF_VERSION_SECOR ? DIFFICULTY_TARGET_SECOR : DIFFICULTY_TARGET;
 
   // calculate the difficulty target for the block and return it
   if (version == 1) {
@@ -1243,7 +1259,59 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
     return false;
   }
 
-  const uint64_t total_reward = base_reward + fee;  
+  uint64_t total_reward = base_reward + fee;
+  if (version >= HF_VERSION_SECOR && b.uncle_hash != crypto::null_hash)
+  {
+    MDEBUG("beginning validation of miner tx for a block which references an uncle block");
+    if (b.miner_tx.vout.size() != 2)
+    {
+      MERROR("miner tx from a block which includes an uncle hash must contain two separate outputs with separate recipients");
+      return false;
+    }
+
+    total_reward += base_reward / SECOR_NEPHEW_REWARD_RATIO;
+    total_reward += base_reward / SECOR_UNCLE_REWARD_RATIO;
+    // make sure that the uncle reward uses the output key from the uncle block miner tx and is for the correct amount - dont let the nephew miner steal the uncle reward
+    cryptonote::block uncle_block;
+    if (!get_block_by_hash(b.uncle_hash, uncle_block))
+    {
+      MERROR("couldn't find uncle block " << b.uncle_hash << " in the database");
+      return false;
+    }
+    // nephew reward at index 1 and uncle reward at index 0 is enforced
+    crypto::public_key uncle_out_key;
+    crypto::public_key uncle_tx_key;
+    get_uncle_block_original_miner_details(uncle_block, uncle_out_key, uncle_tx_key);
+    crypto::public_key mainchain_out_key;
+    crypto::public_key mainchain_tx_key;
+    int mainchain_miner_idx = get_mainchain_block_original_miner_details(b, mainchain_out_key, mainchain_tx_key);
+    int mainchain_uncle_idx = mainchain_miner_idx ? 0 : 1;
+    if (boost::get<txout_to_key>(b.miner_tx.vout[mainchain_uncle_idx].target).key != uncle_out_key)
+    {
+      MERROR_VER("nephew block miner tx does not include proper uncle reward output key");
+      return false;
+    }
+    if (get_tx_pub_key_from_extra(b.miner_tx, mainchain_uncle_idx) != uncle_tx_key)
+    {
+      MERROR_VER("nephew block miner tx does not include proper uncle reward tx public key in tx extra");
+      return false;
+    }
+
+    if (b.miner_tx.vout[mainchain_uncle_idx].amount != base_reward / SECOR_UNCLE_REWARD_RATIO)
+    {
+      MERROR_VER("miner tx contains uncle reward but the uncle reward amount is incorrect. Amount found " << b.miner_tx.vout[1].amount << " vs amount expected " << base_reward / SECOR_UNCLE_REWARD_RATIO);
+      return false;
+    }
+  }
+  else if (version >= HF_VERSION_SECOR && b.uncle_hash == crypto::null_hash)
+  {
+    if (b.miner_tx.vout.size() > 1)
+    {
+      MERROR("miner tx after v" << HF_VERSION_SECOR << " cannot contain more than 1 output without an uncle hash in the mined block");
+      return false;
+    }
+  }
+
   if(total_reward != money_in_use && already_generated_coins > 0)
   {
     MERROR_VER("coinbase transaction doesn't use full amount of block reward: spent " << money_in_use 
@@ -1439,6 +1507,7 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
     already_generated_coins = m_db->get_block_already_generated_coins(height - 1);
   }
   b.timestamp = time(NULL);
+  b.uncle_hash = crypto::null_hash;
 
   uint64_t median_ts;
   if (!check_block_timestamp(b, median_ts))
@@ -1455,6 +1524,21 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
     return false;
   }
   pool_cookie = m_tx_pool.cookie();
+
+  const uint8_t hf_version = m_hardfork->get_current_version();
+  if (hf_version >= HF_VERSION_SECOR)
+  {
+    // check alt chains for a block with the same height as the top block
+    for (auto it = m_uncle_candidates.end(); it != m_uncle_candidates.begin(); it--)
+    {
+      if (it->second == height - 1)
+      {
+        LOG_PRINT_L0("uncle block candidate found: " << it->first << " " << it->second);
+        b.uncle_hash = it->first;
+      }
+    }
+  }
+
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
   size_t real_txs_weight = 0;
   uint64_t real_fee = 0;
@@ -1501,8 +1585,20 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
    block weight, so first miner transaction generated with fake amount of money, and with phase we know think we know expected block weight
    */
   //make blocks coin-base tx looks close to real coinbase tx to get truthful blob size
-  uint8_t hf_version = m_hardfork->get_current_version();
-  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, 0, hf_version);
+  bool r;
+  int uncle_out_idx;
+  crypto::public_key uncle_out;
+  crypto::public_key uncle_tx_pubkey;
+  if (b.uncle_hash != crypto::null_hash)
+  {
+    cryptonote::block uncle_block;
+    get_block_by_hash(b.uncle_hash, uncle_block);
+    uncle_out_idx = get_uncle_block_original_miner_details(uncle_block, uncle_out, uncle_tx_pubkey);
+    r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, 0, hf_version, &uncle_out, &uncle_tx_pubkey, &uncle_out_idx);
+  }
+  else
+    r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, 0, hf_version);
+
   CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
   size_t cumulative_weight = txs_weight + get_transaction_weight(b.miner_tx);
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -1511,7 +1607,10 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
 #endif
   for (size_t try_count = 0; try_count != 10; ++try_count)
   {
-    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, miner_address, b.miner_tx, ex_nonce, 0, hf_version);
+    if (b.uncle_hash != crypto::null_hash)
+      r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, miner_address, b.miner_tx, ex_nonce, 0, hf_version, &uncle_out, &uncle_tx_pubkey, &uncle_out_idx);
+    else
+      r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, miner_address, b.miner_tx, ex_nonce, 0, hf_version);
 
     CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, second chance");
     size_t coinbase_weight = get_transaction_weight(b.miner_tx);
@@ -1806,6 +1905,14 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     data.already_generated_coins = bei.already_generated_coins;
     m_db->add_alt_block(id, data, cryptonote::block_to_blob(bei.bl));
     alt_chain.push_back(bei);
+    LOG_PRINT_L0("pushing uncle block candidate: " << id << " " << data.height);
+    m_uncle_candidates.push_back(std::make_pair(id, data.height)); // TODO: free old data at some point
+
+    uint64_t top_block_height = m_db->height()-1;
+    cryptonote::block top_block = m_db->get_top_block();
+    crypto::hash pow_top_block;
+    memset(pow_top_block.data, 0xff, sizeof(pow_top_block.data));
+    get_block_longhash(m_hash_context, this, top_block, pow_top_block, top_block_height);
 
     // FIXME: is it even possible for a checkpoint to show up not on the main chain?
     if(is_a_checkpoint)
@@ -1824,6 +1931,17 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     {
       //do reorganize!
       MGINFO_GREEN("###### REORGANIZE on height: " << alt_chain.front().height << " of " << m_db->height() - 1 << " with cum_difficulty " << m_db->get_block_cumulative_difficulty(m_db->height() - 1) << std::endl << " alternative blockchain size: " << alt_chain.size() << " with cum_difficulty " << bei.cumulative_difficulty);
+
+      bool r = switch_to_alternative_blockchain(alt_chain, false);
+      if (r)
+        bvc.m_added_to_main_chain = true;
+      else
+        bvc.m_verifivation_failed = true;
+      return r;
+    }
+    else if (block_height == top_block_height && reinterpret_cast<uint32_t&>(proof_of_work) < reinterpret_cast<uint32_t&>(pow_top_block))
+    {
+      MGINFO_GREEN("###### REORGANIZE DUE TO UNCLE BLOCK on height: " << alt_chain.front().height << " of " << m_db->height() - 1 << " with cum_difficulty " << m_db->get_block_cumulative_difficulty(m_db->height() - 1) << std::endl << " alternative blockchain size: " << alt_chain.size() << " with cum_difficulty " << bei.cumulative_difficulty);
 
       bool r = switch_to_alternative_blockchain(alt_chain, false);
       if (r)
@@ -3239,7 +3357,7 @@ bool Blockchain::is_tx_spendtime_unlocked(uint64_t unlock_time) const
   {
     //interpret as time
     uint64_t current_time = static_cast<uint64_t>(time(NULL));
-    if(current_time + CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1 >= unlock_time)
+    if(current_time + (get_current_hard_fork_version() >= HF_VERSION_SECOR ? CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_SECOR : CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1) >= unlock_time)
       return true;
     else
       return false;
@@ -3694,6 +3812,71 @@ leave:
   if(blockchain_height)
     cumulative_difficulty += m_db->get_block_cumulative_difficulty(blockchain_height - 1);
 
+  if (bl.uncle_hash != crypto::null_hash)
+  {
+    MINFO("beginning validation of uncle block " << bl.uncle_hash);
+    CHECK_AND_ASSERT_MES(blockchain_height, 0, "blockchain_height is NULL");
+
+    cryptonote::block uncle_block;
+    if (!get_block_by_hash(bl.uncle_hash, uncle_block))
+    {
+      MERROR_VER("uncle block with hash " << bl.uncle_hash << " could not be found in the blockchain database");
+      bvc.m_verifivation_failed = true;
+      return_tx_to_pool(txs);
+      goto leave;
+    }
+
+    // validate uncle block PoW
+    difficulty_type_128 uncle_difficulty = m_db->get_block_cumulative_difficulty(blockchain_height-2) - m_db->get_block_cumulative_difficulty(blockchain_height-3);
+    crypto::hash uncle_pow;
+    memset(uncle_pow.data, 0xff, sizeof(uncle_pow.data));
+    if (!get_block_longhash(m_hash_context, this, uncle_block, uncle_pow, m_db->height()-1))
+    {
+      MERROR_VER("could not generate PoW hash for uncle block " << bl.uncle_hash);
+      bvc.m_verifivation_failed = true;
+      return_tx_to_pool(txs);
+      goto leave;
+    }
+    if(!check_hash(uncle_pow, uncle_difficulty.convert_to<std::uint64_t>()))
+    {
+      MERROR_VER("proof-of-work for uncle block failed verification");
+      bvc.m_verifivation_failed = true;
+      return_tx_to_pool(txs);
+      goto leave;
+    }
+
+    // the main chain block at the uncle block height should have a smaller PoW hash than the uncle block
+    cryptonote::block uncle_sibling_block;
+    crypto::hash uncle_sibling_hash = get_block_id_by_height(m_db->height()-1);
+    MDEBUG("verifying that uncle block " << bl.uncle_hash << " PoW is less than its sibling block " << uncle_sibling_hash);
+    if (!get_block_by_hash(uncle_sibling_hash, uncle_sibling_block))
+    {
+      MERROR_VER("could not find uncle block sibling " << uncle_sibling_hash << " by hash in the database");
+      bvc.m_verifivation_failed = true;
+      return_tx_to_pool(txs);
+      goto leave;
+    }
+    crypto::hash pow_uncle_sibling;
+    memset(pow_uncle_sibling.data, 0xff, sizeof(pow_uncle_sibling.data));
+    if(!get_block_longhash(m_hash_context, this, uncle_sibling_block, pow_uncle_sibling, m_db->height()-1))
+    {
+      MERROR_VER("failed to calculate block long hash for uncle block sibling");
+      bvc.m_verifivation_failed = true;
+      return_tx_to_pool(txs);
+      goto leave;
+    }
+    if (reinterpret_cast<uint32_t&>(uncle_pow) >= reinterpret_cast<uint32_t&>(pow_uncle_sibling))
+    {
+      MERROR_VER("the proof-of-work hash for an uncle block must be smaller than that of its main chain sibling");
+      bvc.m_verifivation_failed = true;
+      return_tx_to_pool(txs);
+      goto leave;
+    }
+
+    // add block difficulty for uncle block(s) to chain cumulative difficulty
+    cumulative_difficulty += uncle_difficulty;
+  }
+
   TIME_MEASURE_FINISH(block_processing_time);
 
   rtxn_guard.stop();
@@ -3705,7 +3888,7 @@ leave:
     {
       uint64_t long_term_block_weight = get_next_long_term_block_weight(block_weight);
       cryptonote::blobdata bd = cryptonote::block_to_blob(bl);
-      new_height = m_db->add_block(std::make_pair(std::move(bl), std::move(bd)), block_weight, long_term_block_weight, cumulative_difficulty, already_generated_coins, txs);
+      new_height = m_db->add_block(std::make_pair(std::move(bl), std::move(bd)), block_weight, long_term_block_weight, cumulative_difficulty, already_generated_coins, txs, bl.uncle_hash);
     }
     catch (const KEY_IMAGE_EXISTS& e)
     {
@@ -4632,7 +4815,7 @@ bool Blockchain::get_hard_fork_voting_info(uint8_t version, uint32_t &window, ui
 
 uint64_t Blockchain::get_difficulty_target() const
 {
-  return DIFFICULTY_TARGET;
+  return get_current_hard_fork_version() >= HF_VERSION_SECOR ? DIFFICULTY_TARGET_SECOR : DIFFICULTY_TARGET;
 }
 
 std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> Blockchain:: get_output_histogram(const std::vector<uint64_t> &amounts, bool unlocked, uint64_t recent_cutoff, uint64_t min_count) const
