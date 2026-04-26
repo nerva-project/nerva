@@ -104,9 +104,16 @@ jobs:
                             `*${succeeded} succeeded, ${failed} failed* | [View workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${runId})`,
                         ].join('\n');
 
-                        const prs = context.payload.workflow_run.pull_requests;
+                        const headOwner = context.payload.workflow_run.head_repository.owner.login;
+                        const headBranch = context.payload.workflow_run.head_branch;
+                        const { data: prs } = await github.rest.pulls.list({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            state: 'open',
+                            head: `${headOwner}:${headBranch}`,
+                        });
                         if (!prs || prs.length === 0) {
-                            core.warning('No associated pull requests found; skipping comment.');
+                            core.warning('No open pull request found for this branch; skipping comment.');
                             return;
                         }
                         const prNumber = prs[0].number;
