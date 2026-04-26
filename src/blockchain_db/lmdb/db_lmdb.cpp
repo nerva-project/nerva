@@ -2388,38 +2388,59 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
 
   m_block_cache.reserve(height);
 
+  // During batch sync, blocks are written inside a batch write transaction that
+  // is not committed until the batch ends. A fresh read-only transaction can
+  // only see committed data, so it would fail to read blocks that have been
+  // added in the current batch but not yet committed. Reuse m_write_txn when
+  // one is active so we can see those uncommitted blocks. This matches the
+  // TXN_BLOCK_PREFIX pattern used elsewhere in this file.
   MDB_txn *txn;
   MDB_cursor *cur;
-  if (auto r = lmdb_txn_begin(m_env, NULL, MDB_RDONLY, &txn))
-    throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", r).c_str()));
+  bool own_txn = false;
+  if (m_batch_active || m_write_txn)
+  {
+    txn = m_write_txn->m_txn;
+  }
+  else
+  {
+    if (auto r = lmdb_txn_begin(m_env, NULL, MDB_RDONLY, &txn))
+      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", r).c_str()));
+    own_txn = true;
+  }
 
   int err = mdb_cursor_open(txn, m_block_info, &cur); check_error(err);
-
-  mdb_block_info *bi;
 
   for(uint64_t index = m_block_cache.size(); index < height; ++index)
   {
     MDB_val_set(query, index);
     err = mdb_cursor_get(cur, (MDB_val*)&zerokval, &query, MDB_GET_BOTH); check_error(err);
-    bi = (mdb_block_info*)query.mv_data;
-    m_block_cache.push_back(*bi);
+    const mdb_block_info *bi = (const mdb_block_info*)query.mv_data;
+    block_cache_data entry;
+    entry.hash      = bi->bi_hash;
+    entry.timestamp = bi->bi_timestamp;
+    entry.diff_lo   = bi->bi_diff_lo;
+    entry.coins     = bi->bi_coins;
+    m_block_cache.push_back(entry);
   }
 
   mdb_cursor_close(cur);
-  mdb_txn_abort(txn);
-
-  CRITICAL_REGION_END();
+  if (own_txn)
+    mdb_txn_abort(txn);
 
   m_block_cache_height.store(height, std::memory_order_release);
+  CRITICAL_REGION_END();
 }
 
 void BlockchainLMDB::get_cna_v2_data(cn_random_values_t *rv, uint64_t height, uint32_t scratchpad_size)
 {
-  crypto::hash h0 = get_block_hash_from_height(height);
-  crypto::hash h1 = get_block_hash_from_height(height - (uint64_t)((uint8_t)h0.data[0] ^ (uint8_t)h0.data[16]));
-  crypto::hash h2 = get_block_hash_from_height(height - (uint64_t)((uint8_t)h0.data[4] ^ (uint8_t)h0.data[20]));
-  crypto::hash h3 = get_block_hash_from_height(height - (uint64_t)((uint8_t)h0.data[8] ^ (uint8_t)h0.data[24]));
-  crypto::hash h4 = get_block_hash_from_height(height - (uint64_t)((uint8_t)h0.data[12] ^ (uint8_t)h0.data[28]));
+  // Use block cache for the 5 hash lookups to avoid 5 random LMDB reads per block.
+  // build_block_cache is a no-op if the cache is already current (called by get_cna_v5_data too).
+  build_block_cache(height + 1);
+  const crypto::hash &h0 = m_block_cache[height].hash;
+  const crypto::hash h1 = m_block_cache[height - (uint64_t)((uint8_t)h0.data[0] ^ (uint8_t)h0.data[16])].hash;
+  const crypto::hash h2 = m_block_cache[height - (uint64_t)((uint8_t)h0.data[4] ^ (uint8_t)h0.data[20])].hash;
+  const crypto::hash h3 = m_block_cache[height - (uint64_t)((uint8_t)h0.data[8] ^ (uint8_t)h0.data[24])].hash;
+  const crypto::hash h4 = m_block_cache[height - (uint64_t)((uint8_t)h0.data[12] ^ (uint8_t)h0.data[28])].hash;
 
   uint8_t buffer[16];
   for (size_t i = 0; i < 32; i += 4)
@@ -2562,13 +2583,13 @@ void BlockchainLMDB::get_cna_v4_data(char *salt, uint64_t height, uint32_t seed)
   build_block_cache(height);
   std::array<uint32_t, 36864> rand_seq = mt.generate_v4_sequence(seed, (uint32_t)height);
   uint32_t i_config = 0;
-  mdb_block_info *bi;
+  const block_cache_data *bi;
 
   for (uint32_t i = 0; i < 2048; i++)
   {
     r = rand_seq[i_config++];
     bi = &m_block_cache[r];
-    std::memcpy(salt + (i * 128), bi->bi_hash.data, 32);
+    std::memcpy(salt + (i * 128), bi->hash.data, 32);
 
     a = 32;
     b = 64;
@@ -2580,29 +2601,29 @@ void BlockchainLMDB::get_cna_v4_data(char *salt, uint64_t height, uint32_t seed)
       w = rand_seq[i_config++];
 
       bi = &m_block_cache[x];
-      t = (uint32_t)bi->bi_timestamp;
+      t = (uint32_t)bi->timestamp;
       std::memcpy(salt + (i * 128) + a, &t, 4);
       a += 4;
 
       bi = &m_block_cache[y];
-      t = (uint32_t)bi->bi_diff_lo;
+      t = (uint32_t)bi->diff_lo;
       std::memcpy(salt + (i * 128) + a, &t, 4);
       a += 4;
 
       bi = &m_block_cache[z];
-      t = (uint32_t)(bi->bi_coins >> 32U);
+      t = (uint32_t)(bi->coins >> 32U);
       std::memcpy(salt + (i * 128) + b, &t, 4);
       b += 4;
 
       bi = &m_block_cache[w];
-      t = (uint32_t)bi->bi_coins;
+      t = (uint32_t)bi->coins;
       std::memcpy(salt + (i * 128) + b, &t, 4);
       b += 4;
     }
 
     r = rand_seq[i_config++];
     bi = &m_block_cache[r];
-    std::memcpy(salt + (i * 128) + 96, bi->bi_hash.data, 32);
+    std::memcpy(salt + (i * 128) + 96, bi->hash.data, 32);
   }
 }
 
@@ -2610,7 +2631,7 @@ void BlockchainLMDB::get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t
 {
   // TODO: Do not assume little-endian architecture
   build_block_cache(height);
-  mdb_block_info *bi;
+  const block_cache_data *bi;
   size_t rng_key_idx = 0;
   unsigned char msg[64];
   size_t msgpos;
@@ -2622,36 +2643,36 @@ void BlockchainLMDB::get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t
  
     for (size_t k = 0; k < 16; k++) {
         bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
-        std::memcpy(msg, bi->bi_hash.data, sizeof(crypto::hash));
+        std::memcpy(msg, bi->hash.data, sizeof(crypto::hash));
         msgpos = sizeof(crypto::hash);
- 
+
         bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
-        std::memcpy(msg + msgpos, &(bi->bi_timestamp), sizeof(uint64_t));
+        std::memcpy(msg + msgpos, &(bi->timestamp), sizeof(uint64_t));
         msgpos += sizeof(uint64_t);
- 
+
         bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
-        std::memcpy(msg + msgpos, &(bi->bi_diff_lo), sizeof(uint64_t));
+        std::memcpy(msg + msgpos, &(bi->diff_lo), sizeof(uint64_t));
         msgpos += sizeof(uint64_t);
- 
+
         bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
-        std::memcpy(msg + msgpos, &(bi->bi_coins), sizeof(uint64_t));
+        std::memcpy(msg + msgpos, &(bi->coins), sizeof(uint64_t));
         msgpos += sizeof(uint64_t);
- 
+
         std::memcpy(msg + msgpos, &count, sizeof(uint64_t));
- 
+
         HC128_EncryptMessage(rng_state, msg, optr, sizeof(msg));
         optr += 16 * sizeof(uint32_t);
 
         count++;
     }
- 
+
     // Reseed, but don't reset the RNG key index, making the next used key
     // effectively random at the start of each loop iteration (except the first)
     unsigned char *iv = optr - (8 * 16 * sizeof(uint32_t)) + HC128_U32(rng_state, &rng_key_idx, (8 * 16 * sizeof(uint32_t)) - 16);
     unsigned char *key = optr - (16 * 16 * sizeof(uint32_t)) + HC128_U32(rng_state, &rng_key_idx, (8 * 16 * sizeof(uint32_t)) - 16);
     HC128_Init(rng_state, key, iv);
   }
- 
+
   std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
   std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
   std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
@@ -2665,19 +2686,19 @@ void BlockchainLMDB::get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t
 
     for (size_t k = 0; k < 16; k++) {
         bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
-        std::memcpy(msg, bi->bi_hash.data, sizeof(crypto::hash));
+        std::memcpy(msg, bi->hash.data, sizeof(crypto::hash));
         msgpos = sizeof(crypto::hash);
 
         bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
-        std::memcpy(msg + msgpos, &(bi->bi_timestamp), sizeof(uint64_t));
+        std::memcpy(msg + msgpos, &(bi->timestamp), sizeof(uint64_t));
         msgpos += sizeof(uint64_t);
 
         bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
-        std::memcpy(msg + msgpos, &(bi->bi_diff_lo), sizeof(uint64_t));
+        std::memcpy(msg + msgpos, &(bi->diff_lo), sizeof(uint64_t));
         msgpos += sizeof(uint64_t);
 
         bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
-        std::memcpy(msg + msgpos, &(bi->bi_coins), sizeof(uint64_t));
+        std::memcpy(msg + msgpos, &(bi->coins), sizeof(uint64_t));
         msgpos += sizeof(uint64_t);
 
         std::memcpy(msg + msgpos, &count, sizeof(uint64_t));

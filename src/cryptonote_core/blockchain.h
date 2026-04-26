@@ -651,7 +651,7 @@ namespace cryptonote
      *
      * @return the long term block weight
      */
-    uint64_t get_next_long_term_block_weight(uint64_t block_weight) const;
+    uint64_t get_next_long_term_block_weight(uint64_t block_weight, uint64_t *out_long_term_median = nullptr) const;
 
     /**
      * @brief gets the block weight median based on recent blocks (same window as for the limit)
@@ -1048,7 +1048,7 @@ namespace cryptonote
     uint64_t m_timestamps_and_difficulties_height;
     uint64_t m_long_term_block_weights_window;
     uint64_t m_long_term_effective_median_block_weight;
-    mutable crypto::hash m_long_term_block_weights_cache_tip_hash;
+    mutable uint64_t m_long_term_block_weights_cache_tip_height;
     mutable epee::misc_utils::rolling_median_t<uint64_t> m_long_term_block_weights_cache_rolling_median;
 
     epee::critical_section m_difficulty_lock;
@@ -1432,7 +1432,7 @@ namespace cryptonote
      *
      * @return true
      */
-    bool update_next_cumulative_weight_limit(uint64_t *long_term_effective_median_block_weight = NULL);
+    bool update_next_cumulative_weight_limit(uint64_t *long_term_effective_median_block_weight = NULL, const uint64_t *precomputed_long_term_median = nullptr, bool mid_batch = false);
     void return_tx_to_pool(std::vector<std::pair<transaction, blobdata>> &txs);
 
     /**
