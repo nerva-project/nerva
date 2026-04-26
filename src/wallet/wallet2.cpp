@@ -2569,21 +2569,13 @@ void wallet2::process_parsed_blocks(uint64_t start_height, const std::vector<cry
       continue;
     tpool.submit(&waiter, [&hwdev, &gender, &tx_cache_data, i, is_hw_device]() {
       auto &slot = tx_cache_data[i];
+      boost::unique_lock<hw::device> hwdev_lock(hwdev, boost::defer_lock);
       if (is_hw_device)
-      {
-        boost::unique_lock<hw::device> hwdev_lock(hwdev);
-        for (auto &iod: slot.primary)
-          gender(iod);
-        for (auto &iod: slot.additional)
-          gender(iod);
-      }
-      else
-      {
-        for (auto &iod: slot.primary)
-          gender(iod);
-        for (auto &iod: slot.additional)
-          gender(iod);
-      }
+        hwdev_lock.lock();
+      for (auto &iod: slot.primary)
+        gender(iod);
+      for (auto &iod: slot.additional)
+        gender(iod);
     }, true);
   }
   waiter.wait(&tpool);

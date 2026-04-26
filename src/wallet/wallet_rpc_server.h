@@ -285,5 +285,6 @@ namespace tools
       boost::condition_variable m_refresh_done_cond;
       std::atomic<bool> m_idle_run;
       std::atomic<bool> m_do_refresh;
+      std::exception_ptr m_refresh_exception; // protected by m_idle_mutex
   };
 }
