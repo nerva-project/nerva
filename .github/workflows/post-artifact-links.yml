@@ -104,12 +104,25 @@ jobs:
                             `*${succeeded} succeeded, ${failed} failed* | [View workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${runId})`,
                         ].join('\n');
 
-                        const prs = context.payload.workflow_run.pull_requests;
-                        if (!prs || prs.length === 0) {
-                            core.warning('No associated pull requests found; skipping comment.');
+                        if (!context.payload.workflow_run.head_repository) {
+                            core.warning('head_repository is null (fork deleted?); skipping comment.');
                             return;
                         }
-                        const prNumber = prs[0].number;
+                        const headOwner = context.payload.workflow_run.head_repository.owner.login;
+                        const headBranch = context.payload.workflow_run.head_branch;
+                        const headSha = context.payload.workflow_run.head_sha;
+                        const { data: prs } = await github.rest.pulls.list({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            state: 'open',
+                            head: `${headOwner}:${headBranch}`,
+                        });
+                        const pr = prs.find(p => p.head.sha === headSha);
+                        if (!pr) {
+                            core.warning('No open pull request found for this commit; skipping comment.');
+                            return;
+                        }
+                        const prNumber = pr.number;
 
                         const { data: comments } = await github.rest.issues.listComments({
                             owner: context.repo.owner,
