@@ -1,0 +1,136 @@
+# Copyright (c) 2018-2024, The Nerva Project
+# Copyright (c) 2014-2024, The Monero Project
+#
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without modification, are
+# permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this list of
+#    conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice, this list
+#    of conditions and the following disclaimer in the documentation and/or other
+#    materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its contributors may be
+#    used to endorse or promote products derived from this software without specific
+#    prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
+# EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
+# THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+# STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+# THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+# Posts a comment on the triggering PR with artifact download links once the
+# depends workflow completes. Runs as a separate workflow_run-triggered job so
+# that it always executes in the base-repo context and has write access to PR
+# comments — even when the PR comes from a fork, where pull_request-triggered
+# jobs receive a read-only token.
+#
+# NOTE: The target list below is coupled to the matrix in depends.yml —
+# update both together.
+
+name: Post artifact links
+
+on:
+    workflow_run:
+        workflows: [ci/gh-actions/depends]
+        types: [completed]
+
+jobs:
+    post-artifact-links:
+        if: github.event.workflow_run.event == 'pull_request'
+        runs-on: ubuntu-latest
+        permissions:
+            pull-requests: write
+        steps:
+            -   name: Post artifact links
+                uses: actions/github-script@v7
+                with:
+                    script: |
+                        const targets = [
+                            'nerva-linux-armv7',
+                            'nerva-linux-armv8',
+                            'nerva-windows-x32',
+                            'nerva-linux-i686',
+                            'nerva-windows-x64',
+                            'nerva-linux-x86_64',
+                            'nerva-macos-x64',
+                            'nerva-macos-armv8',
+                            'nerva-freebsd-x86_64',
+                            'nerva-android-armv8',
+                        ];
+
+                        const runId = context.payload.workflow_run.id;
+
+                        const { data: { artifacts } } = await github.rest.actions.listWorkflowRunArtifacts({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            run_id: runId,
+                            per_page: 100,
+                        });
+
+                        const artifactMap = new Map(artifacts.map(a => [a.name, a]));
+                        let succeeded = 0;
+                        let failed = 0;
+
+                        const rows = targets.map(target => {
+                            const artifact = artifactMap.get(target);
+                            if (artifact) {
+                                succeeded++;
+                                const url = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${runId}/artifacts/${artifact.id}`;
+                                return `| ${target} | :white_check_mark: | [Download](${url}) |`;
+                            } else {
+                                failed++;
+                                return `| ${target} | :x: | Build failed |`;
+                            }
+                        });
+
+                        const body = [
+                            '<!-- nerva-artifact-links -->',
+                            '## Build Artifacts',
+                            '',
+                            '| Target | Status | Download |',
+                            '|--------|--------|----------|',
+                            ...rows,
+                            '',
+                            '---',
+                            `*${succeeded} succeeded, ${failed} failed* | [View workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${runId})`,
+                        ].join('\n');
+
+                        const prs = context.payload.workflow_run.pull_requests;
+                        if (!prs || prs.length === 0) {
+                            core.warning('No associated pull requests found; skipping comment.');
+                            return;
+                        }
+                        const prNumber = prs[0].number;
+
+                        const { data: comments } = await github.rest.issues.listComments({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            issue_number: prNumber,
+                            per_page: 100,
+                        });
+
+                        const existing = comments.find(c => c.body.includes('<!-- nerva-artifact-links -->'));
+                        if (existing) {
+                            await github.rest.issues.updateComment({
+                                owner: context.repo.owner,
+                                repo: context.repo.repo,
+                                comment_id: existing.id,
+                                body,
+                            });
+                        } else {
+                            await github.rest.issues.createComment({
+                                owner: context.repo.owner,
+                                repo: context.repo.repo,
+                                issue_number: prNumber,
+                                body,
+                            });
+                        }
