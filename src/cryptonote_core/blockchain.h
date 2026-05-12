@@ -1093,6 +1093,7 @@ namespace cryptonote
     // for prepare_handle_incoming_blocks
     uint64_t m_prepare_height;
     uint64_t m_prepare_nblocks;
+    uint64_t m_batch_start_height;
     std::vector<block> *m_prepare_blocks;
 
     /**

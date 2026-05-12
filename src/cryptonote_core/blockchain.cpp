@@ -95,7 +95,8 @@ Blockchain::Blockchain(tx_memory_pool& tx_pool) :
   m_difficulty_for_next_block(1),
   m_btc_valid(false),
   m_batch_success(true),
-  m_prepare_height(0)
+  m_prepare_height(0),
+  m_batch_start_height(0)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 }
@@ -3731,7 +3732,7 @@ leave:
   TIME_MEASURE_FINISH(addblock);
 
   // do this after updating the hard fork state since the size limit may change due to fork
-  const bool mid_batch = m_prepare_nblocks > 1 && new_height < m_prepare_height + m_prepare_nblocks;
+  const bool mid_batch = m_prepare_nblocks > 1 && new_height < m_batch_start_height + m_prepare_nblocks;
   if (!update_next_cumulative_weight_limit(nullptr, precomputed_long_term_median ? &precomputed_long_term_median : nullptr, mid_batch))
   {
     MERROR("Failed to update next cumulative weight limit");
@@ -4295,6 +4296,7 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
 
   m_prepare_height = height;
   m_prepare_nblocks = blocks_entry.size();
+  m_batch_start_height = height;
   m_prepare_blocks = &blocks;
 
   const crypto::hash tophash = m_db->top_block_hash();

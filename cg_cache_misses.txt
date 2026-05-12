@@ -1,0 +1,112 @@
+--------------------------------------------------------------------------------
+Profile data file '/root/nerva/callgrind.out' (creator: callgrind-3.22.0)
+--------------------------------------------------------------------------------
+I1 cache: 65536 B, 64 B, 2-way associative
+D1 cache: 65536 B, 64 B, 2-way associative
+LL cache: 16777216 B, 64 B, 16-way associative
+Timerange: Basic block 0 - 321483353548
+Trigger: dump
+Profiled target:  /root/nerva/build/release/bin/nervad --data-dir /root/nerva/data --p2p-bind-port 17665 --rpc-bind-port 17666 --zmq-rpc-bind-port 17667 --log-level 1 (PID 259925, part 1)
+Events recorded:  Ir Dr Dw I1mr D1mr D1mw ILmr DLmr DLmw Bc Bcm Bi Bim
+Events shown:     Ir Dr Dw I1mr D1mr D1mw ILmr DLmr DLmw Bc Bcm Bi Bim
+Event sort order: DLmr
+Thresholds:       99
+Include dirs:     
+User annotated:   
+Auto-annotation:  on
+
+--------------------------------------------------------------------------------
+Ir                         Dr                         Dw                       I1mr                 D1mr                    D1mw                    ILmr                 DLmr                    DLmw                    Bc                       Bcm                    Bi                     Bim                  
+--------------------------------------------------------------------------------
+6,534,770,694,621 (100.0%) 1,502,995,993,031 (100.0%) 703,891,606,028 (100.0%) 413,888,582 (100.0%) 49,016,767,857 (100.0%) 89,370,043,275 (100.0%) 132,444,345 (100.0%) 44,495,948,688 (100.0%) 44,282,986,056 (100.0%) 219,165,273,357 (100.0%) 3,108,699,915 (100.0%) 2,801,057,739 (100.0%) 148,024,156 (100.0%)  PROGRAM TOTALS
+
+--------------------------------------------------------------------------------
+Ir                         Dr                       Dw                       I1mr               D1mr                    D1mw                    ILmr               DLmr                    DLmw                    Bc                       Bcm                  Bi                     Bim                 file:function
+--------------------------------------------------------------------------------
+  266,347,419,892 ( 4.08%)  94,215,563,219 ( 6.27%)  91,929,803,581 (13.06%) 1,833,011 ( 0.44%) 43,198,217,008 (88.13%) 44,866,517,212 (50.20%)   854,077 ( 0.64%) 43,044,300,108 (96.74%) 44,028,231,380 (99.42%)  11,465,732,183 ( 5.23%) 188,177,177 ( 6.05%)             .                  .           ./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:__memcpy_avx_unaligned_erms [/usr/lib/x86_64-linux-gnu/libc.so.6]
+    7,507,174,440 ( 0.11%)   3,545,292,144 ( 0.24%)   1,668,396,728 ( 0.24%)   546,373 ( 0.13%)  1,667,000,805 ( 3.40%)         73,414 ( 0.00%)   277,034 ( 0.21%)  1,316,210,893 ( 2.96%)         51,596 ( 0.00%)               .                    .                      .                  .           /usr/include/x86_64-linux-gnu/bits/string_fortified.h:cryptonote::BlockchainLMDB::get_cna_v5_data(char*, HC128_State*, unsigned long)
+
+--------------------------------------------------------------------------------
+-- Auto-annotated source: /usr/include/x86_64-linux-gnu/bits/string_fortified.h
+--------------------------------------------------------------------------------
+Ir                      Dr                     Dw                     I1mr               D1mr                   D1mw               ILmr             DLmr                   DLmw               Bc                  Bcm                Bi Bim 
+
+-- line 21 ----------------------------------------
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           #ifndef _STRING_H
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           # error "Never use <bits/string_fortified.h> directly; include <string.h> instead."
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           #endif
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           __fortify_function void *
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           __NTH (memcpy (void *__restrict __dest, const void *__restrict __src,
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           	       size_t __len))
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           {
+17,756,807,798 ( 0.27%) 3,891,175,785 ( 0.26%) 3,705,377,809 ( 0.53%) 2,141,281 ( 0.52%) 1,683,579,520 ( 3.43%) 7,811,128 ( 0.01%) 974,073 ( 0.74%) 1,319,881,854 ( 2.97%) 1,006,884 ( 0.00%) 25,307,502 ( 0.01%) 1,089,036 ( 0.04%) .          .             return __builtin___memcpy_chk (__dest, __src, __len,
+       381,690 ( 0.00%)       101,784 ( 0.00%)        50,892 ( 0.00%)    12,658 ( 0.00%)        25,446 ( 0.00%)         0                0                      0                  0              76,338 ( 0.00%)     1,992 ( 0.00%) 25,446 ( 0.00%) 5 ( 0.00%)  => ???:0x0000000000147880 (25,446x)
+       101,806 ( 0.00%)             .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           				 __glibc_objsize0 (__dest));
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           }
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           __fortify_function void *
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           __NTH (memmove (void *__dest, const void *__src, size_t __len))
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           {
+     1,295,700 ( 0.00%)       256,999 ( 0.00%)       522,818 ( 0.00%)       130 ( 0.00%)             0                  0              123 ( 0.00%)             .                  .                   .                  .          .          .             return __builtin___memmove_chk (__dest, __src, __len,
+       175,658 ( 0.00%)        53,863 ( 0.00%)        49,606 ( 0.00%)     1,779 ( 0.00%)           933 ( 0.00%)         0              714 ( 0.00%)           220 ( 0.00%)         0              18,908 ( 0.00%)     3,735 ( 0.00%) 1,429 ( 0.00%) 978 ( 0.00%)  => ???:0x0000000000147ac0 (1,429x)
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           				  __glibc_objsize0 (__dest));
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           }
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           #ifdef __USE_GNU
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           __fortify_function void *
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           __NTH (mempcpy (void *__restrict __dest, const void *__restrict __src,
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           		size_t __len))
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           {
+-- line 44 ----------------------------------------
+-- line 51 ----------------------------------------
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           /* The first two tests here help to catch a somewhat common problem
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .              where the second and third parameter are transposed.  This is
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .              especially problematic if the intended fill value is zero.  In this
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .              case no work is done at all.  We detect these problems by referring
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .              non-existing functions.  */
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           __fortify_function void *
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           __NTH (memset (void *__dest, int __ch, size_t __len))
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           {
+    40,080,883 ( 0.00%)     1,928,905 ( 0.00%)    25,196,048 ( 0.00%)   166,263 ( 0.04%)             0            896,308 ( 0.00%)  69,739 ( 0.05%)             0             51,878 ( 0.00%)    203,584 ( 0.00%)   120,980 ( 0.00%) .          .             return __builtin___memset_chk (__dest, __ch, __len,
+    16,778,198 ( 0.00%)        12,237 ( 0.00%)    16,672,144 ( 0.00%)     8,541 ( 0.00%)         3,397 ( 0.00%)   257,863 ( 0.00%)     238 ( 0.00%)             0            162,553 ( 0.00%) 16,692,539 ( 0.01%)    11,100 ( 0.00%) 4,079 ( 0.00%) 782 ( 0.00%)  => ???:0x00000000001495e0 (4,079x)
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           				 __glibc_objsize0 (__dest));
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           }
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           #ifdef __USE_MISC
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           # include <bits/strings_fortified.h>
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           void __explicit_bzero_chk (void *__dest, size_t __len, size_t __destlen)
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .             __THROW __nonnull ((1)) __fortified_attr_access (__write_only__, 1, 2);
+-- line 67 ----------------------------------------
+-- line 87 ----------------------------------------
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           }
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           #endif
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           __fortify_function char *
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           __NTH (strncpy (char *__restrict __dest, const char *__restrict __src,
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           		size_t __len))
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           {
+            20 ( 0.00%)             0                      4 ( 0.00%)         .                      .                  .                .                      .                  .                   .                  .          .          .             return __builtin___strncpy_chk (__dest, __src, __len,
+           136 ( 0.00%)            12 ( 0.00%)            20 ( 0.00%)         5 ( 0.00%)             1 ( 0.00%)         1 ( 0.00%)       5 ( 0.00%)             1 ( 0.00%)         0                  28 ( 0.00%)         2 ( 0.00%) 4 ( 0.00%) 1 ( 0.00%)  => ???:0x0000000000147aa0 (4x)
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           				  __glibc_objsize (__dest));
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           }
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           #ifdef __USE_XOPEN2K8
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           # if __GNUC_PREREQ (4, 7) || __glibc_clang_prereq (2, 6)
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           __fortify_function char *
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           __NTH (stpncpy (char *__dest, const char *__src, size_t __n))
+             .                      .                      .                  .                      .                  .                .                      .                  .                   .                  .          .          .           {
+-- line 103 ----------------------------------------
+
+--------------------------------------------------------------------------------
+The following files chosen for auto-annotation could not be found:
+--------------------------------------------------------------------------------
+  ./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+
+--------------------------------------------------------------------------------
+Ir                      Dr                     Dw                     I1mr               D1mr                   D1mw               ILmr               DLmr                   DLmw               Bc                  Bcm                Bi Bim 
+--------------------------------------------------------------------------------
+17,798,286,207 ( 0.27%) 3,893,361,689 ( 0.26%) 3,731,096,679 ( 0.53%) 2,307,674 ( 0.56%) 1,683,579,520 ( 3.43%) 8,707,436 ( 0.01%) 1,043,935 ( 0.79%) 1,319,881,854 ( 2.97%) 1,058,762 ( 0.00%) 25,511,086 ( 0.01%) 1,210,016 ( 0.04%) .          .           events annotated
+
