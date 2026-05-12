@@ -44,6 +44,7 @@
 #include <boost/circular_buffer.hpp>
 #include <atomic>
 #include <functional>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -651,7 +652,7 @@ namespace cryptonote
      *
      * @return the long term block weight
      */
-    uint64_t get_next_long_term_block_weight(uint64_t block_weight, uint64_t *out_long_term_median = nullptr) const;
+    uint64_t get_next_long_term_block_weight(uint64_t block_weight, std::optional<uint64_t> *out_long_term_median = nullptr) const;
 
     /**
      * @brief gets the block weight median based on recent blocks (same window as for the limit)
@@ -1433,7 +1434,7 @@ namespace cryptonote
      *
      * @return true
      */
-    bool update_next_cumulative_weight_limit(uint64_t *long_term_effective_median_block_weight = NULL, const uint64_t *precomputed_long_term_median = nullptr, bool mid_batch = false);
+    bool update_next_cumulative_weight_limit(uint64_t *long_term_effective_median_block_weight = nullptr, const std::optional<uint64_t> &precomputed_long_term_median = std::nullopt, bool mid_batch = false);
     void return_tx_to_pool(std::vector<std::pair<transaction, blobdata>> &txs);
 
     /**

@@ -3697,7 +3697,7 @@ leave:
   rtxn_guard.stop();
   TIME_MEASURE_START(addblock);
   uint64_t new_height = 0;
-  uint64_t precomputed_long_term_median = 0;
+  std::optional<uint64_t> precomputed_long_term_median;
   if (!bvc.m_verifivation_failed)
   {
     try
@@ -3733,7 +3733,7 @@ leave:
 
   // do this after updating the hard fork state since the size limit may change due to fork
   const bool mid_batch = m_prepare_nblocks > 1 && new_height < m_batch_start_height + m_prepare_nblocks;
-  if (!update_next_cumulative_weight_limit(nullptr, precomputed_long_term_median ? &precomputed_long_term_median : nullptr, mid_batch))
+  if (!update_next_cumulative_weight_limit(nullptr, precomputed_long_term_median, mid_batch))
   {
     MERROR("Failed to update next cumulative weight limit");
     pop_block_from_blockchain();
@@ -3792,7 +3792,7 @@ bool Blockchain::check_blockchain_pruning()
   return m_db->check_pruning();
 }
 //------------------------------------------------------------------
-uint64_t Blockchain::get_next_long_term_block_weight(uint64_t block_weight, uint64_t *out_long_term_median) const
+uint64_t Blockchain::get_next_long_term_block_weight(uint64_t block_weight, std::optional<uint64_t> *out_long_term_median) const
 {
   PERF_TIMER(get_next_long_term_block_weight);
 
@@ -3815,7 +3815,7 @@ uint64_t Blockchain::get_next_long_term_block_weight(uint64_t block_weight, uint
   return long_term_block_weight;
 }
 //------------------------------------------------------------------
-bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effective_median_block_weight, const uint64_t *precomputed_long_term_median, bool mid_batch)
+bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effective_median_block_weight, const std::optional<uint64_t> &precomputed_long_term_median, bool mid_batch)
 {
   PERF_TIMER(update_next_cumulative_weight_limit);
 
