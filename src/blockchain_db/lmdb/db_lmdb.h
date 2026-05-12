@@ -68,6 +68,16 @@ typedef struct mdb_block_info_4
 
 typedef mdb_block_info_4 mdb_block_info;
 
+// Compact struct for the in-memory block cache used by get_cna_v4_data and
+// get_cna_v5_data. Stores only the four fields those functions access, cutting
+// per-entry size from 96 to 56 bytes and reducing L3 cache pressure during sync.
+struct block_cache_data {
+  crypto::hash hash;
+  uint64_t     timestamp;
+  uint64_t     diff_lo;
+  uint64_t     coins;
+};
+
 typedef struct txindex {
     crypto::hash key;
     tx_data_t data;
@@ -506,7 +516,7 @@ private:
   mdb_txn_cursors m_wcursors;
   mutable boost::thread_specific_ptr<mdb_threadinfo> m_tinfo;
 
-  std::vector<mdb_block_info> m_block_cache;
+  std::vector<block_cache_data> m_block_cache;
   std::atomic<uint64_t> m_block_cache_height;
   mutable epee::critical_section m_block_cache_lock;
 
