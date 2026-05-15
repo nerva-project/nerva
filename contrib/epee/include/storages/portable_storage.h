@@ -280,6 +280,7 @@ namespace epee
     {
       TRY_ENTRY();
       CHECK_AND_ASSERT(psection, nullptr);
+      CHECK_AND_ASSERT(!pentry_name.empty(), nullptr);
       auto ins_res = psection->m_entries.insert(std::pair<std::string, storage_entry>(pentry_name, entry));
       return &ins_res.first->second;
       CATCH_ENTRY("portable_storage::insert_new_entry_get_storage_entry", nullptr);
