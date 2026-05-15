@@ -43,6 +43,7 @@
 #define CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE  -10
 #define CORE_RPC_ERROR_CODE_UNSUPPORTED_RPC       -11
 #define CORE_RPC_ERROR_CODE_MINING_TO_SUBADDRESS  -12
+#define CORE_RPC_ERROR_CODE_RESTRICTED            -14
 #define CORE_RPC_ERROR_CODE_INVALID_CLIENT        -15
 #define CORE_RPC_ERROR_CODE_STALE_PAYMENT         -18
 
@@ -61,6 +62,7 @@ static inline const char *get_rpc_server_error_message(int64_t code)
     case CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE: return "Wrong block blob size";
     case CORE_RPC_ERROR_CODE_UNSUPPORTED_RPC: return "Unsupported RPC";
     case CORE_RPC_ERROR_CODE_MINING_TO_SUBADDRESS: return "Mining to subaddress is not supported";
+    case CORE_RPC_ERROR_CODE_RESTRICTED: return "Restricted RPC";
     case CORE_RPC_ERROR_CODE_INVALID_CLIENT: return "Invalid client";
     case CORE_RPC_ERROR_CODE_STALE_PAYMENT: return "Stale payment";
     default: MERROR("Unknown error: " << code); return "Unknown error";
