@@ -1418,7 +1418,7 @@ namespace nodetool
   {
     size_t max_random_index = 0;
 
-    std::set<size_t> tried_peers;
+    std::set<peerid_type> tried_peers;
 
     size_t try_count = 0;
     while(try_count < 5 && !zone.m_net_server.is_stop_signal_sent())
@@ -1427,18 +1427,19 @@ namespace nodetool
       size_t random_index;
       const uint32_t next_needed_pruning_stripe = m_payload_handler.get_next_needed_pruning_stripe().second;
 
-      // build a set of all the /16 we're connected to, and prefer a peer that's not in that set
-      std::set<uint32_t> classB;
+      // build a set of all the /24 subnets we're connected to, and prefer a peer that's not in that set
+      // subnet_mask is the /24 mask in host byte order (0x00ffffff on little-endian, Monero PR #9939)
+      const uint32_t subnet_mask = 0x00ffffff;
+      std::set<uint32_t> connected_subnets;
       if (&zone == &m_network_zones.at(epee::net_utils::zone::public_)) // at returns reference, not copy
       {
         zone.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
         {
           if (cntxt.m_remote_address.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
           {
-
             const epee::net_utils::network_address na = cntxt.m_remote_address;
             const uint32_t actual_ip = na.as<const epee::net_utils::ipv4_network_address>().ip();
-            classB.insert(actual_ip & 0x0000ffff);
+            connected_subnets.insert(actual_ip & subnet_mask);
           }
           return true;
         });
@@ -1460,17 +1461,17 @@ namespace nodetool
       for (int step = 0; step < 2; ++step)
       {
         size_t idx = 0, skipped = 0;
-        bool skip_duplicate_class_B = step == 0;
-        MDEBUG("try_count: " << try_count << ", step: " << step << ", limit: " << limit << ", classB: " << classB.size() << ", filtered size: " << filtered.size() << ", idx: " << idx << ", skipped: " << skipped << ", skip_duplicate_class_B: " << skip_duplicate_class_B << ", next_needed_pruning_stripe: " << next_needed_pruning_stripe);
-        zone.m_peerlist.foreach (use_white_list, [&classB, &filtered, &idx, &skipped, skip_duplicate_class_B, limit, next_needed_pruning_stripe](const peerlist_entry &pe){
+        bool skip_duplicate_subnet = step == 0;
+        MDEBUG("try_count: " << try_count << ", step: " << step << ", limit: " << limit << ", connected_subnets: " << connected_subnets.size() << ", filtered size: " << filtered.size() << ", idx: " << idx << ", skipped: " << skipped << ", skip_duplicate_subnet: " << skip_duplicate_subnet << ", next_needed_pruning_stripe: " << next_needed_pruning_stripe);
+        zone.m_peerlist.foreach (use_white_list, [&connected_subnets, &filtered, &idx, &skipped, skip_duplicate_subnet, limit, next_needed_pruning_stripe, subnet_mask](const peerlist_entry &pe){
           if (filtered.size() >= limit)
             return false;
           bool skip = false;
-          if (skip_duplicate_class_B && pe.adr.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
+          if (skip_duplicate_subnet && pe.adr.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
           {
             const epee::net_utils::network_address na = pe.adr;
             uint32_t actual_ip = na.as<const epee::net_utils::ipv4_network_address>().ip();
-            skip = classB.find(actual_ip & 0x0000ffff) != classB.end();
+            skip = connected_subnets.find(actual_ip & subnet_mask) != connected_subnets.end();
           }
           if (skip)
             ++skipped;
@@ -1484,7 +1485,7 @@ namespace nodetool
         if (skipped == 0 || !filtered.empty())
           break;
         if (skipped)
-          MINFO("Skipping " << skipped << " possible peers as they share a class B with existing peers");
+          MINFO("Skipping " << skipped << " possible peers as they share a /24 subnet with existing peers");
       }
       if (filtered.empty())
       {
@@ -1520,13 +1521,14 @@ namespace nodetool
       CHECK_AND_ASSERT_MES(random_index < (use_white_list ? zone.m_peerlist.get_white_peers_count() : zone.m_peerlist.get_gray_peers_count()),
           false, "random_index < peers size failed!!");
 
-      if(tried_peers.count(random_index))
-        continue;
-
-      tried_peers.insert(random_index);
       peerlist_entry pe = AUTO_VAL_INIT(pe);
       bool r = use_white_list ? zone.m_peerlist.get_white_peer_by_index(pe, random_index):zone.m_peerlist.get_gray_peer_by_index(pe, random_index);
       CHECK_AND_ASSERT_MES(r, false, "Failed to get random peer from peerlist(white:" << use_white_list << ")");
+
+      if(tried_peers.count(pe.id))
+        continue;
+
+      tried_peers.insert(pe.id);
 
       MDEBUG("Filtered size: " << filtered.size() << ", tried_peers size: " << tried_peers.size() << ", random_index: " << random_index << ", try_count: " << try_count);      
       _note("Considering connecting (out) to " << (use_white_list ? "white" : "gray") << " list peer: " <<
@@ -1748,6 +1750,7 @@ namespace nodetool
         ++count;
       return true;
     });
+    zone.m_current_number_of_out_peers = count;
     return count;
   }
   //-----------------------------------------------------------------------------------
