@@ -112,6 +112,8 @@
 
 #define CRYPTONOTE_MEMPOOL_TX_LIVETIME                                  (86400 * 3)
 #define CRYPTONOTE_MEMPOOL_TX_FROM_ALT_BLOCK_LIVETIME                   604800
+// Mandatory tx content (16 outputs) + 1 custom tag + 32 bytes/recipient = 1060
+#define MAX_TX_EXTRA_SIZE                                                1060
 
 #define COMMAND_RPC_GET_BLOCKS_FAST_MAX_COUNT                           1000
 
