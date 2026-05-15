@@ -1155,8 +1155,8 @@ void wallet2::scan_submit(tools::threadpool &tpool, tools::threadpool::waiter *w
 {
   tpool.submit(waiter, [this, f = std::move(f)]() {
     m_scan_semaphore.acquire();
+    auto release = epee::misc_utils::create_scope_leave_handler([this]{ m_scan_semaphore.release(); });
     f();
-    m_scan_semaphore.release();
   }, leaf);
 }
 
