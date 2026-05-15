@@ -2329,7 +2329,14 @@ namespace nodetool
     real peer with that identity banned/blacklisted. */
 
     if(!context.m_is_income && zone.m_our_address.get_zone() == zone_type)
-      rsp.local_peerlist_new.push_back(peerlist_entry{zone.m_our_address, zone.m_config.m_peer_id, std::time(nullptr)});
+    {
+      // Random position + timestamp=0: prevents correlating our own onion/I2P address
+      // by its list position or a real wall-clock timestamp across responses (Monero PR #9632).
+      rsp.local_peerlist_new.insert(
+        rsp.local_peerlist_new.begin() + crypto::rand_range(std::size_t(0), rsp.local_peerlist_new.size()),
+        peerlist_entry{zone.m_our_address, zone.m_config.m_peer_id, 0}
+      );
+    }
 
     LOG_DEBUG_CC(context, "COMMAND_TIMED_SYNC");
     return 1;
