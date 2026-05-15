@@ -2126,17 +2126,17 @@ namespace nodetool
         return send(*network);
     }
 
-    // use the anonymity network with outbound support
+    // use the anonymity network with outbound support, but only if it has active outgoing connections
     for (auto network = ++m_network_zones.begin(); network != m_network_zones.end(); ++network)
     {
       if (enet::zone::tor < network->first)
         break; // unknown network
 
-      if (network->second.m_connect)
+      if (network->second.m_connect && get_outgoing_connections_count(network->second) != 0)
         return send(*network);
     }
 
-    // configuration should not allow this scenario
+    MWARNING("Unable to send transactions: anonymity networks had no outgoing connections");
     return enet::zone::invalid;
   }
   //-----------------------------------------------------------------------------------
