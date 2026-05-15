@@ -116,6 +116,7 @@
 #define MAX_TX_EXTRA_SIZE                                                1060
 
 #define COMMAND_RPC_GET_BLOCKS_FAST_MAX_COUNT                           1000
+#define MAX_RPC_CONTENT_LENGTH                                          1048576 // 1 MB
 
 #define P2P_LOCAL_WHITE_PEERLIST_LIMIT                                  1000
 #define P2P_LOCAL_GRAY_PEERLIST_LIMIT                                   5000
