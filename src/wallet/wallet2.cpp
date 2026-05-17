@@ -2844,21 +2844,44 @@ void wallet2::update_pool_state(std::vector<std::tuple<cryptonote::transaction, 
         remove_rings(pit->second.m_tx);
         for (size_t vini = 0; vini < pit->second.m_tx.vin.size(); ++vini)
         {
-          if (pit->second.m_tx.vin[vini].type() == typeid(txin_to_key))
-          {
-            txin_to_key &tx_in_to_key = boost::get<txin_to_key>(pit->second.m_tx.vin[vini]);
-            for (size_t i = 0; i < m_transfers.size(); ++i)
-            {
-              const transfer_details &td = m_transfers[i];
-              if (td.m_key_image == tx_in_to_key.k_image)
-              {
-                 LOG_PRINT_L1("Resetting spent status for output " << vini << ": " << td.m_key_image);
-                 set_unspent(i);
-                 break;
-              }
-            }
-          }
+          if (pit->second.m_tx.vin[vini].type() != typeid(txin_to_key))
+            continue;
+          const crypto::key_image &key_image = boost::get<txin_to_key>(pit->second.m_tx.vin[vini]).k_image;
+          const auto it_ki = m_key_images.find(key_image);
+          if (it_ki == m_key_images.end())
+            continue;
+          const std::size_t i = it_ki->second;
+          if (i >= m_transfers.size())
+            continue;
+          if (m_transfers.at(i).m_key_image != key_image)
+            continue;
+          if (!m_transfers.at(i).m_spent)
+            continue;
+          LOG_PRINT_L1("Resetting spent status for output " << vini << ": " << key_image);
+          set_unspent(i);
         }
+      }
+    }
+    else
+    {
+      // The inputs are spent, they're in the pool! It's possible the tx was previously marked as failed, so we
+      // make sure to re-mark the outputs as spent.
+      for (size_t vini = 0; vini < pit->second.m_tx.vin.size(); ++vini)
+      {
+        if (pit->second.m_tx.vin[vini].type() != typeid(txin_to_key))
+          continue;
+        const crypto::key_image &key_image = boost::get<txin_to_key>(pit->second.m_tx.vin[vini]).k_image;
+        const auto it_ki = m_key_images.find(key_image);
+        if (it_ki == m_key_images.end())
+          continue;
+        const std::size_t i = it_ki->second;
+        if (i >= m_transfers.size())
+          continue;
+        const transfer_details &td = m_transfers.at(i);
+        if (td.m_key_image != key_image || td.m_spent)
+          continue;
+        LOG_PRINT_L1("Resetting spent status for output " << vini << ": " << key_image << " (spent=true)");
+        set_spent(i, 0);
       }
     }
   }
