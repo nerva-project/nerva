@@ -566,7 +566,7 @@ bool load_txt_records_from_dns(DNSResolver &dr, std::vector<std::string> &good_r
   //nerva currently only has one dns update url. So if we have made it this far
   //we have a dnssec verified update record, so accept it. it is after all only for notification purposes
   //the code will automatically require 2 if it comes a time when we can add a second domain
-  if (dns_urls.size() == 1)
+  if (num_valid_records == 1)
   {
     good_records = records[0];
     return true;
