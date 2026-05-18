@@ -298,6 +298,7 @@ namespace tools
 
     check_background_mining();
 
+    m_net_server.get_config_object().m_max_content_length = MAX_RPC_CONTENT_LENGTH;
     m_net_server.set_threads_prefix("RPC");
     auto rng = [](size_t len, uint8_t *ptr) { return crypto::rand(len, ptr); };
     return epee::http_server_impl_base<wallet_rpc_server, connection_context>::init(
