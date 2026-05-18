@@ -587,7 +587,7 @@ public:
           const size_t max_bytes = m_connection_context.get_max_bytes(m_current_head.m_command);
           if(m_current_head.m_cb > std::min<uint64_t>(m_max_packet_size.load(std::memory_order_relaxed), max_bytes))
           {
-            LOG_ERROR_CC(m_connection_context, "Maximum packet size exceed!, m_max_packet_size = " << max_packet_size
+            LOG_ERROR_CC(m_connection_context, "Maximum packet size exceed!, m_max_packet_size = " << m_max_packet_size.load(std::memory_order_relaxed)
               << ", packet header received " << m_current_head.m_cb
               << ", connection will be closed.");
             return false;
