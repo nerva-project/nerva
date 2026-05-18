@@ -374,7 +374,7 @@ public:
   virtual void block_rtxn_stop() const;
   virtual void block_rtxn_abort() const;
 
-  bool block_rtxn_start(MDB_txn **mtxn, mdb_txn_cursors **mcur) const;
+  bool block_rtxn_start(MDB_txn **mtxn, mdb_txn_cursors **mcur, int is_active) const;
 
   virtual void pop_block(block& blk, std::vector<transaction>& txs);
 
