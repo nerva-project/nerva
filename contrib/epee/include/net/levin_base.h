@@ -72,6 +72,7 @@ namespace levin
 
 
 #define LEVIN_DEFAULT_TIMEOUT_PRECONFIGURED 0
+#define LEVIN_INITIAL_MAX_PACKET_SIZE (256*1024)     //256 KiB before handshake
 #define LEVIN_DEFAULT_MAX_PACKET_SIZE 100000000      //100MB by default
 
 #define LEVIN_PACKET_REQUEST			0x00000001

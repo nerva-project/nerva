@@ -38,6 +38,7 @@
 #define EPEE_PORTABLE_STORAGE_RECURSION_LIMIT_INTERNAL 100
 #endif
 #define EPEE_PORTABLE_STORAGE_OBJECT_LIMIT_INTERNAL 65536
+#define EPEE_PORTABLE_STORAGE_OBJECT_FIELD_LIMIT_INTERNAL 262144
 #define EPEE_PORTABLE_STORAGE_ARRAY_ELEMENT_LIMIT_INTERNAL 65536
 
 namespace epee
@@ -105,6 +106,7 @@ namespace epee
       size_t m_count;
       size_t m_recursion_count;
       size_t m_objects;
+      size_t m_fields;
       size_t m_array_elements;
     };
 
@@ -118,6 +120,7 @@ namespace epee
       m_count = sz;
       m_recursion_count = 0;
       m_objects = 0;
+      m_fields = 0;
       m_array_elements = 0;
     }
     inline 
@@ -135,6 +138,7 @@ namespace epee
       RECURSION_LIMITATION();
       uint8_t name_len = 0;
       read(name_len);
+      CHECK_AND_ASSERT_THROW_MES(name_len > 0, "Section name is missing");
       sce_name.resize(name_len);
       read((void*)sce_name.data(), name_len);
     }
@@ -168,6 +172,11 @@ namespace epee
       CHECK_AND_ASSERT_THROW_MES(size < EPEE_PORTABLE_STORAGE_ARRAY_ELEMENT_LIMIT_INTERNAL - m_array_elements, "Too many array elements");
       m_array_elements += size;
       CHECK_AND_ASSERT_THROW_MES(size <= m_count / ps_min_bytes<type_name>::strict, "Size sanity check failed");
+      if (std::is_same<type_name, section>::value)
+      {
+        CHECK_AND_ASSERT_THROW_MES(size <= EPEE_PORTABLE_STORAGE_OBJECT_LIMIT_INTERNAL - m_objects, "Too many objects");
+        m_objects += size;
+      }
       const size_t threshold = 16384 - std::min<size_t>(m_array_elements, 16384);
       CHECK_AND_ASSERT_THROW_MES(size <= threshold || size <= m_count / ps_min_bytes<type_name>::rough, "Large array stricter size sanity check failed");
 
@@ -244,6 +253,8 @@ namespace epee
     inline storage_entry throwable_buffer_reader::read_se<section>()
     {
       RECURSION_LIMITATION();
+      CHECK_AND_ASSERT_THROW_MES(m_objects < EPEE_PORTABLE_STORAGE_OBJECT_LIMIT_INTERNAL, "Too many objects");
+      ++m_objects;
       section s;//use extra variable due to vs bug, line "storage_entry se(section()); " can't be compiled in visual studio
       storage_entry se(s);
       section& section_entry = boost::get<section>(se);
@@ -295,14 +306,16 @@ namespace epee
       RECURSION_LIMITATION();
       sec.m_entries.clear();
       size_t count = read_varint();
-      CHECK_AND_ASSERT_THROW_MES(count < EPEE_PORTABLE_STORAGE_OBJECT_LIMIT_INTERNAL - m_objects, "Too many objects");
-      m_objects += count;
+      CHECK_AND_ASSERT_THROW_MES(count <= EPEE_PORTABLE_STORAGE_OBJECT_FIELD_LIMIT_INTERNAL - m_fields, "Too many object fields");
+      m_fields += count;
       while(count--)
       {
         //read section name string
         std::string sec_name;
         read_sec_name(sec_name);
-        sec.m_entries.insert(std::make_pair(sec_name, load_storage_entry()));
+        const auto insert_loc = sec.m_entries.lower_bound(sec_name);
+        CHECK_AND_ASSERT_THROW_MES(insert_loc == sec.m_entries.end() || insert_loc->first != sec_name, "duplicate key: " << sec_name);
+        sec.m_entries.emplace_hint(insert_loc, std::move(sec_name), load_storage_entry());
       }
     }
     inline 

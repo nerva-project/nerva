@@ -30,6 +30,8 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 #pragma once
+#include <algorithm>
+#include <limits>
 #include <unordered_set>
 #include <atomic>
 #include <boost/date_time/posix_time/posix_time.hpp>
@@ -56,6 +58,30 @@ namespace cryptonote
     };
 
     state m_state;
+
+    bool handshake_complete() const { return m_state != state_before_handshake; }
+
+    void set_max_bytes(int command, size_t bytes)
+    {
+      for (auto& e: m_max_bytes)
+      {
+        if (e.first == command)
+        {
+          e.second = bytes;
+          return;
+        }
+      }
+      m_max_bytes.push_back({command, bytes});
+    }
+
+    size_t get_max_bytes(int command) const
+    {
+      for (const auto& e: m_max_bytes)
+        if (e.first == command)
+          return e.second;
+      return std::numeric_limits<size_t>::max();
+    }
+
     std::vector<std::pair<crypto::hash, uint64_t>> m_needed_objects;
     std::unordered_set<crypto::hash> m_requested_objects;
     uint64_t m_remote_blockchain_height;
@@ -67,6 +93,9 @@ namespace cryptonote
     uint16_t m_rpc_port;
     bool m_anchor;
     size_t m_num_requested;
+
+  private:
+    std::vector<std::pair<int, size_t>> m_max_bytes;
   };
 
   inline std::string get_protocol_state_string(cryptonote_connection_context::state s)

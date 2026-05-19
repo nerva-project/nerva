@@ -285,7 +285,7 @@ namespace levin
           /* Only send to outgoing connections when "flooding" over i2p/tor.
              Otherwise this makes the tx linkable to a hidden service address,
              making things linkable across connections. */
-          if (this->source_ != context.m_connection_id && (this->zone_->is_public || !context.m_is_income))
+          if (context.handshake_complete() && this->source_ != context.m_connection_id && (this->zone_->is_public || !context.m_is_income))
             connections.emplace_back(context.m_connection_id);
           return true;
         });
