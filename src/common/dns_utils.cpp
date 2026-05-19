@@ -563,13 +563,21 @@ bool load_txt_records_from_dns(DNSResolver &dr, std::vector<std::string> &good_r
     return false;
   }
 
-  //nerva currently only has one dns update url. So if we have made it this far
-  //we have a dnssec verified update record, so accept it. it is after all only for notification purposes
-  //the code will automatically require 2 if it comes a time when we can add a second domain
+  // Only one domain responded. Cross-validation is skipped, but the record is
+  // still DNSSEC-verified. Warn only for multi-domain configs where one domain
+  // went silent — an attacker suppressing one domain could exploit this path.
   if (num_valid_records == 1)
   {
-    good_records = records[0];
-    return true;
+    if (records.size() > 1)
+      LOG_PRINT_L0("WARNING: only one DNS domain responded; using single DNSSEC-verified record without cross-validation");
+    for (const auto& record_set : records)
+    {
+      if (!record_set.empty())
+      {
+        good_records = record_set;
+        return true;
+      }
+    }
   }
   int good_records_index = -1;
   for (size_t i = 0; i < records.size() - 1; ++i)
