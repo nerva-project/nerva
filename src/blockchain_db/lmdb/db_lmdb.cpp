@@ -441,7 +441,7 @@ void lmdb_resized(MDB_env *env, int is_active)
   mdb_txn_safe::allow_new_txns();
 }
 
-inline int lmdb_txn_begin(MDB_env *env, MDB_txn *parent, unsigned int flags, MDB_txn **txn, int is_active = 1)
+inline int lmdb_txn_begin(MDB_env *env, MDB_txn *parent, unsigned int flags, MDB_txn **txn, int is_active)
 {
   int res = mdb_txn_begin(env, parent, flags, txn);
   if (res == MDB_MAP_RESIZED) {
@@ -1540,7 +1540,7 @@ void BlockchainLMDB::reset()
   check_open();
 
   mdb_txn_safe txn;
-  if (auto result = lmdb_txn_begin(m_env, NULL, 0, txn))
+  if (auto result = lmdb_txn_begin(m_env, NULL, 0, txn, 1))
     throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
 
   if (auto result = mdb_drop(txn, m_blocks, 0))
@@ -1646,7 +1646,7 @@ void BlockchainLMDB::unlock()
     txn_ptr = m_write_txn; \
   else \
   { \
-    if (auto mdb_res = lmdb_txn_begin(m_env, NULL, flags, auto_txn)) \
+    if (auto mdb_res = lmdb_txn_begin(m_env, NULL, flags, auto_txn, 1)) \
       throw0(DB_ERROR(lmdb_error(std::string("Failed to create a transaction for the db in ")+__FUNCTION__+": ", mdb_res).c_str())); \
   } \
 
@@ -1681,7 +1681,7 @@ void BlockchainLMDB::unlock()
     txn_ptr = m_write_txn; \
   else \
   { \
-    if (auto mdb_res = lmdb_txn_begin(m_env, NULL, flags, auto_txn)) \
+    if (auto mdb_res = lmdb_txn_begin(m_env, NULL, flags, auto_txn, 1)) \
       throw0(DB_ERROR(lmdb_error(std::string("Failed to create a transaction for the db in ")+__FUNCTION__+": ", mdb_res).c_str())); \
   } \
 
@@ -3854,7 +3854,7 @@ bool BlockchainLMDB::batch_start(uint64_t batch_num_blocks, uint64_t batch_bytes
   m_write_batch_txn = new mdb_txn_safe();
 
   // NOTE: need to make sure it's destroyed properly when done
-  if (auto mdb_res = lmdb_txn_begin(m_env, NULL, 0, *m_write_batch_txn))
+  if (auto mdb_res = lmdb_txn_begin(m_env, NULL, 0, *m_write_batch_txn, 1))
   {
     delete m_write_batch_txn;
     m_write_batch_txn = nullptr;
@@ -4046,7 +4046,7 @@ void BlockchainLMDB::block_wtxn_start()
   {
     m_writer = boost::this_thread::get_id();
     m_write_txn = new mdb_txn_safe();
-    if (auto mdb_res = lmdb_txn_begin(m_env, NULL, 0, *m_write_txn))
+    if (auto mdb_res = lmdb_txn_begin(m_env, NULL, 0, *m_write_txn, 1))
     {
       delete m_write_txn;
       m_write_txn = nullptr;
