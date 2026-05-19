@@ -32,6 +32,7 @@
 #define _HTTP_SERVER_H_
 
 #include <boost/optional/optional.hpp>
+#include <limits>
 #include <string>
 #include "net_utils_base.h"
 #include "to_nonconst_iterator.h"
@@ -58,6 +59,7 @@ namespace net_utils
 			std::vector<std::string> m_access_control_origins;
                         authentication_type m_auth_type;
 			boost::optional<login> m_user;
+			size_t m_max_content_length{std::numeric_limits<size_t>::max()};
 			critical_section m_lock;
 		};
 
@@ -144,6 +146,7 @@ namespace net_utils
 			config_type& m_config;
 			bool m_want_close;
 			size_t m_newlines;
+			size_t m_bytes_read;
 		protected:
 			i_service_endpoint* m_psnd_hndlr; 
 			t_connection_context& m_conn_context;
