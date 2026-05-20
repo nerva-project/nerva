@@ -877,6 +877,11 @@ bool get_short_payment_id(crypto::hash8 &payment_id8, const tools::wallet2::pend
   return false;
 }
 
+uint64_t get_outgoing_amount(const cryptonote::transaction &tx, const uint64_t amount_spent)
+{
+  return tx.version == 1 ? get_outs_money_amount(tx) : (amount_spent - tx.rct_signatures.txnFee);
+}
+
 tools::wallet2::tx_construction_data get_construction_data_with_decrypted_short_payment_id(const tools::wallet2::pending_tx &ptx, hw::device &hwdev)
 {
   tools::wallet2::tx_construction_data construction_data = ptx.construction_data;
@@ -1575,16 +1580,11 @@ void wallet2::set_unspent(size_t idx)
   td.m_spent_height = 0;
 }
 //----------------------------------------------------------------------------------------------------
-bool wallet2::is_spent(const transfer_details &td, bool strict) const
+bool wallet2::is_spent(const transfer_details &td, bool /*strict*/) const
 {
-  if (strict)
-  {
-    return td.m_spent && td.m_spent_height > 0;
-  }
-  else
-  {
-    return td.m_spent;
-  }
+  // Pool-spent outputs (m_spent_height==0) are still spent; the strict flag
+  // only controls whether unconfirmed change is added back in balance_per_subaddress.
+  return td.m_spent;
 }
 //----------------------------------------------------------------------------------------------------
 bool wallet2::is_spent(size_t idx, bool strict) const
@@ -2191,10 +2191,10 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
         LOG_ERROR("spent funds are from different subaddress accounts; count of incoming/outgoing payments will be incorrect");
       subaddr_account = td.m_subaddr_index.major;
       subaddr_indices.insert(td.m_subaddr_index.minor);
+      LOG_PRINT_L0("Spent money: " << print_money(amount) << ", with tx: " << txid);
+      set_spent(it->second, height);
       if (!pool)
       {
-        LOG_PRINT_L0("Spent money: " << print_money(amount) << ", with tx: " << txid);
-        set_spent(it->second, height);
         if (0 != m_callback)
           m_callback->on_money_spent(height, txid, tx, amount, tx, td.m_subaddr_index);
       }
@@ -2231,21 +2231,37 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
 
   uint64_t fee = miner_tx ? 0 : tx.rct_signatures.txnFee;
 
-  if (tx_money_spent_in_ins > 0 && !pool)
+  if (tx_money_spent_in_ins > 0)
   {
     uint64_t self_received = std::accumulate<decltype(tx_money_got_in_outs.begin()), uint64_t>(tx_money_got_in_outs.begin(), tx_money_got_in_outs.end(), 0,
       [&subaddr_account] (uint64_t acc, const std::pair<cryptonote::subaddress_index, uint64_t>& p)
       {
         return acc + (p.first.major == *subaddr_account ? p.second : 0);
       });
-    process_outgoing(txid, tx, height, ts, tx_money_spent_in_ins, self_received, *subaddr_account, subaddr_indices);
-    // if sending to yourself at the same subaddress account, set the outgoing payment amount to 0 so that it's less confusing
-    if (tx_money_spent_in_ins == self_received + fee)
+    if (!pool)
     {
-      auto i = m_confirmed_txs.find(txid);
-      THROW_WALLET_EXCEPTION_IF(i == m_confirmed_txs.end(), error::wallet_internal_error,
-        "confirmed tx wasn't found: " + string_tools::pod_to_hex(txid));
-      i->second.m_change = self_received;
+      process_outgoing(txid, tx, height, ts, tx_money_spent_in_ins, self_received, *subaddr_account, subaddr_indices);
+      // if sending to yourself at the same subaddress account, set the outgoing payment amount to 0 so that it's less confusing
+      if (tx_money_spent_in_ins == self_received + fee)
+      {
+        auto i = m_confirmed_txs.find(txid);
+        THROW_WALLET_EXCEPTION_IF(i == m_confirmed_txs.end(), error::wallet_internal_error,
+          "confirmed tx wasn't found: " + string_tools::pod_to_hex(txid));
+        i->second.m_change = self_received;
+      }
+    }
+    else if (!m_unconfirmed_txs.count(txid))
+    {
+      // Add to unconfirmed txs if not already there (e.g. restoring wallet, or running the wallet in parallel to the sending wallet w/same seed)
+      crypto::hash payment_id = crypto::null_hash;
+      tx_extra_nonce extra_nonce;
+      if (find_tx_extra_field_by_type(tx_extra_fields, extra_nonce))
+        get_payment_id_from_tx_extra_nonce(extra_nonce.nonce, payment_id);
+      add_unconfirmed_tx(txid, tx, tx_money_spent_in_ins, {}/*don't know dests*/, payment_id, self_received, *subaddr_account, subaddr_indices);
+      auto i = m_unconfirmed_txs.find(txid);
+      THROW_WALLET_EXCEPTION_IF(i == m_unconfirmed_txs.end(), error::wallet_internal_error,
+        "unconfirmed tx wasn't found: " + string_tools::pod_to_hex(txid));
+      i->second.m_amount_out = get_outgoing_amount(tx, tx_money_spent_in_ins);
     }
   }
 
@@ -2380,7 +2396,7 @@ void wallet2::process_outgoing(const crypto::hash &txid, const cryptonote::trans
     // wallet (eg, we're a cold wallet and the hot wallet sent it). For RCT transactions,
     // we only see 0 input amounts, so have to deduce amount out from other parameters.
     entry.first->second.m_amount_in = spent;
-    entry.first->second.m_amount_out = spent - tx.rct_signatures.txnFee;
+    entry.first->second.m_amount_out = get_outgoing_amount(tx, spent);
     entry.first->second.m_change = received;
 
     std::vector<tx_extra_field> tx_extra_fields;
@@ -2857,20 +2873,48 @@ void wallet2::update_pool_state(std::vector<std::tuple<cryptonote::transaction, 
         remove_rings(pit->second.m_tx);
         for (size_t vini = 0; vini < pit->second.m_tx.vin.size(); ++vini)
         {
-          if (pit->second.m_tx.vin[vini].type() == typeid(txin_to_key))
-          {
-            txin_to_key &tx_in_to_key = boost::get<txin_to_key>(pit->second.m_tx.vin[vini]);
-            for (size_t i = 0; i < m_transfers.size(); ++i)
-            {
-              const transfer_details &td = m_transfers[i];
-              if (td.m_key_image == tx_in_to_key.k_image)
-              {
-                 LOG_PRINT_L1("Resetting spent status for output " << vini << ": " << td.m_key_image);
-                 set_unspent(i);
-                 break;
-              }
-            }
-          }
+          if (pit->second.m_tx.vin[vini].type() != typeid(txin_to_key))
+            continue;
+          const crypto::key_image &key_image = boost::get<txin_to_key>(pit->second.m_tx.vin[vini]).k_image;
+          const auto it_ki = m_key_images.find(key_image);
+          if (it_ki == m_key_images.end())
+            continue;
+          const std::size_t i = it_ki->second;
+          if (i >= m_transfers.size())
+            continue;
+          if (m_transfers.at(i).m_key_image != key_image)
+            continue;
+          if (!m_transfers.at(i).m_spent)
+            continue;
+          LOG_PRINT_L1("Resetting spent status for output " << vini << ": " << key_image);
+          set_unspent(i);
+        }
+      }
+    }
+    else
+    {
+      // The tx is in the pool. If it was previously marked as failed, restore it to pending
+      // and re-mark its outputs as spent so balance and transfer display are consistent.
+      if (pit->second.m_state == wallet2::unconfirmed_transfer_details::failed)
+      {
+        LOG_PRINT_L1("Pending txid " << pit->first << " reappeared in pool, restoring to pending");
+        pit->second.m_state = wallet2::unconfirmed_transfer_details::pending;
+        for (size_t vini = 0; vini < pit->second.m_tx.vin.size(); ++vini)
+        {
+          if (pit->second.m_tx.vin[vini].type() != typeid(txin_to_key))
+            continue;
+          const crypto::key_image &key_image = boost::get<txin_to_key>(pit->second.m_tx.vin[vini]).k_image;
+          const auto it_ki = m_key_images.find(key_image);
+          if (it_ki == m_key_images.end())
+            continue;
+          const std::size_t i = it_ki->second;
+          if (i >= m_transfers.size())
+            continue;
+          const transfer_details &td = m_transfers.at(i);
+          if (td.m_key_image != key_image || td.m_spent)
+            continue;
+          LOG_PRINT_L1("Resetting spent status for output " << vini << ": " << key_image << " (spent=true)");
+          set_spent(i, 0);
         }
       }
     }
@@ -3186,6 +3230,17 @@ void wallet2::refresh(bool trusted_daemon, uint64_t start_height, uint64_t & blo
     // Lighwallet refresh done
     return;
   }
+
+  if (!m_first_refresh_done)
+  {
+    // We want to process the whole pool again, in case we identify received outputs in the chain we might have spent in the pool
+    m_scanned_pool_txs[0].clear();
+    m_scanned_pool_txs[1].clear();
+    // Clear unconfirmed (received) payments because the data is 100% recovered when scanning
+    m_unconfirmed_payments.clear();
+    // Don't clear unconfirmed (sent) txs because some data is not recover-able when scanning (dests)
+  }
+
   received_money = false;
   blocks_fetched = 0;
   uint64_t added_blocks = 0;
@@ -6063,9 +6118,9 @@ uint64_t wallet2::select_transfers(uint64_t needed_money, std::vector<size_t> un
   return found_money;
 }
 //----------------------------------------------------------------------------------------------------
-void wallet2::add_unconfirmed_tx(const cryptonote::transaction& tx, uint64_t amount_in, const std::vector<cryptonote::tx_destination_entry> &dests, const crypto::hash &payment_id, uint64_t change_amount, uint32_t subaddr_account, const std::set<uint32_t>& subaddr_indices)
+void wallet2::add_unconfirmed_tx(const crypto::hash &txid, const cryptonote::transaction& tx, uint64_t amount_in, const std::vector<cryptonote::tx_destination_entry> &dests, const crypto::hash &payment_id, uint64_t change_amount, uint32_t subaddr_account, const std::set<uint32_t>& subaddr_indices)
 {
-  unconfirmed_transfer_details& utd = m_unconfirmed_txs[cryptonote::get_transaction_hash(tx)];
+  unconfirmed_transfer_details& utd = m_unconfirmed_txs[txid];
   utd.m_amount_in = amount_in;
   utd.m_amount_out = 0;
   for (const auto &d: dests)
@@ -6175,7 +6230,7 @@ void wallet2::commit_tx(pending_tx& ptx)
     for(size_t idx: ptx.selected_transfers)
       amount_in += m_transfers[idx].amount();
   }
-  add_unconfirmed_tx(ptx.tx, amount_in, dests, payment_id, ptx.change_dts.amount, ptx.construction_data.subaddr_account, ptx.construction_data.subaddr_indices);
+  add_unconfirmed_tx(txid, ptx.tx, amount_in, dests, payment_id, ptx.change_dts.amount, ptx.construction_data.subaddr_account, ptx.construction_data.subaddr_indices);
   if (store_tx_info() && ptx.tx_key != crypto::null_skey)
   {
     m_tx_keys.insert(std::make_pair(txid, ptx.tx_key));
