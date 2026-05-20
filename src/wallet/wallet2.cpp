@@ -1550,16 +1550,11 @@ void wallet2::set_unspent(size_t idx)
   td.m_spent_height = 0;
 }
 //----------------------------------------------------------------------------------------------------
-bool wallet2::is_spent(const transfer_details &td, bool strict) const
+bool wallet2::is_spent(const transfer_details &td, bool /*strict*/) const
 {
-  if (strict)
-  {
-    return td.m_spent && td.m_spent_height > 0;
-  }
-  else
-  {
-    return td.m_spent;
-  }
+  // Pool-spent outputs (m_spent_height==0) are still spent; the strict flag
+  // only controls whether unconfirmed change is added back in balance_per_subaddress.
+  return td.m_spent;
 }
 //----------------------------------------------------------------------------------------------------
 bool wallet2::is_spent(size_t idx, bool strict) const
