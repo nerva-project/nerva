@@ -1395,6 +1395,10 @@ namespace nodetool
         continue;
       }
 
+      if(m_network_zones.at(pe.adr.get_zone()).m_our_address == pe.adr) {
+        continue;
+      }
+
       if(!is_remote_host_allowed(pe.adr)) {
         continue;
       }
@@ -1433,8 +1437,8 @@ namespace nodetool
       const uint32_t next_needed_pruning_stripe = m_payload_handler.get_next_needed_pruning_stripe().second;
 
       // build a set of all the /24 subnets we're connected to, and prefer a peer that's not in that set
-      // subnet_mask is the /24 mask in host byte order (0x00ffffff on little-endian, Monero PR #9939)
-      const uint32_t subnet_mask = 0x00ffffff;
+      // m_ip is stored in network byte order; 0xffffff00 preserves the first three octets (/24)
+      const uint32_t subnet_mask = 0xffffff00;
       std::set<uint32_t> connected_subnets;
       if (&zone == &m_network_zones.at(epee::net_utils::zone::public_)) // at returns reference, not copy
       {
