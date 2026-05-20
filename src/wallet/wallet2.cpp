@@ -132,6 +132,8 @@ using namespace cryptonote;
 #define FIRST_REFRESH_GRANULARITY     1024
 #define GAMMA_SHAPE 19.28
 #define GAMMA_SCALE (1/1.61)
+#define DEFAULT_UNLOCK_TIME (CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE * DIFFICULTY_TARGET)
+#define RECENT_SPEND_WINDOW (30 * DIFFICULTY_TARGET)
 
 #define DEFAULT_MIN_OUTPUT_COUNT 5
 #define DEFAULT_MIN_OUTPUT_VALUE (2*COIN)
@@ -966,7 +968,7 @@ gamma_picker::gamma_picker(const std::vector<uint64_t> &rct_offsets, double shap
   end = rct_offsets.data() + rct_offsets.size() - (std::max(1, CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE) - 1);
   num_rct_outputs = *(end - 1);
   THROW_WALLET_EXCEPTION_IF(num_rct_outputs == 0, error::wallet_internal_error, "No rct outputs");
-  average_output_time = DIFFICULTY_TARGET * blocks_to_consider / outputs_to_consider; // this assumes constant target over the whole rct range
+  average_output_time = DIFFICULTY_TARGET * blocks_to_consider / static_cast<double>(outputs_to_consider); // this assumes constant target over the whole rct range
 };
 
 gamma_picker::gamma_picker(const std::vector<uint64_t> &rct_offsets): gamma_picker(rct_offsets, GAMMA_SHAPE, GAMMA_SCALE) {}
@@ -975,6 +977,34 @@ uint64_t gamma_picker::pick()
 {
   double x = gamma(engine);
   x = exp(x);
+
+  if (x > DEFAULT_UNLOCK_TIME)
+  {
+    // We are trying to select an output from the chain that appeared 'x' seconds before the
+    // current chain tip, where 'x' is selected from the gamma distribution recommended in Miller et al.
+    // (https://arxiv.org/pdf/1704.04299/).
+    // Our method is to get the average time delta between outputs in the recent past, estimate the number of
+    // outputs 'n' that would have appeared between 'chain_tip - x' and 'chain_tip', select the real output at
+    // 'current_num_outputs - n', then randomly select an output from the block where that output appears.
+    // Source code to paper: https://github.com/maltemoeser/moneropaper
+    //
+    // Due to the 'default spendable age' mechanic in Monero, 'current_num_outputs' only contains
+    // currently *unlocked* outputs, which means the earliest output that can be selected is not at the chain tip!
+    // Therefore, we must offset 'x' so it matches up with the timing of the outputs being considered. We do
+    // this by saying if 'x' equals the expected age of the first unlocked output (compared to the current
+    // chain tip - i.e. DEFAULT_UNLOCK_TIME), then select the first unlocked output.
+    x -= DEFAULT_UNLOCK_TIME;
+  }
+  else
+  {
+    // If the spent time suggested by the gamma is less than the unlock time, that means the gamma is suggesting an output
+    // that is no longer feasible to be spent (possible since the gamma was constructed when consensus rules did not enforce the
+    // lock time). The assumption made in this code is that an output expected spent quicker than the unlock time would likely
+    // be spent within RECENT_SPEND_WINDOW after allowed. So it returns an output that falls between 0 and the RECENT_SPEND_WINDOW.
+    // The RECENT_SPEND_WINDOW was determined with empirical analysis of observed data.
+    x = crypto::rand_idx(static_cast<uint64_t>(RECENT_SPEND_WINDOW));
+  }
+
   uint64_t output_index = x / average_output_time;
   if (output_index >= num_rct_outputs)
     return std::numeric_limits<uint64_t>::max(); // bad pick
@@ -1132,7 +1162,7 @@ wallet2::wallet2(network_type nettype, uint64_t kdf_rounds, bool unattended):
   m_original_keys_available(false),
   m_message_store(),
   m_key_device_type(hw::device::device_type::SOFTWARE),
-  m_ring_history_saved(false),
+  m_ring_history_saved(true),
   m_ringdb(),
   m_last_block_reward(0),
   m_encrypt_keys_after_refresh(boost::none),
@@ -5395,14 +5425,6 @@ void wallet2::load(const std::string& wallet_, const epee::wipeable_string& pass
 
   try
   {
-    find_and_save_rings(false);
-  }
-  catch (const std::exception &e)
-  {
-    MERROR("Failed to save rings, will try again next time");
-  }
-  try
-  {
     m_message_store.read_from_file(get_multisig_wallet_state(), m_mms_file);
   }
   catch (const std::exception &e)
@@ -7172,64 +7194,11 @@ bool wallet2::unset_ring(const crypto::hash &txid)
 
 bool wallet2::find_and_save_rings(bool force)
 {
-  if (!force && m_ring_history_saved)
-    return true;
-  if (!m_ringdb)
+  if (force)
+  {
+    MWARNING("wallet2::find_and_save_rings() is deprecated");
     return false;
-
-  COMMAND_RPC_GET_TRANSACTIONS::request req = AUTO_VAL_INIT(req);
-  COMMAND_RPC_GET_TRANSACTIONS::response res = AUTO_VAL_INIT(res);
-
-  MDEBUG("Finding and saving rings...");
-
-  // get payments we made
-  std::vector<crypto::hash> txs_hashes;
-  std::list<std::pair<crypto::hash,wallet2::confirmed_transfer_details>> payments;
-  get_payments_out(payments, 0, std::numeric_limits<uint64_t>::max(), boost::none, std::set<uint32_t>());
-  for (const std::pair<crypto::hash,wallet2::confirmed_transfer_details> &entry: payments)
-  {
-    const crypto::hash &txid = entry.first;
-    txs_hashes.push_back(txid);
   }
-
-  MDEBUG("Found " << std::to_string(txs_hashes.size()) << " transactions");
-
-  // get those transactions from the daemon
-  auto it = txs_hashes.begin();
-  static const size_t SLICE_SIZE = 200;
-  for (size_t slice = 0; slice < txs_hashes.size(); slice += SLICE_SIZE)
-  {
-    req.decode_as_json = false;
-    req.prune = true;
-    req.txs_hashes.clear();
-    size_t ntxes = slice + SLICE_SIZE > txs_hashes.size() ? txs_hashes.size() - slice : SLICE_SIZE;
-    for (size_t s = slice; s < slice + ntxes; ++s)
-      req.txs_hashes.push_back(epee::string_tools::pod_to_hex(txs_hashes[s]));
-
-    {
-      const boost::lock_guard<boost::recursive_mutex> lock{m_daemon_rpc_mutex};
-      bool r = epee::net_utils::invoke_http_json("/gettransactions", req, res, m_http_client, rpc_timeout);
-      THROW_ON_RPC_RESPONSE_ERROR_GENERIC(r, {}, res, "/gettransactions");
-      THROW_WALLET_EXCEPTION_IF(res.txs.size() != req.txs_hashes.size(), error::wallet_internal_error,
-        "daemon returned wrong response for gettransactions, wrong txs count = " +
-        std::to_string(res.txs.size()) + ", expected " + std::to_string(req.txs_hashes.size()));
-    }
-
-    MDEBUG("Scanning " << res.txs.size() << " transactions");
-    THROW_WALLET_EXCEPTION_IF(slice + res.txs.size() > txs_hashes.size(), error::wallet_internal_error, "Unexpected tx array size");
-    for (size_t i = 0; i < res.txs.size(); ++i, ++it)
-    {
-      const auto &tx_info = res.txs[i];
-      cryptonote::transaction tx;
-      crypto::hash tx_hash;
-      THROW_WALLET_EXCEPTION_IF(!get_pruned_tx(tx_info, tx, tx_hash), error::wallet_internal_error,
-          "Failed to get transaction from daemon");
-      THROW_WALLET_EXCEPTION_IF(!(tx_hash == *it), error::wallet_internal_error, "Wrong txid received");
-      THROW_WALLET_EXCEPTION_IF(!add_rings(get_ringdb_key(), tx), error::wallet_internal_error, "Failed to save ring");
-    }
-  }
-
-  MINFO("Found and saved rings for " << txs_hashes.size() << " transactions");
   m_ring_history_saved = true;
   return true;
 }
@@ -7550,6 +7519,27 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
     // generate output indices to request
     COMMAND_RPC_GET_OUTPUTS_BIN::request req = AUTO_VAL_INIT(req);
     COMMAND_RPC_GET_OUTPUTS_BIN::response daemon_resp = AUTO_VAL_INIT(daemon_resp);
+
+    // The secret picking order contains outputs in the order that we selected them.
+    //
+    // We will later sort the output request entries in a pre-determined order so that the daemon
+    // that we're requesting information from doesn't learn any information about the true spend
+    // for each ring. However, internally, we want to prefer to construct our rings using the
+    // outputs that we picked first versus outputs picked later.
+    //
+    // The reason why is because each consecutive output pick within a ring becomes increasing less
+    // statistically independent from other picks, since we pick outputs from a finite set
+    // *without replacement*, due to the protocol not allowing duplicate ring members. This effect
+    // is exacerbated by the fact that we pick 1.5x + 75 as many outputs as we need per RPC
+    // request to account for unusable outputs. This effect is small, but non-neglibile and gets
+    // worse with larger ring sizes.
+    std::vector<get_outputs_out> secret_picking_order;
+
+    // Convenience/safety lambda to make sure that both output lists req.outputs and secret_picking_order are updated together
+    // Each ring section of req.outputs gets sorted later after selecting all outputs for that ring
+    const auto add_output_to_lists = [&req, &secret_picking_order](const get_outputs_out &goo)
+      { req.outputs.push_back(goo); secret_picking_order.push_back(goo); };
+
     //static const double shape = m_testnet ? 17.02 : 17.28;
     std::unique_ptr<gamma_picker> gamma;
     if (has_rct_distribution)
@@ -7680,7 +7670,7 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
             if (out < num_outs)
             {
               MINFO("Using it");
-              req.outputs.push_back({amount, out});
+              add_output_to_lists({amount, out});
               ++num_found;
               seen_indices.emplace(out);
               if (out == td.m_global_output_index)
@@ -7702,12 +7692,12 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
       if (num_outs <= requested_outputs_count)
       {
         for (uint64_t i = 0; i < num_outs; i++)
-          req.outputs.push_back({amount, i});
+          add_output_to_lists({amount, i});
         // duplicate to make up shortfall: this will be caught after the RPC call,
         // so we can also output the amounts for which we can't reach the required
         // mixin after checking the actual unlockedness
         for (uint64_t i = num_outs; i < requested_outputs_count; ++i)
-          req.outputs.push_back({amount, num_outs - 1});
+          add_output_to_lists({amount, num_outs - 1});
       }
       else
       {
@@ -7716,7 +7706,7 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
         {
           num_found = 1;
           seen_indices.emplace(td.m_global_output_index);
-          req.outputs.push_back({amount, td.m_global_output_index});
+          add_output_to_lists({amount, td.m_global_output_index});
           LOG_PRINT_L1("Selecting real output: " << td.m_global_output_index << " for " << print_money(amount));
         }
 
@@ -7823,7 +7813,7 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
           seen_indices.emplace(i);
 
           picks[type].insert(i);
-          req.outputs.push_back({amount, i});
+          add_output_to_lists({amount, i});
           ++num_found;
           MDEBUG("picked " << i << ", " << num_found << " now picked");
         }
@@ -7837,7 +7827,7 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
         // we'll error out later
         while (num_found < requested_outputs_count)
         {
-          req.outputs.push_back({amount, 0});
+          add_output_to_lists({amount, 0});
           ++num_found;
         }
       }
@@ -7847,6 +7837,10 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
           [](const get_outputs_out &a, const get_outputs_out &b) { return a.index < b.index; });
     }
 
+    THROW_WALLET_EXCEPTION_IF(req.outputs.size() != secret_picking_order.size(), error::wallet_internal_error,
+        "bug: we did not update req.outputs/secret_picking_order in tandem");
+
+    // List all requested outputs to debug log
     if (ELPP->vRegistry()->allowed(el::Level::Debug, MONERO_DEFAULT_LOG_CATEGORY))
     {
       std::map<uint64_t, std::set<uint64_t>> outs;
@@ -7961,18 +7955,21 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
         }
       }
 
-      // then pick others in random order till we reach the required number
-      // since we use an equiprobable pick here, we don't upset the triangular distribution
-      std::vector<size_t> order;
-      order.resize(requested_outputs_count);
-      for (size_t n = 0; n < order.size(); ++n)
-        order[n] = n;
-      std::shuffle(order.begin(), order.end(), crypto::random_device{});
-
+      // While we are still lacking outputs in this result ring, in our secret pick order...
       LOG_PRINT_L2("Looking for " << (fake_outputs_count+1) << " outputs of size " << print_money(td.is_rct() ? 0 : td.amount()));
-      for (size_t o = 0; o < requested_outputs_count && outs.back().size() < fake_outputs_count + 1; ++o)
+      for (size_t ring_pick_idx = base; ring_pick_idx < base + requested_outputs_count && outs.back().size() < fake_outputs_count + 1; ++ring_pick_idx)
       {
-        size_t i = base + order[o];
+        const get_outputs_out attempted_output = secret_picking_order[ring_pick_idx];
+
+        // Find the index i of our pick in the request/response arrays
+        size_t i;
+        for (i = base; i < base + requested_outputs_count; ++i)
+          if (req.outputs[i].index == attempted_output.index)
+            break;
+        THROW_WALLET_EXCEPTION_IF(i == base + requested_outputs_count, error::wallet_internal_error,
+          "Could not find index of picked output in requested outputs");
+
+        // Try adding this output's information to result ring if output isn't invalid
         LOG_PRINT_L2("Index " << i << "/" << requested_outputs_count << ": idx " << req.outputs[i].index << " (real " << td.m_global_output_index << "), unlocked " << daemon_resp.outs[i].unlocked << ", key " << daemon_resp.outs[i].key);
         tx_add_fake_output(outs, req.outputs[i].index, daemon_resp.outs[i].key, daemon_resp.outs[i].mask, td.m_global_output_index, daemon_resp.outs[i].unlocked);
       }
@@ -12704,38 +12701,6 @@ uint64_t wallet2::get_segregation_fork_height() const
   if (m_segregation_height > 0)
     return m_segregation_height;
 
-  if (m_use_dns && !m_offline)
-  {
-    // All four MoneroPulse domains have DNSSEC on and valid
-    static const std::vector<std::string> dns_urls = {};
-
-    const uint64_t current_height = get_blockchain_current_height();
-    uint64_t best_diff = std::numeric_limits<uint64_t>::max(), best_height = 0;
-    std::vector<std::string> records;
-    if (tools::dns_utils::load_txt_records_from_dns(records, dns_urls))
-    {
-      for (const auto& record : records)
-      {
-        std::vector<std::string> fields;
-        boost::split(fields, record, boost::is_any_of(":"));
-        if (fields.size() != 2)
-          continue;
-        uint64_t height;
-        if (!string_tools::get_xtype_from_string(height, fields[1]))
-          continue;
-
-        MINFO("Found segregation height via DNS: " << fields[0] << " fork height at " << height);
-        uint64_t diff = height > current_height ? height - current_height : current_height - height;
-        if (diff < best_diff)
-        {
-          best_diff = diff;
-          best_height = height;
-        }
-      }
-      if (best_height)
-        return best_height;
-    }
-  }
   return SEGREGATION_FORK_HEIGHT;
 }
 //----------------------------------------------------------------------------------------------------
