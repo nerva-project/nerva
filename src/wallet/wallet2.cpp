@@ -2228,7 +2228,11 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
     else if (!m_unconfirmed_txs.count(txid))
     {
       // Add to unconfirmed txs if not already there (e.g. restoring wallet, or running the wallet in parallel to the sending wallet w/same seed)
-      add_unconfirmed_tx(txid, tx, tx_money_spent_in_ins, {}/*don't know dests*/, crypto::null_hash/*don't know payment_id*/, self_received, *subaddr_account, subaddr_indices);
+      crypto::hash payment_id = crypto::null_hash;
+      tx_extra_nonce extra_nonce;
+      if (find_tx_extra_field_by_type(tx_extra_fields, extra_nonce))
+        get_payment_id_from_tx_extra_nonce(extra_nonce.nonce, payment_id);
+      add_unconfirmed_tx(txid, tx, tx_money_spent_in_ins, {}/*don't know dests*/, payment_id, self_received, *subaddr_account, subaddr_indices);
       auto i = m_unconfirmed_txs.find(txid);
       THROW_WALLET_EXCEPTION_IF(i == m_unconfirmed_txs.end(), error::wallet_internal_error,
         "unconfirmed tx wasn't found: " + string_tools::pod_to_hex(txid));
@@ -2864,24 +2868,29 @@ void wallet2::update_pool_state(std::vector<std::tuple<cryptonote::transaction, 
     }
     else
     {
-      // The inputs are spent, they're in the pool! It's possible the tx was previously marked as failed, so we
-      // make sure to re-mark the outputs as spent.
-      for (size_t vini = 0; vini < pit->second.m_tx.vin.size(); ++vini)
+      // The tx is in the pool. If it was previously marked as failed, restore it to pending
+      // and re-mark its outputs as spent so balance and transfer display are consistent.
+      if (pit->second.m_state == wallet2::unconfirmed_transfer_details::failed)
       {
-        if (pit->second.m_tx.vin[vini].type() != typeid(txin_to_key))
-          continue;
-        const crypto::key_image &key_image = boost::get<txin_to_key>(pit->second.m_tx.vin[vini]).k_image;
-        const auto it_ki = m_key_images.find(key_image);
-        if (it_ki == m_key_images.end())
-          continue;
-        const std::size_t i = it_ki->second;
-        if (i >= m_transfers.size())
-          continue;
-        const transfer_details &td = m_transfers.at(i);
-        if (td.m_key_image != key_image || td.m_spent)
-          continue;
-        LOG_PRINT_L1("Resetting spent status for output " << vini << ": " << key_image << " (spent=true)");
-        set_spent(i, 0);
+        LOG_PRINT_L1("Pending txid " << pit->first << " reappeared in pool, restoring to pending");
+        pit->second.m_state = wallet2::unconfirmed_transfer_details::pending;
+        for (size_t vini = 0; vini < pit->second.m_tx.vin.size(); ++vini)
+        {
+          if (pit->second.m_tx.vin[vini].type() != typeid(txin_to_key))
+            continue;
+          const crypto::key_image &key_image = boost::get<txin_to_key>(pit->second.m_tx.vin[vini]).k_image;
+          const auto it_ki = m_key_images.find(key_image);
+          if (it_ki == m_key_images.end())
+            continue;
+          const std::size_t i = it_ki->second;
+          if (i >= m_transfers.size())
+            continue;
+          const transfer_details &td = m_transfers.at(i);
+          if (td.m_key_image != key_image || td.m_spent)
+            continue;
+          LOG_PRINT_L1("Resetting spent status for output " << vini << ": " << key_image << " (spent=true)");
+          set_spent(i, 0);
+        }
       }
     }
   }
