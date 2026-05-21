@@ -129,7 +129,9 @@ namespace nodetool
     if (storage)
       m_peerlist_storage = std::move(*storage);
 
-    m_network_zones[epee::net_utils::zone::public_].m_config.m_support_flags = P2P_SUPPORT_FLAGS;
+    network_zone& public_zone = m_network_zones[epee::net_utils::zone::public_];
+    public_zone.m_config.m_support_flags = P2P_SUPPORT_FLAGS;
+    public_zone.m_config.m_peer_id = crypto::rand<uint64_t>();
     m_first_connection_maker_call = true;
 
     CATCH_ENTRY_L0("node_server::init_config", false);
@@ -1049,16 +1051,15 @@ namespace nodetool
 
         pi = context.peer_id = rsp.node_data.peer_id;
         context.m_rpc_port = rsp.node_data.rpc_port;
-        m_network_zones.at(context.m_remote_address.get_zone()).m_peerlist.set_peer_just_seen(rsp.node_data.peer_id, context.m_remote_address, context.m_pruning_seed, context.m_rpc_port);
+        const auto azone = context.m_remote_address.get_zone();
+        network_zone& zone = m_network_zones.at(azone);
+        zone.m_peerlist.set_peer_just_seen(rsp.node_data.peer_id, context.m_remote_address, context.m_pruning_seed, context.m_rpc_port);
 
-        for (auto const& zone : m_network_zones)
+        if(azone == epee::net_utils::zone::public_ && rsp.node_data.peer_id == zone.m_config.m_peer_id)
         {
-          if(rsp.node_data.peer_id == zone.second.m_config.m_peer_id)
-          {
-            LOG_DEBUG_CC(context, "Connection to self detected, dropping connection");
-            hsh_result = false;
-            return;
-          }
+          LOG_DEBUG_CC(context, "Connection to self detected, dropping connection");
+          hsh_result = false;
+          return;
         }
         LOG_INFO_CC(context, "New connection handshaked, pruning seed " << epee::string_tools::to_string_hex(context.m_pruning_seed));
         LOG_DEBUG_CC(context, " COMMAND_HANDSHAKE INVOKED OK");
@@ -1145,50 +1146,51 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::is_peer_used(const peerlist_entry& peer)
   {
-    for(const auto& zone : m_network_zones)
-      if(zone.second.m_config.m_peer_id == peer.id)
-        return true;//dont make connections to ourself
+    const auto zone = peer.adr.get_zone();
+    const auto server = m_network_zones.find(zone);
+    if (server == m_network_zones.end())
+      return false;
+
+    const bool is_public = (zone == epee::net_utils::zone::public_);
+    if(is_public && server->second.m_config.m_peer_id == peer.id)
+      return true;//dont make connections to ourself
 
     bool used = false;
-    for(auto& zone : m_network_zones)
+    server->second.m_net_server.get_config_object().foreach_connection([&, is_public](const p2p_connection_context& cntxt)
     {
-      zone.second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
+      if((is_public && cntxt.peer_id == peer.id) || (!cntxt.m_is_income && peer.adr == cntxt.m_remote_address))
       {
-        if(cntxt.peer_id == peer.id || (!cntxt.m_is_income && peer.adr == cntxt.m_remote_address))
-        {
-          used = true;
-          return false;//stop enumerating
-        }
-        return true;
-      });
-
-      if(used)
-        return true;
-    }
-    return false;
+        used = true;
+        return false;//stop enumerating
+      }
+      return true;
+    });
+    return used;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::is_peer_used(const anchor_peerlist_entry& peer)
   {
-    for(auto& zone : m_network_zones) {
-      if(zone.second.m_config.m_peer_id == peer.id) {
-          return true;//dont make connections to ourself
-      }
-      bool used = false;
-      zone.second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
+    const auto zone = peer.adr.get_zone();
+    const auto server = m_network_zones.find(zone);
+    if (server == m_network_zones.end())
+      return false;
+
+    const bool is_public = (zone == epee::net_utils::zone::public_);
+    if(is_public && server->second.m_config.m_peer_id == peer.id)
+      return true;//dont make connections to ourself
+
+    bool used = false;
+    server->second.m_net_server.get_config_object().foreach_connection([&, is_public](const p2p_connection_context& cntxt)
+    {
+      if((is_public && cntxt.peer_id == peer.id) || (!cntxt.m_is_income && peer.adr == cntxt.m_remote_address))
       {
-        if(cntxt.peer_id == peer.id || (!cntxt.m_is_income && peer.adr == cntxt.m_remote_address))
-        {
-          used = true;
-          return false;//stop enumerating
-        }
-        return true;
-      });
-      if (used)
-        return true;
-    }
-    return false;
+        used = true;
+        return false;//stop enumerating
+      }
+      return true;
+    });
+    return used;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -1314,6 +1316,9 @@ namespace nodetool
     if (zone.m_connect == nullptr)
       return false;
 
+    if (zone.m_our_address == na)
+      return false;
+
     LOG_PRINT_L1("Connecting to " << na.str() << "(last_seen: "
                                   << (last_seen_stamp ? epee::misc_utils::get_time_interval_string(time(NULL) - last_seen_stamp):"never")
                                   << ")...");
@@ -1390,6 +1395,10 @@ namespace nodetool
         continue;
       }
 
+      if(m_network_zones.at(pe.adr.get_zone()).m_our_address == pe.adr) {
+        continue;
+      }
+
       if(!is_remote_host_allowed(pe.adr)) {
         continue;
       }
@@ -1418,7 +1427,7 @@ namespace nodetool
   {
     size_t max_random_index = 0;
 
-    std::set<size_t> tried_peers;
+    std::set<peerid_type> tried_peers;
 
     size_t try_count = 0;
     while(try_count < 5 && !zone.m_net_server.is_stop_signal_sent())
@@ -1427,18 +1436,19 @@ namespace nodetool
       size_t random_index;
       const uint32_t next_needed_pruning_stripe = m_payload_handler.get_next_needed_pruning_stripe().second;
 
-      // build a set of all the /16 we're connected to, and prefer a peer that's not in that set
-      std::set<uint32_t> classB;
+      // build a set of all the /24 subnets we're connected to, and prefer a peer that's not in that set
+      // m_ip is stored in network byte order; 0xffffff00 preserves the first three octets (/24)
+      const uint32_t subnet_mask = 0xffffff00;
+      std::set<uint32_t> connected_subnets;
       if (&zone == &m_network_zones.at(epee::net_utils::zone::public_)) // at returns reference, not copy
       {
         zone.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
         {
           if (cntxt.m_remote_address.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
           {
-
             const epee::net_utils::network_address na = cntxt.m_remote_address;
             const uint32_t actual_ip = na.as<const epee::net_utils::ipv4_network_address>().ip();
-            classB.insert(actual_ip & 0x0000ffff);
+            connected_subnets.insert(actual_ip & subnet_mask);
           }
           return true;
         });
@@ -1460,17 +1470,17 @@ namespace nodetool
       for (int step = 0; step < 2; ++step)
       {
         size_t idx = 0, skipped = 0;
-        bool skip_duplicate_class_B = step == 0;
-        MDEBUG("try_count: " << try_count << ", step: " << step << ", limit: " << limit << ", classB: " << classB.size() << ", filtered size: " << filtered.size() << ", idx: " << idx << ", skipped: " << skipped << ", skip_duplicate_class_B: " << skip_duplicate_class_B << ", next_needed_pruning_stripe: " << next_needed_pruning_stripe);
-        zone.m_peerlist.foreach (use_white_list, [&classB, &filtered, &idx, &skipped, skip_duplicate_class_B, limit, next_needed_pruning_stripe](const peerlist_entry &pe){
+        bool skip_duplicate_subnet = step == 0;
+        MDEBUG("try_count: " << try_count << ", step: " << step << ", limit: " << limit << ", connected_subnets: " << connected_subnets.size() << ", filtered size: " << filtered.size() << ", idx: " << idx << ", skipped: " << skipped << ", skip_duplicate_subnet: " << skip_duplicate_subnet << ", next_needed_pruning_stripe: " << next_needed_pruning_stripe);
+        zone.m_peerlist.foreach (use_white_list, [&connected_subnets, &filtered, &idx, &skipped, skip_duplicate_subnet, limit, next_needed_pruning_stripe, subnet_mask](const peerlist_entry &pe){
           if (filtered.size() >= limit)
             return false;
           bool skip = false;
-          if (skip_duplicate_class_B && pe.adr.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
+          if (skip_duplicate_subnet && pe.adr.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
           {
             const epee::net_utils::network_address na = pe.adr;
             uint32_t actual_ip = na.as<const epee::net_utils::ipv4_network_address>().ip();
-            skip = classB.find(actual_ip & 0x0000ffff) != classB.end();
+            skip = connected_subnets.find(actual_ip & subnet_mask) != connected_subnets.end();
           }
           if (skip)
             ++skipped;
@@ -1484,7 +1494,7 @@ namespace nodetool
         if (skipped == 0 || !filtered.empty())
           break;
         if (skipped)
-          MINFO("Skipping " << skipped << " possible peers as they share a class B with existing peers");
+          MINFO("Skipping " << skipped << " possible peers as they share a /24 subnet with existing peers");
       }
       if (filtered.empty())
       {
@@ -1520,18 +1530,22 @@ namespace nodetool
       CHECK_AND_ASSERT_MES(random_index < (use_white_list ? zone.m_peerlist.get_white_peers_count() : zone.m_peerlist.get_gray_peers_count()),
           false, "random_index < peers size failed!!");
 
-      if(tried_peers.count(random_index))
-        continue;
-
-      tried_peers.insert(random_index);
       peerlist_entry pe = AUTO_VAL_INIT(pe);
       bool r = use_white_list ? zone.m_peerlist.get_white_peer_by_index(pe, random_index):zone.m_peerlist.get_gray_peer_by_index(pe, random_index);
       CHECK_AND_ASSERT_MES(r, false, "Failed to get random peer from peerlist(white:" << use_white_list << ")");
+
+      if(tried_peers.count(pe.id))
+        continue;
+
+      tried_peers.insert(pe.id);
 
       MDEBUG("Filtered size: " << filtered.size() << ", tried_peers size: " << tried_peers.size() << ", random_index: " << random_index << ", try_count: " << try_count);      
       _note("Considering connecting (out) to " << (use_white_list ? "white" : "gray") << " list peer: " <<
           peerid_to_string(pe.id) << " " << pe.adr.str() << ", pruning seed " << epee::string_tools::to_string_hex(pe.pruning_seed) <<
           " (stripe " << next_needed_pruning_stripe << " needed)");
+
+      if(zone.m_our_address == pe.adr)
+        continue;
 
       if(is_peer_used(pe)) {
         _note("Peer is used");
@@ -1748,6 +1762,7 @@ namespace nodetool
         ++count;
       return true;
     });
+    zone.m_current_number_of_out_peers = count;
     return count;
   }
   //-----------------------------------------------------------------------------------
@@ -2123,17 +2138,17 @@ namespace nodetool
         return send(*network);
     }
 
-    // use the anonymity network with outbound support
+    // use the anonymity network with outbound support, but only if it has active outgoing connections
     for (auto network = ++m_network_zones.begin(); network != m_network_zones.end(); ++network)
     {
       if (enet::zone::tor < network->first)
         break; // unknown network
 
-      if (network->second.m_connect)
+      if (network->second.m_connect && get_outgoing_connections_count(network->second) != 0)
         return send(*network);
     }
 
-    // configuration should not allow this scenario
+    MWARNING("Unable to send transactions: anonymity networks had no outgoing connections");
     return enet::zone::invalid;
   }
   //-----------------------------------------------------------------------------------
@@ -2329,7 +2344,14 @@ namespace nodetool
     real peer with that identity banned/blacklisted. */
 
     if(!context.m_is_income && zone.m_our_address.get_zone() == zone_type)
-      rsp.local_peerlist_new.push_back(peerlist_entry{zone.m_our_address, zone.m_config.m_peer_id, std::time(nullptr)});
+    {
+      // Random position + timestamp=0: prevents correlating our own onion/I2P address
+      // by its list position or a real wall-clock timestamp across responses (Monero PR #9632).
+      rsp.local_peerlist_new.insert(
+        rsp.local_peerlist_new.begin() + crypto::rand_range(std::size_t(0), rsp.local_peerlist_new.size()),
+        peerlist_entry{zone.m_our_address, zone.m_config.m_peer_id, 0}
+      );
+    }
 
     LOG_DEBUG_CC(context, "COMMAND_TIMED_SYNC");
     return 1;
@@ -2395,9 +2417,10 @@ namespace nodetool
       return 1;
     }
 
-    network_zone& zone = m_network_zones.at(context.m_remote_address.get_zone());
+    const auto azone = context.m_remote_address.get_zone();
+    network_zone& zone = m_network_zones.at(azone);
 
-    if(arg.node_data.peer_id == zone.m_config.m_peer_id)
+    if(azone == epee::net_utils::zone::public_ && arg.node_data.peer_id == zone.m_config.m_peer_id)
     {
       LOG_DEBUG_CC(context, "Connection to self detected, dropping connection");
       drop_connection(context);
