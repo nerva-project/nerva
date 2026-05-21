@@ -32,6 +32,7 @@
 #pragma once
 
 #include <memory>
+#include "common/threadpool.h"
 
 #include <boost/program_options/options_description.hpp>
 #include <boost/program_options/variables_map.hpp>
@@ -1260,6 +1261,25 @@ private:
     void set_offline(bool offline = true);
 
   private:
+    struct scan_semaphore {
+      boost::mutex m_mutex;
+      boost::condition_variable m_cv;
+      unsigned m_count;
+      scan_semaphore(unsigned count) : m_count(count) {}
+      void acquire() {
+        boost::unique_lock<boost::mutex> lock(m_mutex);
+        m_cv.wait(lock, [this]{ return m_count > 0; });
+        --m_count;
+      }
+      void release() {
+        const boost::unique_lock<boost::mutex> lock(m_mutex);
+        ++m_count;
+        m_cv.notify_one();
+      }
+    };
+
+    void scan_submit(tools::threadpool &tpool, tools::threadpool::waiter *waiter, std::function<void()> f, bool leaf = false);
+
     /*!
      * \brief  Stores wallet information to wallet file.
      * \param  keys_file_name Name of wallet file
@@ -1389,6 +1409,8 @@ private:
     std::unordered_map<crypto::public_key, crypto::key_image> m_cold_key_images;
 
     std::atomic<bool> m_run;
+
+    scan_semaphore m_scan_semaphore;
 
     boost::recursive_mutex m_daemon_rpc_mutex;
 

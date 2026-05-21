@@ -199,8 +199,7 @@ namespace wallet_args
     if (notice)
       Print(print) << notice << ENDL;
 
-    if (!command_line::is_arg_defaulted(vm, arg_max_concurrency))
-      tools::set_max_concurrency(command_line::get_arg(vm, arg_max_concurrency));
+    tools::set_max_concurrency(command_line::get_arg(vm, arg_max_concurrency));
 
     Print(print) << "NERVA '" << MONERO_RELEASE_NAME << "' (v" << MONERO_VERSION_FULL << ")";
 
