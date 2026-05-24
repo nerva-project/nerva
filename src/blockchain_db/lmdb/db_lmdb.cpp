@@ -2385,7 +2385,7 @@ block_header BlockchainLMDB::get_block_header(const crypto::hash& h) const
 void check_error(int err)
 {
   if (err)
-    fprintf(stderr, "get_v3_data failed, error %d %s\n", err, mdb_strerror(err));
+    throw0(DB_ERROR(lmdb_error("LMDB cursor error in PoW cache: ", err).c_str()));
 }
 
 void BlockchainLMDB::build_block_cache(uint64_t height)
@@ -2397,32 +2397,32 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
 
   m_block_cache.reserve(height);
 
-  // During batch sync, blocks are written inside a batch write transaction that
-  // is not committed until the batch ends. A fresh read-only transaction can
-  // only see committed data, so it would fail to read blocks that have been
-  // added in the current batch but not yet committed. Reuse m_write_txn when
-  // one is active so we can see those uncommitted blocks. This matches the
-  // TXN_BLOCK_PREFIX pattern used elsewhere in this file.
+  // Always use a fresh read-only transaction. get_block_sync_size() caps the
+  // batch at BLOCKS_SYNCHRONIZING_SAFE_BATCH_COUNT (256), matching the
+  // stable_height offset of height-256 used by all CNA PoW variants, so
+  // stable_height blocks are always committed and visible to a read txn.
+  // Using the write txn here caused EINVAL from mdb_cursor_open on Windows
+  // (write txn is not valid for read-cursor operations in all LMDB states).
   MDB_txn *txn;
-  MDB_cursor *cur;
-  bool own_txn = false;
-  if (m_batch_active || m_write_txn)
+  if (auto r = lmdb_txn_begin(m_env, NULL, MDB_RDONLY, &txn, 0))
+    throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", r).c_str()));
+
+  MDB_cursor *cur = nullptr;
+  if (auto r = mdb_cursor_open(txn, m_block_info, &cur))
   {
-    txn = m_write_txn->m_txn;
-  }
-  else
-  {
-    if (auto r = lmdb_txn_begin(m_env, NULL, MDB_RDONLY, &txn, 0))
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", r).c_str()));
-    own_txn = true;
+    mdb_txn_abort(txn);
+    throw0(DB_ERROR(lmdb_error("Failed to open block_info cursor for block cache: ", r).c_str()));
   }
 
-  int err = mdb_cursor_open(txn, m_block_info, &cur); check_error(err);
-
-  for(uint64_t index = m_block_cache.size(); index < height; ++index)
+  for (uint64_t index = m_block_cache.size(); index < height; ++index)
   {
     MDB_val_set(query, index);
-    err = mdb_cursor_get(cur, (MDB_val*)&zerokval, &query, MDB_GET_BOTH); check_error(err);
+    if (auto r = mdb_cursor_get(cur, (MDB_val*)&zerokval, &query, MDB_GET_BOTH))
+    {
+      mdb_cursor_close(cur);
+      mdb_txn_abort(txn);
+      throw0(DB_ERROR(lmdb_error("Failed to read block_info record for block cache: ", r).c_str()));
+    }
     const mdb_block_info *bi = (const mdb_block_info*)query.mv_data;
     block_cache_data entry;
     entry.hash      = bi->bi_hash;
@@ -2433,9 +2433,7 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
   }
 
   mdb_cursor_close(cur);
-  if (own_txn)
-    mdb_txn_abort(txn);
-
+  mdb_txn_abort(txn);
   m_block_cache_height.store(height, std::memory_order_release);
   CRITICAL_REGION_END();
 }
