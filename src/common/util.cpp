@@ -64,9 +64,7 @@
 using namespace epee;
 
 #include "crypto/crypto.h"
-extern "C" {
 #include "crypto/hash-ops.h"
-}
 #include "util.h"
 #include "stack_trace.h"
 #include "memwipe.h"
@@ -801,9 +799,9 @@ std::string get_nix_version_display_string()
   bool check_aesni()
   {
 #if !defined NO_AES
-    if (cn_hardware_aes_supported())
+    if (crypto::cn_hardware_aes_supported())
     {
-        if (!cn_slow_hash_self_test())
+        if (!crypto::cn_slow_hash_self_test())
         {
             MGUSER_RED(
                 "Hardware AES self-test FAILED: the AES intrinsic path produced a "
