@@ -363,54 +363,25 @@ STATIC INLINE void xor64(uint64_t *a, const uint64_t b)
 
 #if defined(__aarch64__) && defined(__ARM_FEATURE_CRYPTO)
 
-/* ARMv8 Cryptonight AES key schedule. Produces the same 240-byte expanded key
- * as the x86 aes_expand_key (AES-256 schedule, but only the rounds Cryptonight
- * touches). Inline asm taken from upstream Monero. Uses aese for SubWord and
- * an Rcon table for the round constants. */
+/* ARMv8 Cryptonight AES key schedule. Defers to oaes_lib so the produced
+ * expanded key is bit-for-bit identical to the one the software-AES path
+ * uses (oaes_key_import_data + aesb_pseudo_round). Matching schedules is a
+ * correctness requirement: if HW and SW disagree by one byte here, the
+ * scratchpad init diverges and the final hash differs.
+ *
+ * We tried an inline-asm AES-256 schedule borrowed from Monero upstream
+ * (which forces NO_AES on ARM, so that asm has never actually run in
+ * production); the self-test in check_aesni() caught a mismatch. Using
+ * oaes is slower per call but the function only fires twice per cn_slow_hash,
+ * so the perf impact is negligible next to the 1MB scratchpad fill. */
 STATIC INLINE void aes_expand_key(const uint8_t *key, uint8_t *expandedKey)
 {
-    static const uint32_t rcon[] = {
-        0x01, 0x01, 0x01, 0x01,
-        0x0c0f0e0d, 0x0c0f0e0d, 0x0c0f0e0d, 0x0c0f0e0d,
-        0x1b, 0x1b, 0x1b, 0x1b,
-    };
-    __asm__ volatile(
-        "    eor    v0.16b,v0.16b,v0.16b\n"
-        "    ld1    {v3.16b},[%0],#16\n"
-        "    ld1    {v1.4s,v2.4s},[%2],#32\n"
-        "    ld1    {v4.16b},[%0]\n"
-        "    mov    w2,#5\n"
-        "    st1    {v3.4s},[%1],#16\n"
-        "1:\n"
-        "    tbl    v6.16b,{v4.16b},v2.16b\n"
-        "    ext    v5.16b,v0.16b,v3.16b,#12\n"
-        "    st1    {v4.4s},[%1],#16\n"
-        "    aese   v6.16b,v0.16b\n"
-        "    subs   w2,w2,#1\n"
-        "    eor    v3.16b,v3.16b,v5.16b\n"
-        "    ext    v5.16b,v0.16b,v5.16b,#12\n"
-        "    eor    v3.16b,v3.16b,v5.16b\n"
-        "    ext    v5.16b,v0.16b,v5.16b,#12\n"
-        "    eor    v6.16b,v6.16b,v1.16b\n"
-        "    eor    v3.16b,v3.16b,v5.16b\n"
-        "    shl    v1.16b,v1.16b,#1\n"
-        "    eor    v3.16b,v3.16b,v6.16b\n"
-        "    st1    {v3.4s},[%1],#16\n"
-        "    b.eq   2f\n"
-        "    dup    v6.4s,v3.s[3]\n"
-        "    ext    v5.16b,v0.16b,v4.16b,#12\n"
-        "    aese   v6.16b,v0.16b\n"
-        "    eor    v4.16b,v4.16b,v5.16b\n"
-        "    ext    v5.16b,v0.16b,v5.16b,#12\n"
-        "    eor    v4.16b,v4.16b,v5.16b\n"
-        "    ext    v5.16b,v0.16b,v5.16b,#12\n"
-        "    eor    v4.16b,v4.16b,v5.16b\n"
-        "    eor    v4.16b,v4.16b,v6.16b\n"
-        "    b      1b\n"
-        "2:\n"
-        : : "r"(key), "r"(expandedKey), "r"(rcon)
-        : "cc", "memory", "w2",
-          "v0", "v1", "v2", "v3", "v4", "v5", "v6");
+    OAES_CTX *ctx = oaes_alloc();
+    oaes_key_import_data(ctx, key, AES_KEY_SIZE);
+    const oaes_ctx *c = (const oaes_ctx *)ctx;
+    const size_t copy_len = c->key->exp_data_len < 240 ? c->key->exp_data_len : 240;
+    memcpy(expandedKey, c->key->exp_data, copy_len);
+    oaes_free(&ctx);
 }
 
 /* Cryptonight pseudo-round: 10 AES rounds with no initial AddRoundKey.
