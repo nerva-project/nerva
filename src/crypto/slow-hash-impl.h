@@ -202,7 +202,7 @@ void cn_slow_hash(cn_hash_context_t *context, const void *data, size_t length, c
     memcpy(text, state.init, init_size_byte);
     const uint64_t tweak1_2 = variant > 0 ? (state.hs.w[24] ^ (*((const uint64_t *)NONCE_POINTER))) : 0;
 
-    aes_expand_key(state.hs.b, expandedKey);
+    aes_expand_key((OAES_CTX *)context->oaes_ctx, state.hs.b, expandedKey);
     for(i = 0; i < CN_SCRATCHPAD_MEMORY / init_size_byte; i++)
     {
         aes_pseudo_round(text, text, expandedKey, INIT_SIZE_BLK);

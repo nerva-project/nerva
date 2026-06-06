@@ -36,9 +36,6 @@
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #  include <windows.h>
-#  if defined(_MSC_VER)
-#    include <intrin.h>
-#  endif
 #else
 #  include <sys/mman.h>
 #endif
@@ -85,17 +82,10 @@ static int detect_hardware_aes(void)
 #elif (defined(__linux__) || defined(__ANDROID__)) && defined(__aarch64__)
     return (getauxval(AT_HWCAP) & HWCAP_AES) != 0;
 #elif defined(__x86_64__) || (defined(_MSC_VER) && defined(_WIN64))
-    /* CPUID bit 25 of leaf 1 ECX = AES-NI support. */
-  #if defined(_MSC_VER)
-    int info[4];
-    __cpuid(info, 1);
-    return (info[2] & (1 << 25)) != 0;
-  #elif defined(__GNUC__) || defined(__clang__)
-    __builtin_cpu_init();
-    return __builtin_cpu_supports("aes") ? 1 : 0;
-  #else
-    return 1;
-  #endif
+    /* Delegate to the existing C++ helper (crypto::has_aesni in crypto.cpp)
+     * via its C-linkage wrapper, so we reuse the project's tested cpuid
+     * code instead of writing our own. */
+    return crypto_has_aesni();
 #else
     return 0;
 #endif
@@ -247,17 +237,48 @@ int cn_slow_hash_self_test(void)
     if (ctx == NULL)
         return 1;
 
-    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
-
     static const char input[] = "nerva-cn-slow-hash-hw-vs-sw-self-test";
     char hw[HASH_SIZE];
     char sw[HASH_SIZE];
+    int ok = 1;
 
+    /* v7_8: no salt use, simplest case. */
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
     cn_slow_hash_v7_8_hw(ctx, input, sizeof(input) - 1, hw, 64);
     cn_slow_hash_v7_8_sw(ctx, input, sizeof(input) - 1, sw, 64);
+    if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
+
+    /* v9: reads salt via randomize_scratchpad_4k. Neither path modifies salt
+     * in the inner loop, so one reset is enough. */
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+    memset(ctx->salt, 0, CN_SALT_MEMORY);
+    cn_slow_hash_v9_hw(ctx, input, sizeof(input) - 1, hw, 64);
+    cn_slow_hash_v9_sw(ctx, input, sizeof(input) - 1, sw, 64);
+    if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
+
+    /* v10 and v11 call salt_pad in the inner loop, which writes back into
+     * salt. Reset between HW and SW so they see the same input.
+     *
+     * These are the variants that actually secure the chain (mainnet PoW
+     * routes through cn_slow_hash_v11), and they're where HW and SW differ
+     * in r2's source buffer (&c on HW, &b on SW in slow-hash-impl.h). xx/yy
+     * picked small so the test runs in milliseconds but still triggers
+     * salt_pad at least once per inner level. */
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+    memset(ctx->salt, 0, CN_SALT_MEMORY);
+    cn_slow_hash_v10_hw(ctx, input, sizeof(input) - 1, hw, 64, 8, 2, 2, 2, 2);
+    memset(ctx->salt, 0, CN_SALT_MEMORY);
+    cn_slow_hash_v10_sw(ctx, input, sizeof(input) - 1, sw, 64, 8, 2, 2, 2, 2);
+    if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
+
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+    memset(ctx->salt, 0, CN_SALT_MEMORY);
+    cn_slow_hash_v11_hw(ctx, input, sizeof(input) - 1, hw, 64, 8, 2, 2);
+    memset(ctx->salt, 0, CN_SALT_MEMORY);
+    cn_slow_hash_v11_sw(ctx, input, sizeof(input) - 1, sw, 64, 8, 2, 2);
+    if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
 
     cn_hash_context_free(ctx);
-
-    return memcmp(hw, sw, HASH_SIZE) == 0;
+    return ok;
 #endif
 }

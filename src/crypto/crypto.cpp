@@ -658,3 +658,10 @@ POP_WARNINGS
     return sc_isnonzero(&h) == 0;
   }
 }
+
+/* C-linkage wrapper so C TUs (slow-hash.c) can call the AES-NI check
+ * without crossing the C/C++ namespace barrier themselves. */
+extern "C" int crypto_has_aesni(void)
+{
+  return crypto::has_aesni() ? 1 : 0;
+}

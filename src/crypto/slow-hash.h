@@ -84,7 +84,7 @@ union cn_slow_hash_state {
 #endif
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
-BOOL SetLockPagesPrivilege(HANDLE hProcess, BOOL bEnable)
+static BOOL SetLockPagesPrivilege(HANDLE hProcess, BOOL bEnable)
 {
     struct
     {
@@ -331,7 +331,7 @@ static inline uint8x16_t cn_arm_aesenc(uint8x16_t a, uint8x16_t k)
     hash_process(&state.hs, data, length);                                             \
     memcpy(text, state.init, init_size_byte);                                          \
     const uint64_t tweak1_2 = (state.hs.w[24] ^ (*((const uint64_t *)NONCE_POINTER))); \
-    aes_expand_key(state.hs.b, expandedKey);                                           \
+    aes_expand_key((OAES_CTX *)context->oaes_ctx, state.hs.b, expandedKey);            \
     for (i = 0; i < CN_SCRATCHPAD_MEMORY / init_size_byte; i++)                        \
     {                                                                                  \
         aes_pseudo_round(text, text, expandedKey, init_size_blk);                      \
@@ -340,7 +340,7 @@ static inline uint8x16_t cn_arm_aesenc(uint8x16_t a, uint8x16_t k)
 
 #define finalize_hash()                                                                              \
     memcpy(text, state.init, init_size_byte);                                                        \
-    aes_expand_key(&state.hs.b[32], expandedKey);                                                    \
+    aes_expand_key((OAES_CTX *)context->oaes_ctx, &state.hs.b[32], expandedKey);                     \
     for (i = 0; i < CN_SCRATCHPAD_MEMORY / init_size_byte; i++)                                      \
     {                                                                                                \
         aes_pseudo_round_xor(text, text, expandedKey, &hp_state[i * init_size_byte], init_size_blk); \
@@ -371,17 +371,20 @@ STATIC INLINE void xor64(uint64_t *a, const uint64_t b)
  *
  * We tried an inline-asm AES-256 schedule borrowed from Monero upstream
  * (which forces NO_AES on ARM, so that asm has never actually run in
- * production); the self-test in check_aesni() caught a mismatch. Using
- * oaes is slower per call but the function only fires twice per cn_slow_hash,
- * so the perf impact is negligible next to the 1MB scratchpad fill. */
-STATIC INLINE void aes_expand_key(const uint8_t *key, uint8_t *expandedKey)
+ * production); the self-test in check_aesni() caught a mismatch.
+ *
+ * The oaes context is borrowed from cn_hash_context_t (which already owns
+ * one for the SW path) to avoid a malloc/free pair on every hash. */
+STATIC INLINE void aes_expand_key(OAES_CTX *oaes, const uint8_t *key, uint8_t *expandedKey)
 {
-    OAES_CTX *ctx = oaes_alloc();
-    oaes_key_import_data(ctx, key, AES_KEY_SIZE);
-    const oaes_ctx *c = (const oaes_ctx *)ctx;
+    if (oaes == NULL) {
+        memset(expandedKey, 0, 240);
+        return;
+    }
+    oaes_key_import_data(oaes, key, AES_KEY_SIZE);
+    const oaes_ctx *c = (const oaes_ctx *)oaes;
     const size_t copy_len = c->key->exp_data_len < 240 ? c->key->exp_data_len : 240;
     memcpy(expandedKey, c->key->exp_data, copy_len);
-    oaes_free(&ctx);
 }
 
 /* Cryptonight pseudo-round: 10 AES rounds with no initial AddRoundKey.
@@ -463,8 +466,10 @@ STATIC INLINE void aes_256_assist2(__m128i *t1, __m128i *t3)
     *t3 = _mm_xor_si128(*t3, t2);
 }
 
-STATIC INLINE void aes_expand_key(const uint8_t *key, uint8_t *expandedKey)
+STATIC INLINE void aes_expand_key(OAES_CTX *oaes, const uint8_t *key, uint8_t *expandedKey)
 {
+    /* x86 uses the AES-NI key-schedule intrinsic, not oaes. */
+    (void)oaes;
     __m128i *ek = R128(expandedKey);
     __m128i t1, t2, t3;
 
@@ -708,6 +713,6 @@ STATIC void xor64(uint8_t *left, const uint8_t *right)
         b[i] = state.k[AES_BLOCK_SIZE + i] ^ state.k[AES_BLOCK_SIZE * 3 + i]; \
     }
 
-#endif // !defined(NO_AES) && (defined(__x86_64__) || (defined(_MSC_VER) && defined(_WIN64)))
+#endif // !defined(CN_FORCE_SOFTWARE_AES) && !defined(NO_AES) && (HW-AES-capable targets)
 
 #endif // SLOW_HASH_H

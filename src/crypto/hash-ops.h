@@ -126,6 +126,10 @@ typedef struct cn_hash_context
 cn_hash_context_t *cn_hash_context_create(void);
 void cn_hash_context_free(cn_hash_context_t *context);
 
+/* Returns 1 if the CPU supports the AES-NI instruction set, 0 otherwise.
+ * Wraps crypto::has_aesni() so it's callable from C TUs. */
+int crypto_has_aesni(void);
+
 /* Returns 1 if cn_slow_hash will dispatch to the hardware-AES implementation,
  * 0 if it will fall back to software AES. Useful for startup logging and for
  * the optional HW-vs-SW self-test. */

@@ -88,7 +88,10 @@ if (NOT NO_AES)
     list(APPEND crypto_sources slow-hash-hw.c)
     set_source_files_properties(slow-hash-hw.c PROPERTIES
       COMPILE_FLAGS "${CN_ARM_CRYPTO_FLAG}")
-  elseif (NOT ARM AND NOT PPC64LE AND NOT PPC64 AND NOT PPC AND NOT S390X AND NOT RISCV AND NOT LOONGARCH)
+  elseif (BUILD_64 AND NOT ARM AND NOT PPC64LE AND NOT PPC64 AND NOT PPC AND NOT S390X AND NOT RISCV AND NOT LOONGARCH)
+    # 64-bit x86 only. slow-hash.h's HW gate is __x86_64__ / _WIN64, so on
+    # i686 the TU would compile as the SW-path body anyway and never be
+    # called by detect_hardware_aes(). Skip it to avoid the duplicate.
     set(_slow_hash_hw_supported TRUE)
     list(APPEND crypto_sources slow-hash-hw.c)
     # -maes is already on CMAKE_C_FLAGS / CMAKE_CXX_FLAGS for x86.
