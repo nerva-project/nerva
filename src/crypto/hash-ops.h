@@ -112,9 +112,9 @@ typedef struct cn_random_values
 
 typedef struct cn_hash_context
 {
-  #if defined(NO_AES) || !(defined(__x86_64__) || (defined(_MSC_VER) && defined(_WIN64)))
+  /* Software-AES path always has its context allocated so the runtime
+   * dispatcher can fall back to it without a hash-time allocation. */
   void *oaes_ctx;
-  #endif
   uint8_t *scratchpad;
   int scratchpad_is_mapped;
   char *salt;
@@ -125,6 +125,16 @@ typedef struct cn_hash_context
 
 cn_hash_context_t *cn_hash_context_create(void);
 void cn_hash_context_free(cn_hash_context_t *context);
+
+/* Returns 1 if cn_slow_hash will dispatch to the hardware-AES implementation,
+ * 0 if it will fall back to software AES. Useful for startup logging and for
+ * the optional HW-vs-SW self-test. */
+int cn_hardware_aes_supported(void);
+
+/* Hashes a fixed input with both the HW and SW paths and compares. Returns 1
+ * on success or when the HW path isn't built/active (nothing to verify), and
+ * 0 if HW and SW disagree, which would mean wrong PoW. */
+int cn_slow_hash_self_test(void);
 
 void cn_slow_hash(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters);
 void cn_slow_hash_v11(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);

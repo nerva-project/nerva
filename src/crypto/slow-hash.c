@@ -29,19 +29,127 @@
 //
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <stddef.h>
+
+#if defined(_MSC_VER) || defined(__MINGW32__)
+#  include <windows.h>
+#  if defined(_MSC_VER)
+#    include <intrin.h>
+#  endif
+#else
+#  include <sys/mman.h>
+#endif
+
+#if defined(__linux__) || defined(__ANDROID__)
+#  include <sys/auxv.h>
+#  if defined(__aarch64__) && !defined(HWCAP_AES)
+#    define HWCAP_AES (1 << 3)
+#  endif
+#endif
+
 #include "hash-ops.h"
+#include "oaes_lib.h"
 #include "slow-hash.h"
 
-#pragma pack(push, 1)
-union cn_slow_hash_state {
-    union hash_state hs;
-    struct
-    {
-        uint8_t k[64];
-        uint8_t init[128];
-    };
-};
-#pragma pack(pop)
+#if defined(SLOW_HASH_HW_AES_BUILT)
+extern void cn_slow_hash_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters);
+extern void cn_slow_hash_v7_8_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters);
+extern void cn_slow_hash_v9_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters);
+extern void cn_slow_hash_v10_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww);
+extern void cn_slow_hash_v11_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
+#endif
+
+extern void cn_slow_hash_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters);
+extern void cn_slow_hash_v7_8_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters);
+extern void cn_slow_hash_v9_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters);
+extern void cn_slow_hash_v10_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww);
+extern void cn_slow_hash_v11_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
+
+/* Runtime CPU detection. Cached in a function-static so the per-hash overhead
+ * is one branch on a hot variable. Override with NERVA_FORCE_SOFTWARE_AES=1 to
+ * exercise the SW path on a HW-capable CPU (useful for self-tests / debugging). */
+static int detect_hardware_aes(void)
+{
+    const char *force_sw = getenv("NERVA_FORCE_SOFTWARE_AES");
+    if (force_sw != NULL && force_sw[0] != '\0' && force_sw[0] != '0')
+        return 0;
+
+#if !defined(SLOW_HASH_HW_AES_BUILT)
+    return 0;
+#elif defined(__APPLE__) && defined(__aarch64__)
+    /* Apple Silicon always implements the ARMv8 Crypto Extensions. */
+    return 1;
+#elif (defined(__linux__) || defined(__ANDROID__)) && defined(__aarch64__)
+    return (getauxval(AT_HWCAP) & HWCAP_AES) != 0;
+#elif defined(__x86_64__) || (defined(_MSC_VER) && defined(_WIN64))
+    /* CPUID bit 25 of leaf 1 ECX = AES-NI support. */
+  #if defined(_MSC_VER)
+    int info[4];
+    __cpuid(info, 1);
+    return (info[2] & (1 << 25)) != 0;
+  #elif defined(__GNUC__) || defined(__clang__)
+    __builtin_cpu_init();
+    return __builtin_cpu_supports("aes") ? 1 : 0;
+  #else
+    return 1;
+  #endif
+#else
+    return 0;
+#endif
+}
+
+int cn_hardware_aes_supported(void)
+{
+    static int cached = -1;
+    if (cached < 0)
+        cached = detect_hardware_aes();
+    return cached;
+}
+
+#define CN_DISPATCH(call_hw, call_sw) \
+    do { \
+        if (cn_hardware_aes_supported()) { call_hw; } else { call_sw; } \
+    } while (0)
+
+#if !defined(SLOW_HASH_HW_AES_BUILT)
+/* No HW path compiled in for this target; reduce dispatch to a direct call.
+ * call_hw is dropped without evaluation since the _hw symbols don't exist. */
+#undef CN_DISPATCH
+#define CN_DISPATCH(call_hw, call_sw) do { call_sw; } while (0)
+#endif
+
+void cn_slow_hash(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters)
+{
+    CN_DISPATCH(cn_slow_hash_hw(ctx, data, length, hash, variant, prehashed, iters),
+                cn_slow_hash_sw(ctx, data, length, hash, variant, prehashed, iters));
+}
+
+void cn_slow_hash_v7_8(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters)
+{
+    CN_DISPATCH(cn_slow_hash_v7_8_hw(ctx, data, length, hash, iters),
+                cn_slow_hash_v7_8_sw(ctx, data, length, hash, iters));
+}
+
+void cn_slow_hash_v9(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters)
+{
+    CN_DISPATCH(cn_slow_hash_v9_hw(ctx, data, length, hash, iters),
+                cn_slow_hash_v9_sw(ctx, data, length, hash, iters));
+}
+
+void cn_slow_hash_v10(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww)
+{
+    CN_DISPATCH(cn_slow_hash_v10_hw(ctx, data, length, hash, iters, init_size_blk, xx, yy, zz, ww),
+                cn_slow_hash_v10_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy, zz, ww));
+}
+
+void cn_slow_hash_v11(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
+{
+    CN_DISPATCH(cn_slow_hash_v11_hw(ctx, data, length, hash, iters, init_size_blk, xx, yy),
+                cn_slow_hash_v11_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy));
+}
 
 static int allocate_hugepage(size_t size, void **hp)
 {
@@ -86,13 +194,11 @@ cn_hash_context_t *cn_hash_context_create(void)
     if (ctx == NULL) {
         return NULL;
     }
-    #if defined(CN_USE_SOFTWARE_AES)
     ctx->oaes_ctx = oaes_alloc();
     if (ctx->oaes_ctx == NULL) {
         free(ctx);
         return NULL;
     }
-    #endif
     ctx->scratchpad_is_mapped = allocate_hugepage(CN_SCRATCHPAD_MEMORY, (void **)&(ctx->scratchpad));
     if (ctx->scratchpad == NULL) {
         cn_hash_context_free(ctx);
@@ -112,17 +218,15 @@ void cn_hash_context_free(cn_hash_context_t *context)
     if (context == NULL)
         return;
 
-#if defined(CN_USE_SOFTWARE_AES)
     if (context->oaes_ctx != NULL) {
         oaes_free((OAES_CTX **)&(context->oaes_ctx));
     }
-#endif
 
     if (context->scratchpad != NULL) {
         free_hugepage(context->scratchpad, CN_SCRATCHPAD_MEMORY, context->scratchpad_is_mapped);
         context->scratchpad = NULL;
     }
-    
+
     if (context->salt != NULL) {
         free_hugepage(context->salt, CN_SALT_MEMORY, context->salt_is_mapped);
         context->salt = NULL;
@@ -131,377 +235,29 @@ void cn_hash_context_free(cn_hash_context_t *context)
     free(context);
 }
 
-
-#if !defined(CN_USE_SOFTWARE_AES)
-
-void cn_slow_hash_v11(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
+int cn_slow_hash_self_test(void)
 {
-    uint8_t * const hp_state = context->scratchpad;
-    char * const salt = context->salt;
-    char salt_hash[HASH_SIZE];
-    init_hash();
-    expand_key();
-    randomize_scratchpad_256k(context->random_values, salt, hp_state);
-    xor_u64();
-
-    _b = _mm_load_si128(R128(b));
-
-    uint16_t temp_1 = 0;
-    uint32_t offset_1 = 0;
-    uint32_t offset_2 = 0;
-
-    uint16_t k = 1, l = 1;
-    uint16_t *r2 = (uint16_t *)&c;
-    for (k = 1; k < xx; k++)
-    {
-        pre_aes();
-        _c = _mm_aesenc_si128(_c, _a);
-        post_aes_variant();
-        salt_pad(salt, salt_hash, r2[0], r2[2], r2[4], r2[6]);
-
-        for (l = 1; l < yy; l++)
-        {
-            pre_aes();
-            _c = _mm_aesenc_si128(_c, _a);
-            post_aes_variant();
-            salt_pad(salt, salt_hash, r2[1], r2[3], r2[5], r2[7]);
-        }
-    }
-
-    for (i = 0; i < iters; i++)
-    {
-        pre_aes();
-        _c = _mm_aesenc_si128(_c, _a);
-        post_aes_variant();
-    }
-
-    finalize_hash();
-}
-
-void cn_slow_hash_v10(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww)
-{
-    uint8_t * const hp_state = context->scratchpad;
-    char * const salt = context->salt;
-    char salt_hash[HASH_SIZE];
-    init_hash();
-    expand_key();
-    randomize_scratchpad_256k(context->random_values, salt, hp_state);
-    xor_u64();
-
-    _b = _mm_load_si128(R128(b));
-
-    uint16_t temp_1 = 0;
-    uint32_t offset_1 = 0;
-    uint32_t offset_2 = 0;
-
-    uint16_t r2[6] = {xx ^ yy, xx ^ zz, xx ^ ww, yy ^ zz, yy ^ ww, zz ^ ww};
-    uint16_t k = 1, l = 1, m = 1;
-
-    for (k = 1; k < xx; k++)
-    {
-        r2[0] ^= r2[1];
-        r2[1] ^= r2[2];
-        r2[2] ^= r2[3];
-        r2[3] ^= r2[4];
-        r2[4] ^= r2[5];
-        r2[5] ^= r2[0];
-
-        pre_aes();
-        _c = _mm_aesenc_si128(_c, _a);
-        post_aes_variant();
-        salt_pad(salt, salt_hash, r2[0], r2[3], r2[1], r2[4]);
-        r2[0] ^= (r2[1] ^ r2[3]);
-        r2[1] ^= (r2[0] ^ r2[2]);
-
-        for (l = 1; l < yy; l++)
-        {
-            pre_aes();
-            _c = _mm_aesenc_si128(_c, _a);
-            post_aes_variant();
-            salt_pad(salt, salt_hash, r2[1], r2[4], r2[2], r2[5]);
-            r2[2] ^= (r2[3] ^ r2[5]);
-            r2[3] ^= (r2[2] ^ r2[4]);
-
-            for (m = 1; m < zz; m++)
-            {
-                pre_aes();
-                _c = _mm_aesenc_si128(_c, _a);
-                post_aes_variant();
-                salt_pad(salt, salt_hash, r2[2], r2[5], r2[3], r2[0]);
-                r2[4] ^= (r2[5] ^ r2[1]);
-                r2[5] ^= (r2[4] ^ r2[0]);
-            }
-        }
-    }
-
-    for (i = 0; i < iters; i++)
-    {
-        pre_aes();
-        _c = _mm_aesenc_si128(_c, _a);
-        post_aes_variant();
-    }
-
-    finalize_hash();
-}
-
-void cn_slow_hash_v9(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters)
-{
-    uint8_t * const hp_state = context->scratchpad;
-    char * const salt = context->salt;
-    const uint8_t init_size_blk = INIT_SIZE_BLK;
-    init_hash();
-    expand_key();
-    randomize_scratchpad_4k(context->random_values, salt, hp_state);
-    xor_u64();
-
-    _b = _mm_load_si128(R128(b));
-
-    for(i = 0; i < iters; i++)
-    {
-        pre_aes();
-        _c = _mm_aesenc_si128(_c, _a);
-        post_aes_variant();
-    }
-
-    finalize_hash();
-}
-
-void cn_slow_hash_v7_8(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters)
-{
-    uint8_t * const hp_state = context->scratchpad;
-    const uint8_t init_size_blk = INIT_SIZE_BLK;
-    init_hash();
-    expand_key();
-    randomize_scratchpad(context->random_values, hp_state);
-    xor_u64();
-
-    _b = _mm_load_si128(R128(b));
-
-    for (i = 0; i < iters; i++)
-    {
-        pre_aes();
-        _c = _mm_aesenc_si128(_c, _a);
-        post_aes_variant();
-    }
-
-    finalize_hash();
-}
-
-void cn_slow_hash(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters)
-{ 
-    uint8_t * const hp_state = context->scratchpad;
-    const uint8_t init_size_blk = INIT_SIZE_BLK;
-    init_hash();
-
-    if (prehashed)
-        memcpy(&state.hs, data, length);
-    else
-        hash_process(&state.hs, data, length);
-
-    memcpy(text, state.init, init_size_byte);
-    const uint64_t tweak1_2 = variant > 0 ? (state.hs.w[24] ^ (*((const uint64_t *)NONCE_POINTER))) : 0;
-
-    aes_expand_key(state.hs.b, expandedKey);
-    for(i = 0; i < CN_SCRATCHPAD_MEMORY / init_size_byte; i++)
-    {
-        aes_pseudo_round(text, text, expandedKey, INIT_SIZE_BLK);
-        memcpy(&hp_state[i * init_size_byte], text, init_size_byte);
-    }
-
-    xor_u64();
-
-    _b = _mm_load_si128(R128(b));
-
-    if (variant > 0)
-    {
-        for(i = 0; i < iters; i++)
-        {
-            pre_aes();
-            _c = _mm_aesenc_si128(_c, _a);
-            post_aes_variant();
-        }
-    }
-    else
-    {
-        for(i = 0; i < iters; i++)
-        {
-            pre_aes();
-            _c = _mm_aesenc_si128(_c, _a);
-            post_aes_novariant();
-        }   
-    }
-
-    finalize_hash();
-}
-
+#if !defined(SLOW_HASH_HW_AES_BUILT)
+    return 1;
 #else
+    if (!cn_hardware_aes_supported())
+        return 1;
 
-void cn_slow_hash_v11(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
-{
-    uint8_t * const hp_state = context->scratchpad;
-    char * const salt = context->salt;
-    char salt_hash[HASH_SIZE];
-    init_hash();
-    expand_key();
-    randomize_scratchpad_256k(context->random_values, salt, hp_state);
-    xor_u64();
+    cn_hash_context_t *ctx = cn_hash_context_create();
+    if (ctx == NULL)
+        return 1;
 
-    uint16_t temp_1 = 0;
-    uint32_t offset_1 = 0;
-    uint32_t offset_2 = 0;
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
 
-    uint16_t k = 1, l = 1;
-    uint16_t *r2 = (uint16_t *)&b;
-    for (k = 1; k < xx; k++)
-    {
-        aes_sw_variant();
-        salt_pad(salt, salt_hash, r2[0], r2[2], r2[4], r2[6]);
+    static const char input[] = "nerva-cn-slow-hash-hw-vs-sw-self-test";
+    char hw[HASH_SIZE];
+    char sw[HASH_SIZE];
 
-        for (l = 1; l < yy; l++)
-        {
-            aes_sw_variant();
-            salt_pad(salt, salt_hash, r2[1], r2[3], r2[5], r2[7]);
-        }
-    }
+    cn_slow_hash_v7_8_hw(ctx, input, sizeof(input) - 1, hw, 64);
+    cn_slow_hash_v7_8_sw(ctx, input, sizeof(input) - 1, sw, 64);
 
-    for (i = 0; i < iters; i++) {
-        aes_sw_variant();
-    }
+    cn_hash_context_free(ctx);
 
-    finalize_hash();
+    return memcmp(hw, sw, HASH_SIZE) == 0;
+#endif
 }
-
-void cn_slow_hash_v10(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww)
-{
-    uint8_t * const hp_state = context->scratchpad;
-    char * const salt = context->salt;
-    char salt_hash[HASH_SIZE];
-    init_hash();
-    expand_key();
-    randomize_scratchpad_256k(context->random_values, salt, hp_state);
-    xor_u64();
-
-    uint16_t temp_1 = 0;
-    uint32_t offset_1 = 0;
-    uint32_t offset_2 = 0;
-
-    uint16_t r2[6] = {xx ^ yy, xx ^ zz, xx ^ ww, yy ^ zz, yy ^ ww, zz ^ ww};
-    uint16_t k = 1, l = 1, m = 1;
-
-    for (k = 1; k < xx; k++)
-    {
-        r2[0] ^= r2[1];
-        r2[1] ^= r2[2];
-        r2[2] ^= r2[3];
-        r2[3] ^= r2[4];
-        r2[4] ^= r2[5];
-        r2[5] ^= r2[0];
-
-        aes_sw_variant();
-        salt_pad(salt, salt_hash, r2[0], r2[3], r2[1], r2[4]);
-        r2[0] ^= (r2[1] ^ r2[3]);
-        r2[1] ^= (r2[0] ^ r2[2]);
-
-        for (l = 1; l < yy; l++)
-        {
-            aes_sw_variant();
-            salt_pad(salt, salt_hash, r2[1], r2[4], r2[2], r2[5]);
-            r2[2] ^= (r2[3] ^ r2[5]);
-            r2[3] ^= (r2[2] ^ r2[4]);
-
-            for (m = 1; m < zz; m++)
-            {
-                aes_sw_variant();
-                salt_pad(salt, salt_hash, r2[2], r2[5], r2[3], r2[0]);
-                r2[4] ^= (r2[5] ^ r2[1]);
-                r2[5] ^= (r2[4] ^ r2[0]);
-            }
-        }
-    }
-
-    for (i = 0; i < iters; i++) {
-        aes_sw_variant();
-    }
-
-    finalize_hash();
-}
-
-void cn_slow_hash_v9(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters)
-{
-    uint8_t * const hp_state = context->scratchpad;
-    char * const salt = context->salt;
-    const uint8_t init_size_blk = INIT_SIZE_BLK;
-    char salt_hash[HASH_SIZE];
-    init_hash();
-    expand_key();
-    randomize_scratchpad_4k(context->random_values, salt, hp_state);
-    xor_u64();
-
-    for (i = 0; i < iters; i++) {
-        aes_sw_variant();
-    }
-
-    finalize_hash();
-}
-
-void cn_slow_hash_v7_8(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters)
-{
-    uint8_t * const hp_state = context->scratchpad;
-    const uint8_t init_size_blk = INIT_SIZE_BLK;
-    init_hash();
-    expand_key();
-    randomize_scratchpad(context->random_values, hp_state);
-    xor_u64();
-
-    for (i = 0; i < iters; i++) {
-        aes_sw_variant();
-    }
-
-    finalize_hash();
-}
-
-void cn_slow_hash(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters)
-{
-    uint8_t * const hp_state = context->scratchpad;
-    const uint8_t init_size_blk = INIT_SIZE_BLK;
-    init_hash();
-
-    if (prehashed)
-        memcpy(&state.hs, data, length);
-    else
-        hash_process(&state.hs, data, length);
-    
-    memcpy(text, state.init, init_size_byte);
-    memcpy(aes_key, state.hs.b, AES_KEY_SIZE);
-
-    uint8_t tweak1_2[8] = {0};
-    if (variant > 0)
-    {
-        memcpy(&tweak1_2, &state.hs.b[192], sizeof(tweak1_2));
-        xor64(tweak1_2, NONCE_POINTER);
-    }
-
-    oaes_key_import_data(aes_ctx, aes_key, AES_KEY_SIZE);
-    for (i = 0; i < CN_SCRATCHPAD_MEMORY / init_size_byte; i++) {
-        for (j = 0; j < INIT_SIZE_BLK; j++) {
-            aesb_pseudo_round(&text[AES_BLOCK_SIZE * j], &text[AES_BLOCK_SIZE * j], aes_ctx->key->exp_data);
-        }
-        memcpy(&hp_state[i * init_size_byte], text, init_size_byte);
-    }
-
-    xor_u64();
-
-    if (variant > 0) {
-        for (i = 0; i < iters; i++) {
-            aes_sw_variant();
-        }
-    } else {
-        for (i = 0; i < iters; i++) {
-            aes_sw_novariant();
-        }
-    }
-
-    finalize_hash();
-}
-
-#endif // !defined(CN_USE_SOFTWARE_AES)

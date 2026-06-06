@@ -64,6 +64,9 @@
 using namespace epee;
 
 #include "crypto/crypto.h"
+extern "C" {
+#include "crypto/hash-ops.h"
+}
 #include "util.h"
 #include "stack_trace.h"
 #include "memwipe.h"
@@ -798,12 +801,24 @@ std::string get_nix_version_display_string()
   bool check_aesni()
   {
 #if !defined NO_AES
-    if (!crypto::has_aesni())
+    if (cn_hardware_aes_supported())
     {
-        MGUSER_RED(
-            "This executable requires AES-NI support, which is not available on your machine."
-            " To correct this issue, try rebuilding with compilation flag -DNO_AES.");
-        return false;
+        if (!cn_slow_hash_self_test())
+        {
+            MGUSER_RED(
+                "Hardware AES self-test FAILED: the AES intrinsic path produced a "
+                "different hash than the software path. Refusing to start with a "
+                "broken hashing implementation. Re-run with NERVA_FORCE_SOFTWARE_AES=1 "
+                "to bypass and use software AES only.");
+            return false;
+        }
+        MINFO("Hardware AES detected and self-test passed, cn_slow_hash will use the AES intrinsic path.");
+    }
+    else
+    {
+        MGUSER_YELLOW(
+            "Hardware AES (AES-NI / ARMv8 Crypto Extensions) was not detected. "
+            "Falling back to the software AES path; hashing will be substantially slower.");
     }
 #endif // !defined NO_AES
     return true;
