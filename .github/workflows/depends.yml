@@ -40,6 +40,8 @@ on:
         paths-ignore:
             - 'docs/**'
             - '**/README.md'
+    schedule:
+        -   cron: '0 6 * * 1,4'
     workflow_dispatch:
 
 env:
@@ -50,7 +52,7 @@ env:
         Acquire::ftp::Timeout "120";
         EOF
     CCACHE_SETTINGS: |
-        ccache --max-size=150M
+        ccache --max-size=500M
         ccache --set-config=compression=true
 
 jobs:
@@ -142,6 +144,7 @@ jobs:
                     ${{env.CCACHE_SETTINGS}}
                     make depends target=${{ matrix.toolchain.host }} -j${{env.MAKE_JOB_COUNT}}
             -   uses: actions/upload-artifact@v7
+                if: github.event_name != 'schedule'
                 with:
                     name: ${{ matrix.toolchain.artifact-name }}
                     path: |
