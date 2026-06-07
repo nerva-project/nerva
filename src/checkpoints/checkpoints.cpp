@@ -168,7 +168,14 @@ namespace cryptonote
     {
       return true;
     }
-    //todo: add checkpoints
+
+    // Anchors ASSUME_VALID_HEIGHT: pins the chain up to here so blocks below can
+    // safely skip PoW. Keep in sync with config_t::ASSUME_VALID_HEIGHT.
+    if (nettype == MAINNET)
+    {
+      ADD_CHECKPOINT(4250000, "bd6ad31f01f709c8986f2b5b4c568c788884098968c7ccda8ba1998f3a03e53c");
+    }
+
     return true;
   }
 
