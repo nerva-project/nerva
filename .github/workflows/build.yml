@@ -40,6 +40,8 @@ on:
         paths-ignore:
             - 'docs/**'
             - '**/README.md'
+    schedule:
+        -   cron: '0 6 * * 1,4'
     workflow_dispatch:
 
 env:
