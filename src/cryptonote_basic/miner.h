@@ -119,6 +119,7 @@ namespace cryptonote
     bool request_block_template();
     void  merge_hr();
     void  update_autodetection();
+    void  update_adaptive_threads();
     
     struct miner_config
     {
@@ -155,6 +156,7 @@ namespace cryptonote
     epee::math_helper::once_a_time_seconds<5> m_update_block_template_interval;
     epee::math_helper::once_a_time_seconds<2> m_update_merge_hr_interval;
     epee::math_helper::once_a_time_seconds<1> m_autodetect_interval;
+    epee::math_helper::once_a_time_seconds<60> m_adaptive_interval;
     std::vector<blobdata> m_extra_messages;
     miner_config m_config;
     std::string m_config_folder_path;    
@@ -167,6 +169,10 @@ namespace cryptonote
     bool m_do_print_hashrate;
     bool m_do_mining;
     std::vector<std::pair<uint64_t, uint64_t>> m_threads_autodetect;
+    bool m_adaptive_threads;
+    uint64_t m_adaptive_baseline_hr;
+    uint32_t m_adaptive_low_count;
+    uint64_t m_adaptive_cooldown_until_ms;
     boost::thread::attributes m_attrs;
 
     // background mining stuffs ..
