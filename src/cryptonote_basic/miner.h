@@ -139,7 +139,7 @@ namespace cryptonote
     uint64_t m_diffic;
     uint64_t m_height;
     volatile uint32_t m_thread_index; 
-    volatile uint32_t m_threads_total;
+    std::atomic<uint32_t> m_threads_total;
     std::atomic<uint32_t> m_threads_active;
     uint8_t m_donate_percent;
     uint8_t m_donate_counter;
