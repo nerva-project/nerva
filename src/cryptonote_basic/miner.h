@@ -120,6 +120,7 @@ namespace cryptonote
     void  merge_hr();
     void  update_autodetection();
     void  update_adaptive_threads();
+    void  restart_workers();
     
     struct miner_config
     {

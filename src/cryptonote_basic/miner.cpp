@@ -342,18 +342,7 @@ namespace cryptonote
       m_threads_total = m_threads_autodetect.size();
     }
 
-    // restart all threads
-    {
-      CRITICAL_REGION_LOCAL(m_threads_lock);
-      boost::interprocess::ipcdetail::atomic_write32(&m_stop, 1);
-      while (m_threads_active > 0)
-        misc_utils::sleep_no_w(100);
-      m_threads.clear();
-    }
-    boost::interprocess::ipcdetail::atomic_write32(&m_stop, 0);
-    boost::interprocess::ipcdetail::atomic_write32(&m_thread_index, 0);
-    for(size_t i = 0; i != m_threads_total; i++)
-      m_threads.push_back(boost::thread(m_attrs, boost::bind(&miner::worker_thread, this)));
+    restart_workers();
   }
   //-----------------------------------------------------------------------------------------------------
   void miner::update_adaptive_threads()
@@ -409,23 +398,28 @@ namespace cryptonote
         m_threads_autodetect.push_back({epee::misc_utils::get_ns_count(), (uint64_t)m_total_hashes});
         m_threads_total = 1;
 
-        {
-          CRITICAL_REGION_LOCAL(m_threads_lock);
-          boost::interprocess::ipcdetail::atomic_write32(&m_stop, 1);
-          while (m_threads_active > 0)
-            misc_utils::sleep_no_w(100);
-          m_threads.clear();
-        }
-        boost::interprocess::ipcdetail::atomic_write32(&m_stop, 0);
-        boost::interprocess::ipcdetail::atomic_write32(&m_thread_index, 0);
-        for (size_t i = 0; i != m_threads_total; i++)
-          m_threads.push_back(boost::thread(m_attrs, boost::bind(&miner::worker_thread, this)));
+        restart_workers();
       }
     }
     else
     {
       m_adaptive_low_count = 0;
     }
+  }
+  //-----------------------------------------------------------------------------------------------------
+  void miner::restart_workers()
+  {
+    {
+      CRITICAL_REGION_LOCAL(m_threads_lock);
+      boost::interprocess::ipcdetail::atomic_write32(&m_stop, 1);
+      while (m_threads_active > 0)
+        misc_utils::sleep_no_w(100);
+      m_threads.clear();
+    }
+    boost::interprocess::ipcdetail::atomic_write32(&m_stop, 0);
+    boost::interprocess::ipcdetail::atomic_write32(&m_thread_index, 0);
+    for (size_t i = 0; i != m_threads_total; i++)
+      m_threads.push_back(boost::thread(m_attrs, boost::bind(&miner::worker_thread, this)));
   }
   //-----------------------------------------------------------------------------------------------------
   void miner::init_options(boost::program_options::options_description& desc)
