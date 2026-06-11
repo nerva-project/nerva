@@ -2397,32 +2397,24 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
 
   m_block_cache.reserve(height);
 
-  // Always use a fresh read-only transaction. get_block_sync_size() caps the
-  // batch at BLOCKS_SYNCHRONIZING_SAFE_BATCH_COUNT (256), matching the
-  // stable_height offset of height-256 used by all CNA PoW variants, so
-  // stable_height blocks are always committed and visible to a read txn.
-  // Using the write txn here caused EINVAL from mdb_cursor_open on Windows
-  // (write txn is not valid for read-cursor operations in all LMDB states).
-  MDB_txn *txn;
-  if (auto r = lmdb_txn_begin(m_env, NULL, MDB_RDONLY, &txn, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", r).c_str()));
-
-  MDB_cursor *cur = nullptr;
-  if (auto r = mdb_cursor_open(txn, m_block_info, &cur))
-  {
-    mdb_txn_abort(txn);
-    throw0(DB_ERROR(lmdb_error("Failed to open block_info cursor for block cache: ", r).c_str()));
-  }
+  // Read block_info via the standard batch-aware cursor pattern. During batch
+  // sync, block_rtxn_start returns the active write txn and its already-open
+  // block_info cursor, so blocks added in the current (uncommitted) batch are
+  // visible. CNA v2 (HF7) requires this: it caches through height+1, i.e. the
+  // block currently being validated, which is still in the batch write txn.
+  // Reusing the existing cursor (rather than opening a new one) also avoids the
+  // EINVAL that mdb_cursor_open returns for a write txn under MDB_WRITEMAP on
+  // Windows -- the reason #90 switched to a fresh read-only txn, which could not
+  // see the in-batch block and so reintroduced the HF7 sync failure fixed in #65.
+  // Outside a batch, block_rtxn_start opens a fresh read-only txn.
+  TXN_PREFIX_RDONLY();
+  RCURSOR(block_info);
 
   for (uint64_t index = m_block_cache.size(); index < height; ++index)
   {
     MDB_val_set(query, index);
-    if (auto r = mdb_cursor_get(cur, (MDB_val*)&zerokval, &query, MDB_GET_BOTH))
-    {
-      mdb_cursor_close(cur);
-      mdb_txn_abort(txn);
+    if (auto r = mdb_cursor_get(m_cur_block_info, (MDB_val*)&zerokval, &query, MDB_GET_BOTH))
       throw0(DB_ERROR(lmdb_error("Failed to read block_info record for block cache: ", r).c_str()));
-    }
     const mdb_block_info *bi = (const mdb_block_info*)query.mv_data;
     block_cache_data entry;
     entry.hash      = bi->bi_hash;
@@ -2432,8 +2424,6 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
     m_block_cache.push_back(entry);
   }
 
-  mdb_cursor_close(cur);
-  mdb_txn_abort(txn);
   m_block_cache_height.store(height, std::memory_order_release);
   CRITICAL_REGION_END();
 }
