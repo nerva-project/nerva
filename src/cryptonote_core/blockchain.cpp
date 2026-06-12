@@ -3511,11 +3511,17 @@ leave:
   // be a parameter?
   // validate proof_of_work versus difficulty target
 
+  // Skip PoW for deep historical blocks below ASSUME_VALID_HEIGHT during sync
+  // (anchored by a checkpoint). Gated by --fast-block-sync; FAKECHAIN excluded
+  // as it inherits the mainnet config but never reaches that height.
+  const uint64_t assume_valid_height = cryptonote::get_config(m_nettype).ASSUME_VALID_HEIGHT;
+  const bool assume_valid = m_fast_sync && m_nettype != FAKECHAIN && assume_valid_height != 0 && blockchain_height < assume_valid_height;
+
   const bool quicksync_verified = m_quicksync.check_block(blockchain_height, id);
-  if (!quicksync_verified)
+  if (!quicksync_verified && !assume_valid)
   {
     get_block_longhash(m_hash_context, this, bl, proof_of_work, blockchain_height);
-    
+
     // validate proof_of_work versus difficulty target
     if(!check_hash(proof_of_work, current_diffic))
     {
