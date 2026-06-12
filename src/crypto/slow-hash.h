@@ -40,6 +40,7 @@
 #include <unistd.h>
 #include <math.h>
 
+#include "hash-ops.h"
 #include "int-util.h"
 #include "oaes_lib.h"
 
@@ -48,6 +49,16 @@
 #define INIT_SIZE_BLK 8
 extern void aesb_single_round(const uint8_t *in, uint8_t *out, const uint8_t *expandedKey);
 extern void aesb_pseudo_round(const uint8_t *in, uint8_t *out, const uint8_t *expandedKey);
+
+#pragma pack(push, 1)
+union cn_slow_hash_state {
+    union hash_state hs;
+    struct {
+        uint8_t k[64];
+        uint8_t init[128];
+    };
+};
+#pragma pack(pop)
 
 #if defined(_MSC_VER)
   #include <windows.h>
@@ -73,7 +84,7 @@ extern void aesb_pseudo_round(const uint8_t *in, uint8_t *out, const uint8_t *ex
 #endif
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
-BOOL SetLockPagesPrivilege(HANDLE hProcess, BOOL bEnable)
+static BOOL SetLockPagesPrivilege(HANDLE hProcess, BOOL bEnable)
 {
     struct
     {
@@ -168,7 +179,46 @@ BOOL SetLockPagesPrivilege(HANDLE hProcess, BOOL bEnable)
     randomize_scratchpad(r, scratchpad);
 
 
-#if !defined(NO_AES) && (defined(__x86_64__) || (defined(_MSC_VER) && defined(_WIN64)))
+#if !defined(CN_FORCE_SOFTWARE_AES) && !defined(NO_AES) && (         \
+        defined(__x86_64__) ||                                       \
+        (defined(_MSC_VER) && defined(_WIN64)) ||                    \
+        (defined(__aarch64__) && defined(__ARM_FEATURE_CRYPTO)))
+
+#if defined(__aarch64__) && defined(__ARM_FEATURE_CRYPTO)
+
+#include <arm_neon.h>
+
+/* Polyfills mapping the subset of x86 SSE2 / AES-NI intrinsics used by
+ * Cryptonight onto ARMv8 NEON + Crypto Extensions. The semantics match the
+ * x86 instruction exactly so the macro bodies in slow-hash.c can stay shared
+ * between architectures. */
+#define __m128i uint8x16_t
+
+static inline uint8x16_t cn_arm_load_u128(const void *p)
+{
+    return vld1q_u8((const uint8_t *)p);
+}
+static inline void cn_arm_store_u128(void *p, uint8x16_t v)
+{
+    vst1q_u8((uint8_t *)p, v);
+}
+/* x86 AES-NI: out = MixColumns(SubBytes(ShiftRows(a))) XOR k.
+ * ARMv8: vaeseq_u8(a,k') = SubBytes(ShiftRows(a XOR k')); vaesmcq_u8 = MixColumns.
+ * Feed a zero round key into vaese to get SubBytes∘ShiftRows alone, then mix,
+ * then XOR the real round key. Same final value as x86's aesenc. */
+static inline uint8x16_t cn_arm_aesenc(uint8x16_t a, uint8x16_t k)
+{
+    return veorq_u8(vaesmcq_u8(vaeseq_u8(a, vdupq_n_u8(0))), k);
+}
+
+#define _mm_load_si128(p)        cn_arm_load_u128(p)
+#define _mm_loadu_si128(p)       cn_arm_load_u128(p)
+#define _mm_store_si128(p, v)    cn_arm_store_u128(p, v)
+#define _mm_storeu_si128(p, v)   cn_arm_store_u128(p, v)
+#define _mm_xor_si128(a, b)      veorq_u8((a), (b))
+#define _mm_aesenc_si128(a, k)   cn_arm_aesenc((a), (k))
+
+#else /* x86 */
 
 #include <emmintrin.h>
 #if defined(_MSC_VER)
@@ -178,6 +228,8 @@ BOOL SetLockPagesPrivilege(HANDLE hProcess, BOOL bEnable)
 #else
   #include <wmmintrin.h>
 #endif
+
+#endif /* __aarch64__ + crypto */
 
 #if defined(__INTEL_COMPILER)
   #define ASM __asm__
@@ -203,6 +255,9 @@ BOOL SetLockPagesPrivilege(HANDLE hProcess, BOOL bEnable)
       : "=d"(hi), "=a"(lo)     \
       : "%a"(c[0]), "rm"(b[0]) \
       : "cc");
+  #elif defined(__aarch64__) && !defined(NO_OPTIMIZED_MULTIPLY_ON_ARM)
+    #define __mul() ASM("mul %0, %1, %2\n\t"   : "=r"(lo) : "r"(c[0]), "r"(b[0])); \
+                    ASM("umulh %0, %1, %2\n\t" : "=r"(hi) : "r"(c[0]), "r"(b[0]));
   #else
     #define __mul() lo = mul128(c[0], b[0], &hi);
   #endif
@@ -276,7 +331,7 @@ BOOL SetLockPagesPrivilege(HANDLE hProcess, BOOL bEnable)
     hash_process(&state.hs, data, length);                                             \
     memcpy(text, state.init, init_size_byte);                                          \
     const uint64_t tweak1_2 = (state.hs.w[24] ^ (*((const uint64_t *)NONCE_POINTER))); \
-    aes_expand_key(state.hs.b, expandedKey);                                           \
+    aes_expand_key((OAES_CTX *)context->oaes_ctx, state.hs.b, expandedKey);            \
     for (i = 0; i < CN_SCRATCHPAD_MEMORY / init_size_byte; i++)                        \
     {                                                                                  \
         aes_pseudo_round(text, text, expandedKey, init_size_blk);                      \
@@ -285,7 +340,7 @@ BOOL SetLockPagesPrivilege(HANDLE hProcess, BOOL bEnable)
 
 #define finalize_hash()                                                                              \
     memcpy(text, state.init, init_size_byte);                                                        \
-    aes_expand_key(&state.hs.b[32], expandedKey);                                                    \
+    aes_expand_key((OAES_CTX *)context->oaes_ctx, &state.hs.b[32], expandedKey);                     \
     for (i = 0; i < CN_SCRATCHPAD_MEMORY / init_size_byte; i++)                                      \
     {                                                                                                \
         aes_pseudo_round_xor(text, text, expandedKey, &hp_state[i * init_size_byte], init_size_blk); \
@@ -305,6 +360,84 @@ STATIC INLINE void xor64(uint64_t *a, const uint64_t b)
 {
     *a ^= b;
 }
+
+#if defined(__aarch64__) && defined(__ARM_FEATURE_CRYPTO)
+
+/* ARMv8 Cryptonight AES key schedule. Defers to oaes_lib so the produced
+ * expanded key is bit-for-bit identical to the one the software-AES path
+ * uses (oaes_key_import_data + aesb_pseudo_round). Matching schedules is a
+ * correctness requirement: if HW and SW disagree by one byte here, the
+ * scratchpad init diverges and the final hash differs.
+ *
+ * We tried an inline-asm AES-256 schedule borrowed from Monero upstream
+ * (which forces NO_AES on ARM, so that asm has never actually run in
+ * production); the self-test in check_aesni() caught a mismatch.
+ *
+ * The oaes context is borrowed from cn_hash_context_t (which already owns
+ * one for the SW path) to avoid a malloc/free pair on every hash. */
+STATIC INLINE void aes_expand_key(OAES_CTX *oaes, const uint8_t *key, uint8_t *expandedKey)
+{
+    if (oaes == NULL) {
+        memset(expandedKey, 0, 240);
+        return;
+    }
+    oaes_key_import_data(oaes, key, AES_KEY_SIZE);
+    const oaes_ctx *c = (const oaes_ctx *)oaes;
+    const size_t copy_len = c->key->exp_data_len < 240 ? c->key->exp_data_len : 240;
+    memcpy(expandedKey, c->key->exp_data, copy_len);
+}
+
+/* Cryptonight pseudo-round: 10 AES rounds with no initial AddRoundKey.
+ * Reformulated for ARM's (X(k) ∘ SR ∘ SB) + MC slicing so the structure
+ * matches what aes_expand_key emits. The closing veorq applies the last
+ * round key as a plain XOR, matching x86 aesenc's terminal AddRoundKey. */
+STATIC INLINE void aes_pseudo_round(const uint8_t *in, uint8_t *out, const uint8_t *expandedKey, int nblocks)
+{
+    const uint8x16_t *k = (const uint8x16_t *)expandedKey;
+    const uint8x16_t zero = vdupq_n_u8(0);
+    int i;
+    for (i = 0; i < nblocks; i++) {
+        uint8x16_t tmp = vld1q_u8(in + i * AES_BLOCK_SIZE);
+        tmp = vaeseq_u8(tmp, zero);
+        tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[0]);  tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[1]);  tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[2]);  tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[3]);  tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[4]);  tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[5]);  tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[6]);  tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[7]);  tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[8]);  tmp = vaesmcq_u8(tmp);
+        tmp = veorq_u8(tmp, k[9]);
+        vst1q_u8(out + i * AES_BLOCK_SIZE, tmp);
+    }
+}
+
+STATIC INLINE void aes_pseudo_round_xor(const uint8_t *in, uint8_t *out, const uint8_t *expandedKey, const uint8_t *xo, int nblocks)
+{
+    const uint8x16_t *k = (const uint8x16_t *)expandedKey;
+    const uint8x16_t *x = (const uint8x16_t *)xo;
+    int i;
+    for (i = 0; i < nblocks; i++) {
+        uint8x16_t tmp = vld1q_u8(in + i * AES_BLOCK_SIZE);
+        tmp = vaeseq_u8(tmp, x[i]);
+        tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[0]);  tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[1]);  tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[2]);  tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[3]);  tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[4]);  tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[5]);  tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[6]);  tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[7]);  tmp = vaesmcq_u8(tmp);
+        tmp = vaeseq_u8(tmp, k[8]);  tmp = vaesmcq_u8(tmp);
+        tmp = veorq_u8(tmp, k[9]);
+        vst1q_u8(out + i * AES_BLOCK_SIZE, tmp);
+    }
+}
+
+#else /* x86 path */
 
 STATIC INLINE void aes_256_assist1(__m128i *t1, __m128i *t2)
 {
@@ -333,8 +466,10 @@ STATIC INLINE void aes_256_assist2(__m128i *t1, __m128i *t3)
     *t3 = _mm_xor_si128(*t3, t2);
 }
 
-STATIC INLINE void aes_expand_key(const uint8_t *key, uint8_t *expandedKey)
+STATIC INLINE void aes_expand_key(OAES_CTX *oaes, const uint8_t *key, uint8_t *expandedKey)
 {
+    /* x86 uses the AES-NI key-schedule intrinsic, not oaes. */
+    (void)oaes;
     __m128i *ek = R128(expandedKey);
     __m128i t1, t2, t3;
 
@@ -420,6 +555,8 @@ STATIC INLINE void aes_pseudo_round_xor(const uint8_t *in, uint8_t *out, const u
         _mm_storeu_si128((R128(out + i * AES_BLOCK_SIZE)), d);
     }
 }
+
+#endif /* ARM vs x86 within the HW-AES branch */
 
 #else
 
@@ -576,6 +713,6 @@ STATIC void xor64(uint8_t *left, const uint8_t *right)
         b[i] = state.k[AES_BLOCK_SIZE + i] ^ state.k[AES_BLOCK_SIZE * 3 + i]; \
     }
 
-#endif // !defined(NO_AES) && (defined(__x86_64__) || (defined(_MSC_VER) && defined(_WIN64)))
+#endif // !defined(CN_FORCE_SOFTWARE_AES) && !defined(NO_AES) && (HW-AES-capable targets)
 
 #endif // SLOW_HASH_H
