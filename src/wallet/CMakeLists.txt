@@ -75,6 +75,7 @@ target_link_libraries(wallet
   PRIVATE
     ${EXTRA_LIBRARIES})
 
+if(NOT IOS)
 set(wallet_rpc_sources
   wallet_rpc_server.cpp)
 
@@ -110,6 +111,7 @@ set_property(TARGET wallet_rpc_server
   PROPERTY
     OUTPUT_NAME "nerva-wallet-rpc")
 install(TARGETS wallet_rpc_server DESTINATION bin)
+endif()
 
 
 # build and install libwallet_merged only if we building for GUI
