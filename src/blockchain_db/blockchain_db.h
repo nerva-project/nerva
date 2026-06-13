@@ -384,6 +384,7 @@ private:
                 , const uint64_t& coins_generated
                 , uint64_t num_rct_outs
                 , const crypto::hash& blk_hash
+                , const crypto::hash& uncle_blk_hash
                 ) = 0;
 
   /**
@@ -837,6 +838,7 @@ public:
                             , const difficulty_type_128& cumulative_difficulty
                             , const uint64_t& coins_generated
                             , const std::vector<std::pair<transaction, blobdata>>& txs
+                            , const crypto::hash& uncle_blk_hash
                             );
 
   /**

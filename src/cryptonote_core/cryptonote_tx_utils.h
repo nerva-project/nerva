@@ -46,7 +46,7 @@ namespace cryptonote
 {
 
   //---------------------------------------------------------------
-  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce = blobdata(), size_t max_outs = 999, uint8_t hard_fork_version = 1);
+  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce = blobdata(), size_t max_outs = 999, uint8_t hard_fork_version = 1, crypto::public_key* uncle_reward_out_key = nullptr, crypto::public_key* uncle_tx_pubkey = nullptr, int* uncle_reward_idx = nullptr);
 
   bool construct_genesis_tx(transaction& tx, uint64_t amount);
 
@@ -154,6 +154,9 @@ namespace cryptonote
   bool get_block_longhash_v10(crypto::cn_hash_context_t *context, cryptonote::BlockchainDB &db, const blobdata &blob, crypto::hash &res, uint64_t height);
   bool get_block_longhash_v9(crypto::cn_hash_context_t *context, cryptonote::BlockchainDB &db, const blobdata &blob, crypto::hash &res, uint64_t height);
   bool get_block_longhash_v7_8(crypto::cn_hash_context_t *context, cryptonote::BlockchainDB &db, const blobdata &blob, crypto::hash &res, uint64_t height, uint64_t data_offset);
+
+  int get_mainchain_block_original_miner_details(const cryptonote::block &block, crypto::public_key &output_key, crypto::public_key &tx_pkey);
+  int get_uncle_block_original_miner_details(const cryptonote::block &block, crypto::public_key &output_key, crypto::public_key &tx_pkey);
 }
 
 namespace boost
