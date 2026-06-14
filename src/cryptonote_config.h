@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -219,7 +219,8 @@ namespace config
         { 9, 240500},
         {10, 341000},
         {11, 500000},
-        {12, 930000}
+        {12, 930000},
+        {13, 4300000}   // CryptoNight-Adaptive v6: 4 MB scratchpad + random VM program
     };
 
     namespace testnet
@@ -244,7 +245,8 @@ namespace config
             { 9, 570},
             {10, 580},
             {11, 590},
-            {12, 2000}
+            {12, 2000},
+            {13, 2100}
         };
     }
 
@@ -267,7 +269,8 @@ namespace config
             { 9, 570},
             {10, 580},
             {11, 590},
-            {12, 700}
+            {12, 700},
+            {13, 800}
         };
     }
 }

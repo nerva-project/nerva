@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 // 
 // All rights reserved.
@@ -88,7 +88,8 @@ void tree_hash(const char (*hashes)[HASH_SIZE], size_t count, char *root_hash);
 
 void cn_fast_hash(const void *data, size_t length, char *hash);
 
-#define CN_SCRATCHPAD_MEMORY 1048576
+#define CN_SCRATCHPAD_MEMORY    1048576         // 1 MB — used by v9–v12
+#define CN_SCRATCHPAD_MEMORY_V13 (4*1024*1024)  // 4 MB — used by v13 (CryptoNight-Adaptive v6)
 #define CN_SALT_MEMORY 262144
 #define CN_RANDOM_VALUES 32
 
@@ -115,8 +116,10 @@ typedef struct cn_hash_context
   /* Software-AES path always has its context allocated so the runtime
    * dispatcher can fall back to it without a hash-time allocation. */
   void *oaes_ctx;
-  uint8_t *scratchpad;
+  uint8_t *scratchpad;       // 1 MB  — v9–v12
   int scratchpad_is_mapped;
+  uint8_t *cna_scratchpad;   // 4 MB  — v13 (CryptoNight-Adaptive v6)
+  int cna_scratchpad_is_mapped;
   char *salt;
   int salt_is_mapped;
   cn_random_values_t random_values;
@@ -142,6 +145,7 @@ int cn_slow_hash_self_test(void);
 
 void cn_slow_hash(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters);
 void cn_slow_hash_v11(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
+void cn_slow_hash_v13(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
 void cn_slow_hash_v10(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww);
 void cn_slow_hash_v9(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters);
 void cn_slow_hash_v7_8(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters);

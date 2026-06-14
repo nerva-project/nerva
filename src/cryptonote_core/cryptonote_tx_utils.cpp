@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 // 
 // All rights reserved.
@@ -654,6 +654,39 @@ namespace cryptonote
     return get_block_longhash(context, db, b.major_version, blob, res, height);
   }
   //---------------------------------------------------------------
+  bool get_block_longhash_v13(crypto::cn_hash_context_t *context, BlockchainDB &db, const blobdata &blob, crypto::hash &res, uint64_t height)
+  {
+    assert(height > 257);
+    const uint64_t stable_height = height - 256;
+
+    if (context->cached_height != height)
+    {
+      db.get_cna_v2_data(&context->random_values, stable_height, CN_SCRATCHPAD_MEMORY_V13);
+      context->cached_height = height;
+    }
+
+    // Per-nonce seed: HC128 PRNG seeded from blob hash, used to fill chain salt.
+    crypto::hash blob_hash;
+    get_blob_hash(blob, blob_hash);
+
+    HC128_State rng_state;
+    HC128_Init(&rng_state, (unsigned char *)blob_hash.data, (unsigned char *)blob_hash.data + 16);
+
+    db.get_cna_v5_data(context->salt, &rng_state, stable_height);
+
+    // Build 32-byte program seed: blob_hash XOR first 32 bytes of chain salt.
+    // This seed is unique per (height, nonce) and requires the blockchain DB,
+    // preserving pool resistance.
+    uint8_t seed[32];
+    const uint8_t *salt_bytes = reinterpret_cast<const uint8_t *>(context->salt);
+    const uint8_t *hash_bytes = reinterpret_cast<const uint8_t *>(blob_hash.data);
+    for (int i = 0; i < 32; i++)
+      seed[i] = hash_bytes[i] ^ salt_bytes[i];
+
+    cn_slow_hash_v13(context, blob.data(), blob.size(), res.data, seed);
+    return true;
+  }
+  //---------------------------------------------------------------
   bool get_block_longhash(crypto::cn_hash_context_t *context, BlockchainDB &db, const uint8_t major_version, const blobdata &blob, crypto::hash &res, const uint64_t height)
   {
     if (major_version < 7)
@@ -674,8 +707,11 @@ namespace cryptonote
         return get_block_longhash_v9(context, db, blob, res, height);
       case 10:
         return get_block_longhash_v10(context, db, blob, res, height);
-      default:
+      case 11:
+      case 12:
         return get_block_longhash_v11(context, db, blob, res, height);
+      default:
+        return get_block_longhash_v13(context, db, blob, res, height);
     }
   }
   //---------------------------------------------------------------
