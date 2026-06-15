@@ -91,6 +91,8 @@ void cn_fast_hash(const void *data, size_t length, char *hash);
 #define CN_SCRATCHPAD_MEMORY    1048576         // 1 MB — used by v9–v12
 #define CN_SCRATCHPAD_MEMORY_V13 (4*1024*1024)  // 4 MB — used by v13 (CryptoNight-Adaptive v6)
 #define CN_SALT_MEMORY 262144
+#define CNA_V6_WINDOW_BLOCKS     100000U        // recent-block window for sliding reads (~5.6 MB)
+#define CNA_V6_FULL_HISTORY_ODDS 13U            // out of 256 (~5%) go to full history
 #define CN_RANDOM_VALUES 32
 
 enum {

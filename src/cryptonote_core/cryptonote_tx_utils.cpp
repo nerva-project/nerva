@@ -672,7 +672,7 @@ namespace cryptonote
     HC128_State rng_state;
     HC128_Init(&rng_state, (unsigned char *)blob_hash.data, (unsigned char *)blob_hash.data + 16);
 
-    db.get_cna_v5_data(context->salt, &rng_state, stable_height);
+    db.get_cna_v6_data(context->salt, &rng_state, stable_height);
 
     // Build 32-byte program seed: blob_hash XOR first 32 bytes of chain salt.
     // This seed is unique per (height, nonce) and requires the blockchain DB,
