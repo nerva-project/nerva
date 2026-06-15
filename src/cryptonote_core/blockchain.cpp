@@ -2726,6 +2726,11 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
         tvc.m_invalid_output = true;
         return false;
       }
+      if (!rct::isInMainSubgroup(rct::pk2rct(out_to_key.key)) || out_to_key.key == rct::rct2pk(rct::identity())) {
+        MERROR_VER("Output public key is identity or not in main subgroup");
+        tvc.m_invalid_output = true;
+        return false;
+      }
     }
   }
 
@@ -2914,10 +2919,24 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     // make sure tx output has key offset(s) (is signed to be used)
     CHECK_AND_ASSERT_MES(in_to_key.key_offsets.size(), false, "empty in_to_key.key_offsets in transaction with id " << get_transaction_hash(tx));
 
+    for (size_t k = 1; k < in_to_key.key_offsets.size(); ++k) {
+      if (in_to_key.key_offsets[k] == 0) {
+        MERROR_VER("Transaction input has duplicate ring member");
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
+    }
+
     if(have_tx_keyimg_as_spent(in_to_key.k_image))
     {
       MERROR_VER("Key image already spent in blockchain: " << epee::string_tools::pod_to_hex(in_to_key.k_image));
       tvc.m_double_spend = true;
+      return false;
+    }
+
+    if (!rct::isInMainSubgroup(rct::ki2rct(in_to_key.k_image)) || rct::ki2rct(in_to_key.k_image) == rct::identity()) {
+      MERROR_VER("Key image is identity or not in main subgroup");
+      tvc.m_verifivation_failed = true;
       return false;
     }
 
