@@ -3651,6 +3651,14 @@ leave:
 
     // validate that transaction inputs and the keys spending them are correct.
     tx_verification_context tvc;
+    if(!check_tx_outputs(tx, tvc))
+    {
+      MERROR_VER("Block with id: " << id << " has at least one transaction (id: " << tx_id << ") with invalid outputs.");
+      add_block_as_invalid(bl, id);
+      bvc.m_verifivation_failed = true;
+      return_tx_to_pool(txs);
+      goto leave;
+    }
     if(!check_tx_inputs(tx, tvc))
     {
       MERROR_VER("Block with id: " << id  << " has at least one transaction (id: " << tx_id << ") with wrong inputs.");
