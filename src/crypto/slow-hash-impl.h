@@ -266,8 +266,13 @@ void cn_slow_hash_v13(cn_hash_context_t *context, const void *data, size_t lengt
         uint32_t si;
         for (si = 0; si < CN_SCRATCHPAD_MEMORY_V13; si += 4)
         {
-            hp_state[si] ^= ((const uint8_t *)salt)[s_off];
-            if (++s_off >= (uint32_t)CN_SALT_MEMORY)
+            uint32_t sv, sp;
+            memcpy(&sv, (const uint8_t *)salt + s_off, 4);
+            memcpy(&sp, hp_state + si, 4);
+            sp ^= sv;
+            memcpy(hp_state + si, &sp, 4);
+            s_off += 4;
+            if (s_off >= (uint32_t)CN_SALT_MEMORY)
                 s_off = 0;
         }
     }
@@ -531,8 +536,13 @@ void cn_slow_hash_v13(cn_hash_context_t *context, const void *data, size_t lengt
         uint32_t si;
         for (si = 0; si < CN_SCRATCHPAD_MEMORY_V13; si += 4)
         {
-            hp_state[si] ^= ((const uint8_t *)salt)[s_off];
-            if (++s_off >= (uint32_t)CN_SALT_MEMORY)
+            uint32_t sv, sp;
+            memcpy(&sv, (const uint8_t *)salt + s_off, 4);
+            memcpy(&sp, hp_state + si, 4);
+            sp ^= sv;
+            memcpy(hp_state + si, &sp, 4);
+            s_off += 4;
+            if (s_off >= (uint32_t)CN_SALT_MEMORY)
                 s_off = 0;
         }
     }
