@@ -2716,7 +2716,7 @@ void BlockchainLMDB::get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t
 
 void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t height)
 {
-  assert(height > 0);
+  CHECK_AND_ASSERT_MES(height > 0, , "get_cna_v6_data called with height == 0");
   // Sliding window variant of get_cna_v5_data: 95% of block reads are biased
   // to the most recent CNA_V6_WINDOW_BLOCKS blocks (~5.6 MB), which fits in L3
   // and reduces post-HF13 sync time regardless of chain length.  The remaining

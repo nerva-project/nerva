@@ -65,7 +65,7 @@ void cn_vm_generate_program(cn_vm_program_t *prog, const uint8_t seed[32])
 // Execution primitives
 // ---------------------------------------------------------------------------
 
-static uint64_t ror64(uint64_t x, uint32_t r)
+static inline uint64_t ror64(uint64_t x, uint32_t r)
 {
     r &= 63;
     if (r == 0)
@@ -75,7 +75,7 @@ static uint64_t ror64(uint64_t x, uint32_t r)
 
 // High-quality 64-bit mixing function used by CN_OP_MIX.
 // Avalanche effect comparable to an AES round but portable and branchless.
-static uint64_t mix64(uint64_t val, uint32_t key_material)
+static inline uint64_t mix64(uint64_t val, uint32_t key_material)
 {
     uint64_t k = (uint64_t)key_material * UINT64_C(0x9e3779b97f4a7c15);
     val ^= k;

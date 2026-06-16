@@ -297,6 +297,19 @@ int cn_slow_hash_self_test(void)
     cn_slow_hash_v11_sw(ctx, input, sizeof(input) - 1, sw, 64, 8, 2, 2);
     if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
 
+    /* v13: 4 MB scratchpad + VM. seed is a fixed 32-byte value; salt and
+     * random_values reset so both paths see identical inputs. */
+    {
+        static const uint8_t seed[32] = {0};
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        memset(ctx->salt, 0, CN_SALT_MEMORY);
+        cn_slow_hash_v13_hw(ctx, input, sizeof(input) - 1, hw, seed);
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        memset(ctx->salt, 0, CN_SALT_MEMORY);
+        cn_slow_hash_v13_sw(ctx, input, sizeof(input) - 1, sw, seed);
+        if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
+    }
+
     cn_hash_context_free(ctx);
     return ok;
 #endif
