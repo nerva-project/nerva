@@ -183,13 +183,9 @@ namespace tools
       }
       return r;
 #else
-      // The real handler must never run in async-signal context: it locks a
-      // mutex and dispatches into arbitrary C++ (logging, allocation, more
-      // locks). That is undefined behaviour per POSIX. glibc tolerates it in
-      // practice, but FreeBSD's libthr aborts (coredump) when pthread state is
-      // touched from a signal handler. So the signal handler only does
-      // async-signal-safe work (a single write() to a self-pipe) and a
-      // dedicated thread runs m_handler in normal thread context.
+      // Mutex locks + arbitrary C++ in m_handler aren't async-signal-safe;
+      // FreeBSD's libthr aborts when pthread state is touched from a handler.
+      // Defer the real work to a thread fed by an async-signal-safe write().
       boost::call_once(m_dispatch_once, &signal_handler::start_dispatch_thread);
       m_handler = t;
 
@@ -222,21 +218,15 @@ namespace tools
       return TRUE;
     }
 #else
-    /*! \brief async-signal-safe handler for NIX
-     *
-     * Runs in signal context, so it must only call async-signal-safe
-     * functions. It records the signal number on a self-pipe; the dispatch
-     * thread (signal_dispatch_thread) picks it up and runs the real handler.
-     */
+    /*! \brief async-signal-safe NIX handler: records the signal on the
+     *  self-pipe; signal_dispatch_thread runs the real handler. */
     static void posix_handler(int type)
     {
       const unsigned char sig = (unsigned char)type;
-      // write() is async-signal-safe; ignore the result (errno is preserved by
-      // the kernel only across this call, and there is nothing safe to do on
-      // failure inside a signal handler anyway).
+      // write() is async-signal-safe; nothing safe to do on failure.
       const int saved_errno = errno;
       while (write(m_pipe[1], &sig, 1) < 0 && errno == EINTR) {}
-      errno = saved_errno;
+      errno = saved_errno; // restore for the interrupted code
     }
 
     /*! \brief sets up the self-pipe and the dispatch thread (once) */
