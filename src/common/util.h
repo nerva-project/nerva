@@ -33,10 +33,13 @@
 
 #include <boost/thread/locks.hpp>
 #include <boost/thread/mutex.hpp>
+#include <boost/thread/thread.hpp>
+#include <boost/thread/once.hpp>
 #include <boost/optional.hpp>
 #include <system_error>
 #include <csignal>
 #include <cstdio>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <string>
@@ -44,6 +47,10 @@
 #ifdef _WIN32
 #include "windows.h"
 #include "misc_log_ex.h"
+#else
+#include <unistd.h>
+#include <fcntl.h>
+#include <cerrno>
 #endif
 
 #include "crypto/hash.h"
@@ -176,6 +183,16 @@ namespace tools
       }
       return r;
 #else
+      // The real handler must never run in async-signal context: it locks a
+      // mutex and dispatches into arbitrary C++ (logging, allocation, more
+      // locks). That is undefined behaviour per POSIX. glibc tolerates it in
+      // practice, but FreeBSD's libthr aborts (coredump) when pthread state is
+      // touched from a signal handler. So the signal handler only does
+      // async-signal-safe work (a single write() to a self-pipe) and a
+      // dedicated thread runs m_handler in normal thread context.
+      boost::call_once(m_dispatch_once, &signal_handler::start_dispatch_thread);
+      m_handler = t;
+
       static struct sigaction sa;
       memset(&sa, 0, sizeof(struct sigaction));
       sa.sa_handler = posix_handler;
@@ -184,7 +201,6 @@ namespace tools
       sigaction(SIGINT, &sa, NULL);
       signal(SIGTERM, posix_handler);
       signal(SIGPIPE, SIG_IGN);
-      m_handler = t;
       return true;
 #endif
     }
@@ -206,10 +222,49 @@ namespace tools
       return TRUE;
     }
 #else
-    /*! \brief handler for NIX */
+    /*! \brief async-signal-safe handler for NIX
+     *
+     * Runs in signal context, so it must only call async-signal-safe
+     * functions. It records the signal number on a self-pipe; the dispatch
+     * thread (signal_dispatch_thread) picks it up and runs the real handler.
+     */
     static void posix_handler(int type)
     {
-      handle_signal(type);
+      const unsigned char sig = (unsigned char)type;
+      // write() is async-signal-safe; ignore the result (errno is preserved by
+      // the kernel only across this call, and there is nothing safe to do on
+      // failure inside a signal handler anyway).
+      const int saved_errno = errno;
+      while (write(m_pipe[1], &sig, 1) < 0 && errno == EINTR) {}
+      errno = saved_errno;
+    }
+
+    /*! \brief sets up the self-pipe and the dispatch thread (once) */
+    static void start_dispatch_thread()
+    {
+      if (pipe(m_pipe) != 0)
+        return;
+      // Make the write end non-blocking so the signal handler can never block.
+      const int flags = fcntl(m_pipe[1], F_GETFL, 0);
+      if (flags != -1)
+        fcntl(m_pipe[1], F_SETFL, flags | O_NONBLOCK);
+      boost::thread(&signal_handler::signal_dispatch_thread).detach();
+    }
+
+    /*! \brief normal-context thread that drains the self-pipe */
+    static void signal_dispatch_thread()
+    {
+      for (;;)
+      {
+        unsigned char sig = 0;
+        const ssize_t r = read(m_pipe[0], &sig, 1);
+        if (r > 0)
+          handle_signal((int)sig);
+        else if (r == 0)
+          return; // pipe closed
+        else if (errno != EINTR)
+          return; // unrecoverable read error
+      }
     }
 #endif
 
@@ -223,6 +278,12 @@ namespace tools
 
     /*! \brief where the installed handler is stored */
     static std::function<void(int)> m_handler;
+#if !defined(WIN32)
+    /*! \brief self-pipe used to defer signal handling out of signal context */
+    static int m_pipe[2];
+    /*! \brief guards one-time setup of the self-pipe and dispatch thread */
+    static boost::once_flag m_dispatch_once;
+#endif
   };
 
   void set_strict_default_file_permissions(bool strict);
