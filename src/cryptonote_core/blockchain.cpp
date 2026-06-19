@@ -2710,6 +2710,23 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
 
   const uint8_t hf_version = m_hardfork->get_current_version();
 
+  // From HF13, require at least two outputs so single-output txs can't leak the
+  // exact spent amount (no change output to obscure it). Coinbase is validated
+  // separately and never reaches here. The wallet already always emits >= 2
+  // outputs (adding a dummy zero-amount output when change is zero).
+  if (hf_version >= HF_VERSION_MIN_2_OUTPUTS)
+  {
+    if (tx.version >= 2)
+    {
+      if (tx.vout.size() < 2)
+      {
+        MERROR_VER("Tx " << get_transaction_hash(tx) << " has fewer than two outputs");
+        tvc.m_too_few_outputs = true;
+        return false;
+      }
+    }
+  }
+
   // Forbid non-zero amounts
   for (auto &o: tx.vout) {
     if (o.amount != 0) {

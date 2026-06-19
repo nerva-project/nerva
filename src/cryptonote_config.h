@@ -169,6 +169,7 @@
 #define DEFAULT_TXPOOL_MAX_WEIGHT                                       648000000ull
 
 #define HF_VERSION_LONG_TERM_BLOCK_WEIGHT                               12
+#define HF_VERSION_MIN_2_OUTPUTS                                        13
 #define CRYPTONOTE_SHORT_TERM_BLOCK_WEIGHT_SURGE_FACTOR                 50
 
 #define CRYPTONOTE_NOISE_MIN_EPOCH                                      5
