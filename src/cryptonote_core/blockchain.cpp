@@ -2876,8 +2876,13 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   PERF_TIMER(check_tx_inputs);
   LOG_PRINT_L3("Blockchain::" << __func__);
   size_t sig_index = 0;
-  if(pmax_used_block_height)
-    *pmax_used_block_height = 0;
+  // The block-verification path (handle_block_to_main_chain) passes NULL here,
+  // but the HF13 min-output-age check below needs the youngest referenced output
+  // height on every path, so point at a local when the caller doesn't want it back.
+  uint64_t max_used_block_height = 0;
+  if (!pmax_used_block_height)
+    pmax_used_block_height = &max_used_block_height;
+  *pmax_used_block_height = 0;
 
   if (tx.pruned)
     return true;
@@ -2971,6 +2976,16 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     }
 
     sig_index++;
+  }
+
+  // From HF13, require every output referenced by the ring (real + decoys) to be
+  // at least CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE blocks old, closing a decoy-timing
+  // leak. The wallet already selects outputs within this bound (gamma picker end +
+  // daemon distribution to current_height-1), so legitimate txs are unaffected.
+  if (hf_version >= HF_VERSION_ENFORCE_MIN_AGE)
+  {
+    CHECK_AND_ASSERT_MES(*pmax_used_block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE <= m_db->height(),
+        false, "Transaction spends at least one output which is too young");
   }
 
   if (!expand_transaction(tx, tx_prefix_hash, pubkeys))
