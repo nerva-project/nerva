@@ -222,7 +222,7 @@ namespace config
         {10, 341000},
         {11, 500000},
         {12, 930000},
-        {13, 4300000}   // CryptoNight-Adaptive v6: 4 MB scratchpad + random VM program
+        {13, 4300000}   // CryptoNight-Adaptive v6: 8 MB scratchpad + random VM program
     };
 
     namespace testnet

@@ -121,7 +121,7 @@ typedef struct cn_hash_context
   void *oaes_ctx;
   uint8_t *scratchpad;       // 1 MB  — v9–v12
   int scratchpad_is_mapped;
-  uint8_t *cna_scratchpad;   // 4 MB  — v13 (CryptoNight-Adaptive v6)
+  uint8_t *cna_scratchpad;   // 8 MB  — v13 (CryptoNight-Adaptive v6)
   int cna_scratchpad_is_mapped;
   char *salt;
   int salt_is_mapped;

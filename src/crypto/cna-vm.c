@@ -56,8 +56,8 @@ void cn_vm_generate_program(cn_vm_program_t *prog, const uint8_t seed[32])
         CN_OP_IADD_RS, CN_OP_ISUB, CN_OP_IMUL, CN_OP_IXOR,
         CN_OP_IROR,    CN_OP_CBRANCH, CN_OP_MIX
     };
-    // Memory-op share for this program: [48, 63]%. Always a majority, never fixed.
-    const uint32_t mem_pct = 48U + HC128_U32(&rng, &key_idx, 16U);
+    // Memory-op share for this program: [51, 63]%. Always a majority, never fixed.
+    const uint32_t mem_pct = 51U + HC128_U32(&rng, &key_idx, 13U);
 
     for (int i = 0; i < CN_PROGRAM_SIZE; i++)
     {
