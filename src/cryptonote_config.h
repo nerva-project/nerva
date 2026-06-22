@@ -171,6 +171,7 @@
 #define HF_VERSION_LONG_TERM_BLOCK_WEIGHT                               12
 #define HF_VERSION_MIN_2_OUTPUTS                                        13
 #define HF_VERSION_ENFORCE_MIN_AGE                                      13
+#define HF_VERSION_TX_KEY_VALIDATION                                    13
 #define CRYPTONOTE_SHORT_TERM_BLOCK_WEIGHT_SURGE_FACTOR                 50
 
 #define CRYPTONOTE_NOISE_MIN_EPOCH                                      5

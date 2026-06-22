@@ -2743,10 +2743,13 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
         tvc.m_invalid_output = true;
         return false;
       }
-      if (!rct::isInMainSubgroup(rct::pk2rct(out_to_key.key)) || out_to_key.key == rct::rct2pk(rct::identity())) {
-        MERROR_VER("Output public key is identity or not in main subgroup");
-        tvc.m_invalid_output = true;
-        return false;
+      // From HF13 only (gated so historical resync is unaffected).
+      if (hf_version >= HF_VERSION_TX_KEY_VALIDATION) {
+        if (!rct::isInMainSubgroup(rct::pk2rct(out_to_key.key)) || out_to_key.key == rct::rct2pk(rct::identity())) {
+          MERROR_VER("Output public key is identity or not in main subgroup");
+          tvc.m_invalid_output = true;
+          return false;
+        }
       }
     }
   }
@@ -2941,11 +2944,14 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     // make sure tx output has key offset(s) (is signed to be used)
     CHECK_AND_ASSERT_MES(in_to_key.key_offsets.size(), false, "empty in_to_key.key_offsets in transaction with id " << get_transaction_hash(tx));
 
-    for (size_t k = 1; k < in_to_key.key_offsets.size(); ++k) {
-      if (in_to_key.key_offsets[k] == 0) {
-        MERROR_VER("Transaction input has duplicate ring member");
-        tvc.m_verifivation_failed = true;
-        return false;
+    // From HF13 only (gated so historical resync is unaffected).
+    if (hf_version >= HF_VERSION_TX_KEY_VALIDATION) {
+      for (size_t k = 1; k < in_to_key.key_offsets.size(); ++k) {
+        if (in_to_key.key_offsets[k] == 0) {
+          MERROR_VER("Transaction input has duplicate ring member");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
       }
     }
 
@@ -2956,10 +2962,13 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       return false;
     }
 
-    if (!rct::isInMainSubgroup(rct::ki2rct(in_to_key.k_image)) || rct::ki2rct(in_to_key.k_image) == rct::identity()) {
-      MERROR_VER("Key image is identity or not in main subgroup");
-      tvc.m_verifivation_failed = true;
-      return false;
+    // From HF13 only (gated so historical resync is unaffected).
+    if (hf_version >= HF_VERSION_TX_KEY_VALIDATION) {
+      if (!rct::isInMainSubgroup(rct::ki2rct(in_to_key.k_image)) || rct::ki2rct(in_to_key.k_image) == rct::identity()) {
+        MERROR_VER("Key image is identity or not in main subgroup");
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
     }
 
     // make sure that output being spent matches up correctly with the

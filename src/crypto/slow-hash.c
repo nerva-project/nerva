@@ -189,7 +189,9 @@ static void free_hugepage(void *hp, size_t size, int is_mapped)
 
 cn_hash_context_t *cn_hash_context_create(void)
 {
-    cn_hash_context_t *ctx = (cn_hash_context_t *)malloc(sizeof(cn_hash_context_t));
+    // calloc so pointer fields start NULL; a failed alloc can't leave
+    // cn_hash_context_free freeing an uninitialized pointer.
+    cn_hash_context_t *ctx = (cn_hash_context_t *)calloc(1, sizeof(cn_hash_context_t));
     if (ctx == NULL) {
         return NULL;
     }
