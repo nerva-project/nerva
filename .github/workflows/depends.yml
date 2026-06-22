@@ -203,9 +203,27 @@ jobs:
                     cd build/${{ matrix.toolchain.host }}/release
                     cmake -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/contrib/depends/${{ matrix.toolchain.host }}/share/toolchain.cmake ../../..
                     make -j${{env.MAKE_JOB_COUNT}} wallet_api
+            -   name: Package wallet library
+                run: |
+                    # A bare libwallet_api.a doesn't bundle its deps, so it isn't
+                    # linkable on its own. Merge the project archives and the depends
+                    # archives into one device-only (arm64 iphoneos) static lib and
+                    # ship it with the wallet/api headers. Multi-slice .xcframework
+                    # (device + simulator) is tracked as a follow-up.
+                    HOST=${{ matrix.toolchain.host }}
+                    STAGE="$GITHUB_WORKSPACE/${{ matrix.toolchain.artifact-name }}"
+                    mkdir -p "$STAGE/lib" "$STAGE/include"
+                    # skip boost's test-only frameworks: no wallet code calls them
+                    # and they collide on member names during the merge
+                    ARCHIVES=$(find "build/$HOST/release" -name '*.a'; \
+                      find "contrib/depends/$HOST/lib" -name '*.a' \
+                        ! -name 'libboost_unit_test_framework.a' \
+                        ! -name 'libboost_test_exec_monitor.a')
+                    libtool -static -o "$STAGE/lib/libnerva_wallet.a" $ARCHIVES
+                    cp src/wallet/api/*.h "$STAGE/include/"
+                    printf 'Device-only (arm64 iphoneos), pre-release.\nMulti-slice .xcframework (device + simulator) tracked separately.\n' > "$STAGE/README-ios.txt"
             -   uses: actions/upload-artifact@v7
                 if: github.event_name != 'schedule'
                 with:
                     name: ${{ matrix.toolchain.artifact-name }}
-                    path: |
-                        build/${{ matrix.toolchain.host }}/release/lib/lib*.a
+                    path: ${{ matrix.toolchain.artifact-name }}/

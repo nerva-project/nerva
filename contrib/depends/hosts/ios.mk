@@ -18,7 +18,6 @@ ios_release_CXXFLAGS=$(ios_release_CFLAGS)
 ios_debug_CFLAGS=-g -O0
 ios_debug_CXXFLAGS=$(ios_debug_CFLAGS)
 
-# host Xcode provides the toolchain
 ios_native_toolchain=
 
 ios_cmake_system=iOS
