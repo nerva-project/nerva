@@ -42,6 +42,12 @@ void cn_vm_generate_program(cn_vm_program_t *prog, const uint8_t seed[32])
     HC128_State rng;
     // Use seed as both key and IV — first 16 bytes key, last 16 bytes IV.
     HC128_Init(&rng, (unsigned char *)seed, (unsigned char *)(seed + 16));
+    // HC128_Init sets up P/Q but does NOT fill the keystream buffer; the first
+    // HC128_NextKeys generates it. Without this, the first 16 HC128_U32 reads
+    // come from uninitialised stack (keystream[0..15]), so the program is
+    // non-deterministic and the HW and SW paths disagree. Every other HC128
+    // caller (get_cna_v5_data/get_cna_v6_data) does Init then NextKeys first.
+    HC128_NextKeys(&rng);
 
     size_t key_idx = 0;
 
