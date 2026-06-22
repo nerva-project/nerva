@@ -42,14 +42,38 @@ void cn_vm_generate_program(cn_vm_program_t *prog, const uint8_t seed[32])
     HC128_State rng;
     // Use seed as both key and IV — first 16 bytes key, last 16 bytes IV.
     HC128_Init(&rng, (unsigned char *)seed, (unsigned char *)(seed + 16));
+    // HC128_Init sets up P/Q but does NOT fill the keystream buffer; the first
+    // HC128_NextKeys generates it. Without this, the first 16 HC128_U32 reads
+    // come from uninitialised stack (keystream[0..15]), so the program is
+    // non-deterministic and the HW and SW paths disagree. Every other HC128
+    // caller (get_cna_v5_data/get_cna_v6_data) does Init then NextKeys first.
+    HC128_NextKeys(&rng);
 
     size_t key_idx = 0;
+
+    // Lean the mix toward scratchpad ops. A memory-bound program hashes at the
+    // same per-core rate on a small computer, a laptop or a big grid, which is
+    // what 1 CPU = 1 vote needs. Two rules keep it honest:
+    //   - mem_pct comes from the seed, so the ratio shifts every block and no
+    //     ASIC can bake in a fixed one.
+    //   - ALU ops stay evenly weighted, so IMUL/MIX keep their bite. Multiply is
+    //     our best ASIC repellent, so we don't water it down.
+    static const uint8_t alu_ops[7] = {
+        CN_OP_IADD_RS, CN_OP_ISUB, CN_OP_IMUL, CN_OP_IXOR,
+        CN_OP_IROR,    CN_OP_CBRANCH, CN_OP_MIX
+    };
+    // Memory-op share for this program: [51, 63]%. Always a majority, never fixed.
+    const uint32_t mem_pct = 51U + HC128_U32(&rng, &key_idx, 13U);
 
     for (int i = 0; i < CN_PROGRAM_SIZE; i++)
     {
         cn_vm_instruction_t *ins = &prog->instructions[i];
 
-        ins->op    = (uint8_t)HC128_U32(&rng, &key_idx, CN_OP_COUNT);
+        if (HC128_U32(&rng, &key_idx, 100U) < mem_pct)
+            // ~55% of memory ops are reads (read-heavy keeps the pointer chase live).
+            ins->op = (HC128_U32(&rng, &key_idx, 100U) < 55U) ? CN_OP_SP_READ : CN_OP_SP_WRITE;
+        else
+            ins->op = alu_ops[HC128_U32(&rng, &key_idx, 7U)];
         ins->dst   = (uint8_t)HC128_U32(&rng, &key_idx, CN_REG_COUNT);
         ins->src   = (uint8_t)HC128_U32(&rng, &key_idx, CN_REG_COUNT);
         // shift doubles as branch offset (interpreted as int8_t for CN_OP_CBRANCH)
@@ -99,12 +123,18 @@ static inline uint64_t mix64(uint64_t val, uint32_t key_material)
 
 void cn_vm_execute(cn_vm_program_t *prog, uint8_t *scratchpad, uint64_t regs[CN_REG_COUNT])
 {
-    // Address mask: ensures 8-byte alignment within the 4 MB scratchpad.
-    // CN_SCRATCHPAD_MEMORY_V13 must be a multiple of 8.
+    // Address mask: keeps every access 8-byte aligned inside the scratchpad.
+    // CN_SCRATCHPAD_MEMORY_V13 must be a power of two and a multiple of 8.
     const size_t sp_mask = (size_t)(CN_SCRATCHPAD_MEMORY_V13 - 1) & ~(size_t)7;
     const int    pc_mask = CN_PROGRAM_SIZE - 1;   // CN_PROGRAM_SIZE is a power of 2
 
     int pc = 0;
+
+    // Each access feeds the next one's address, so the reads form a pointer chase
+    // the CPU can't run ahead of. Same trick as CryptoNight's state_index. A
+    // waited-on memory load takes about the same time on any machine, so every
+    // core hashes at one rate: 1 CPU = 1 vote.
+    uint64_t chain = 0;
 
     for (int step = 0; step < CN_PROGRAM_SIZE; step++)
     {
@@ -150,18 +180,20 @@ void cn_vm_execute(cn_vm_program_t *prog, uint8_t *scratchpad, uint64_t regs[CN_
 
         case CN_OP_SP_READ:
         {
-            size_t addr = ((size_t)((uint64_t)regs[src] + (uint64_t)ins->imm)) & sp_mask;
+            size_t addr = ((size_t)((uint64_t)regs[src] + (uint64_t)ins->imm + chain)) & sp_mask;
             memcpy(&regs[dst], &scratchpad[addr], sizeof(uint64_t));
+            chain = regs[dst];   // next address depends on the value just loaded
             break;
         }
 
         case CN_OP_SP_WRITE:
         {
-            size_t addr = ((size_t)((uint64_t)regs[dst] + (uint64_t)ins->imm)) & sp_mask;
+            size_t addr = ((size_t)((uint64_t)regs[dst] + (uint64_t)ins->imm + chain)) & sp_mask;
             uint64_t tmp;
             memcpy(&tmp, &scratchpad[addr], sizeof(uint64_t));
             tmp ^= regs[src];
             memcpy(&scratchpad[addr], &tmp, sizeof(uint64_t));
+            chain += tmp;        // keep the dependency chain rolling through writes
             break;
         }
 

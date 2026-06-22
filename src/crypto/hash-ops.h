@@ -89,7 +89,8 @@ void tree_hash(const char (*hashes)[HASH_SIZE], size_t count, char *root_hash);
 void cn_fast_hash(const void *data, size_t length, char *hash);
 
 #define CN_SCRATCHPAD_MEMORY    1048576         // 1 MB — used by v9–v12
-#define CN_SCRATCHPAD_MEMORY_V13 (4*1024*1024)  // 4 MB — used by v13 (CryptoNight-Adaptive v6)
+#define CN_SCRATCHPAD_MEMORY_V13 (8*1024*1024)  // 8 MB — v13: a bigger pad keeps hashing memory-bound
+                                                // (1 CPU = 1 vote) and costlier to put on an ASIC
 #define CN_SALT_MEMORY 262144
 #define CNA_V6_WINDOW_BLOCKS     100000U        // recent-block window for sliding reads (~5.6 MB)
 #define CNA_V6_FULL_HISTORY_ODDS 13U            // out of 256 (~5%) go to full history
@@ -120,7 +121,7 @@ typedef struct cn_hash_context
   void *oaes_ctx;
   uint8_t *scratchpad;       // 1 MB  — v9–v12
   int scratchpad_is_mapped;
-  uint8_t *cna_scratchpad;   // 4 MB  — v13 (CryptoNight-Adaptive v6)
+  uint8_t *cna_scratchpad;   // 8 MB  — v13 (CryptoNight-Adaptive v6)
   int cna_scratchpad_is_mapped;
   char *salt;
   int salt_is_mapped;

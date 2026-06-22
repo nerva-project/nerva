@@ -34,7 +34,7 @@
 // CryptoNight-Adaptive v6 virtual machine for HF13 (pool-resistant + ASIC/GPU-resistant).
 //
 // The VM generates a random program per block from a chain-rooted seed,
-// then executes it against a 4 MB scratchpad.  Combining random code
+// then executes it against an 8 MB scratchpad.  Combining random code
 // execution (defeats fixed ASIC circuits) with a large scratchpad
 // (kills GPU occupancy) while keeping the blockchain-DB seed dependency
 // that makes pool mining architecturally impossible.
@@ -52,8 +52,8 @@ typedef enum {
     CN_OP_IXOR      = 3,  // r[dst] ^= r[src]
     CN_OP_IROR      = 4,  // r[dst] = ror64(r[dst], r[src] & 63)
     CN_OP_CBRANCH   = 5,  // if (r[dst] & (imm|1)) pc = (pc + shift) % SIZE
-    CN_OP_SP_READ   = 6,  // r[dst] = scratchpad[(r[src]+imm) & mask]  (8 bytes)
-    CN_OP_SP_WRITE  = 7,  // scratchpad[(r[dst]+imm) & mask] ^= r[src]
+    CN_OP_SP_READ   = 6,  // r[dst] = scratchpad[(r[src]+imm+chain) & mask] (8B); chain = r[dst]
+    CN_OP_SP_WRITE  = 7,  // scratchpad[(r[dst]+imm+chain) & mask] ^= r[src]; chain += prev value
     CN_OP_MIX       = 8,  // r[dst] = mix64(r[dst] ^ r[src], imm)
     CN_OP_COUNT     = 9
 } cn_vm_opcode_t;

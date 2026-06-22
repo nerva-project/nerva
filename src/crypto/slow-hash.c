@@ -299,7 +299,7 @@ int cn_slow_hash_self_test(void)
     cn_slow_hash_v11_sw(ctx, input, sizeof(input) - 1, sw, 64, 8, 2, 2);
     if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
 
-    /* v13: 4 MB scratchpad + VM. seed is a fixed 32-byte value; salt and
+    /* v13: 8 MB scratchpad + VM. seed is a fixed 32-byte value; salt and
      * random_values reset so both paths see identical inputs. */
     {
         static const uint8_t seed[32] = {0};
