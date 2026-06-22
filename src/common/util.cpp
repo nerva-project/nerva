@@ -137,6 +137,10 @@ namespace tools
   }
 
   std::function<void(int)> signal_handler::m_handler;
+#if !defined(WIN32)
+  int signal_handler::m_pipe[2] = { -1, -1 };
+  boost::once_flag signal_handler::m_dispatch_once;
+#endif
 
   private_file::private_file() noexcept : m_handle(), m_filename() {}
 
