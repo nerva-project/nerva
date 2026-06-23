@@ -54,7 +54,8 @@ set(UPNP_LIBRARIES "libminiupnpc-static" PARENT_SCOPE)
 
 find_package(Unbound)
 
-if(NOT UNBOUND_INCLUDE_DIR OR STATIC)
+# iOS: link the depends libunbound; bundled unbound's getentropy_osx.c wants a header iOS lacks
+if(NOT UNBOUND_INCLUDE_DIR OR (STATIC AND NOT IOS))
   # NOTE: If STATIC is true, CMAKE_FIND_LIBRARY_SUFFIXES has been reordered.
   # unbound has config tests which used OpenSSL libraries, so -ldl may need to
   # be set in this case.

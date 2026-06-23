@@ -65,6 +65,7 @@ jobs:
                             'nerva-macos-armv8',
                             'nerva-freebsd-x86_64',
                             'nerva-android-armv8',
+                            'nerva-ios-armv8',
                         ];
 
                         const runId = context.payload.workflow_run.id;

@@ -149,3 +149,81 @@ jobs:
                     name: ${{ matrix.toolchain.artifact-name }}
                     path: |
                         build/${{ matrix.toolchain.host }}/release/bin/nerva*
+
+    # iOS has no Linux cross path (no iphoneos SDK to host, no Linux->iphoneos
+    # toolchain), so it builds native on macOS with the runner's Xcode. Deps still
+    # go through contrib/depends (apple-ios host). iOS ships a wallet library, not
+    # daemons, so we build the wallet_api target.
+    build-ios:
+        runs-on: macos-14
+        timeout-minutes: 120
+        strategy:
+            fail-fast: false
+            matrix:
+                toolchain:
+                    -   name: "ARMv8 iOS"
+                        host: "aarch64-apple-ios"
+                        artifact-name: "nerva-ios-armv8"
+        name: ${{ matrix.toolchain.name }}
+        steps:
+            -   name: Install dependencies
+                run: brew install autoconf automake libtool pkg-config gperf ccache coreutils
+            # macOS runners ship CMake 4.x, which dropped the FindBoost module
+            # Nerva needs (it sets Boost_NO_BOOST_CMAKE ON). Pin 3.29 for MODULE mode.
+            -   name: Pin CMake 3.29
+                run: |
+                    CMAKE_VER=3.29.6
+                    curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VER}/cmake-${CMAKE_VER}-macos-universal.tar.gz" -o /tmp/cmake.tar.gz
+                    tar -xzf /tmp/cmake.tar.gz -C /tmp
+                    echo "/tmp/cmake-${CMAKE_VER}-macos-universal/CMake.app/Contents/bin" >> "$GITHUB_PATH"
+            -   uses: actions/checkout@v6
+                with:
+                    fetch-depth: 0
+                    submodules: recursive
+            -   name: Ccache
+                uses: actions/cache@v5
+                with:
+                    path: ~/Library/Caches/ccache
+                    key: ccache-${{ matrix.toolchain.host }}-${{ github.sha }}
+                    restore-keys: ccache-${{ matrix.toolchain.host }}-
+            -   name: Depends cache
+                uses: actions/cache@v5
+                with:
+                    path: contrib/depends/built
+                    key: depends-${{ matrix.toolchain.host }}-${{ hashFiles('contrib/depends/packages/*') }}
+                    restore-keys: |
+                        depends-${{ matrix.toolchain.host }}-${{ hashFiles('contrib/depends/packages/*') }}
+                        depends-${{ matrix.toolchain.host }}-
+            -   uses: ./.github/actions/set-make-job-count
+            -   name: Build
+                run: |
+                    ${{env.CCACHE_SETTINGS}}
+                    make -C contrib/depends HOST=${{ matrix.toolchain.host }} -j${{env.MAKE_JOB_COUNT}}
+                    mkdir -p build/${{ matrix.toolchain.host }}/release
+                    cd build/${{ matrix.toolchain.host }}/release
+                    cmake -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/contrib/depends/${{ matrix.toolchain.host }}/share/toolchain.cmake ../../..
+                    make -j${{env.MAKE_JOB_COUNT}} wallet_api
+            -   name: Package wallet library
+                run: |
+                    # A bare libwallet_api.a doesn't bundle its deps, so it isn't
+                    # linkable on its own. Merge the project archives and the depends
+                    # archives into one device-only (arm64 iphoneos) static lib and
+                    # ship it with the wallet/api headers. Multi-slice .xcframework
+                    # (device + simulator) is tracked as a follow-up.
+                    HOST=${{ matrix.toolchain.host }}
+                    STAGE="$GITHUB_WORKSPACE/${{ matrix.toolchain.artifact-name }}"
+                    mkdir -p "$STAGE/lib" "$STAGE/include"
+                    # skip boost's test-only frameworks: no wallet code calls them
+                    # and they collide on member names during the merge
+                    ARCHIVES=$(find "build/$HOST/release" -name '*.a'; \
+                      find "contrib/depends/$HOST/lib" -name '*.a' \
+                        ! -name 'libboost_unit_test_framework.a' \
+                        ! -name 'libboost_test_exec_monitor.a')
+                    libtool -static -o "$STAGE/lib/libnerva_wallet.a" $ARCHIVES
+                    cp src/wallet/api/*.h "$STAGE/include/"
+                    printf 'Device-only (arm64 iphoneos), pre-release.\nMulti-slice .xcframework (device + simulator) tracked separately.\n' > "$STAGE/README-ios.txt"
+            -   uses: actions/upload-artifact@v7
+                if: github.event_name != 'schedule'
+                with:
+                    name: ${{ matrix.toolchain.artifact-name }}
+                    path: ${{ matrix.toolchain.artifact-name }}/

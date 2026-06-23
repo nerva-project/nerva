@@ -112,6 +112,20 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
   SET(CMAKE_ANDROID_STANDALONE_TOOLCHAIN @prefix@/native)
   SET(CMAKE_C_COMPILER "${_CMAKE_TOOLCHAIN_PREFIX}clang")
   SET(CMAKE_CXX_COMPILER "${_CMAKE_TOOLCHAIN_PREFIX}clang++")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  # iOS: native Xcode (clang + iphoneos SDK). the aarch64 block below sets ARM/AES.
+  SET(IOS ON)  # single source of truth for the if(IOS)/if(NOT IOS) guards
+  SET(CMAKE_OSX_ARCHITECTURES "arm64")
+  SET(CMAKE_OSX_SYSROOT "iphoneos")
+  SET(CMAKE_OSX_DEPLOYMENT_TARGET "12.0")
+  SET(CMAKE_C_COMPILER clang)
+  SET(CMAKE_CXX_COMPILER clang++ -stdlib=libc++)
+  SET(BUILD_TAG "ios-armv8")
+  # ONLY mode + the ios sysroot hide the depends prefix, allow both so it resolves
+  SET(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY BOTH)
+  SET(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE BOTH)
+  # so the bare find_library(sodium) finds the depends prefix
+  SET(CMAKE_PREFIX_PATH "@prefix@")
 else()
   SET(CMAKE_C_COMPILER @CC@)
   SET(CMAKE_CXX_COMPILER @CXX@)
