@@ -160,21 +160,19 @@ namespace cryptonote
 
   bool checkpoints::init_default_checkpoints(network_type nettype)
   {
-    if (nettype == TESTNET)
-    {
-      return true;
-    }
-    if (nettype == STAGENET)
-    {
-      return true;
-    }
-
     // Anchors ASSUME_VALID_HEIGHT: pins the chain up to here so blocks below can
     // safely skip PoW. Keep in sync with config_t::ASSUME_VALID_HEIGHT.
     if (nettype == MAINNET)
     {
       ADD_CHECKPOINT(4250000, "bd6ad31f01f709c8986f2b5b4c568c788884098968c7ccda8ba1998f3a03e53c");
     }
+
+    // assume-valid skips PoW below ASSUME_VALID_HEIGHT; that is only safe if a
+    // hardcoded checkpoint at or above it anchors the skipped range. Refuse to
+    // start otherwise, else an unanchored gap lets an eclipsed node be fed a fake history.
+    const uint64_t assume_valid_height = get_config(nettype).ASSUME_VALID_HEIGHT;
+    CHECK_AND_ASSERT_MES(nettype == FAKECHAIN || assume_valid_height == 0 || get_max_height() >= assume_valid_height,
+        false, "ASSUME_VALID_HEIGHT " << assume_valid_height << " has no anchoring checkpoint at or above it");
 
     return true;
   }
