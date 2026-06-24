@@ -1,12 +1,18 @@
-# iOS (arm64-apple-ios) host: use the macOS runner's own Xcode (clang + iphoneos
-# SDK via xcrun, system cctools). nothing built from source here.
+# iOS host: macOS runner's own Xcode (clang + SDK via xcrun, system cctools).
+# Device and simulator share this file; the SDK + target triple switch on the
+# host (aarch64-apple-ios vs aarch64-apple-iossimulator). nothing built from source.
 IOS_MIN_VERSION=12.0
-IOS_SDK_PATH=$(shell xcrun --sdk iphoneos --show-sdk-path)
+ifeq ($(findstring simulator,$(full_host_os)),simulator)
+  IOS_SDK=iphonesimulator
+  CC_target=arm64-apple-ios$(IOS_MIN_VERSION)-simulator
+else
+  IOS_SDK=iphoneos
+  CC_target=arm64-apple-ios$(IOS_MIN_VERSION)
+endif
+IOS_SDK_PATH=$(shell xcrun --sdk $(IOS_SDK) --show-sdk-path)
 
-CC_target=arm64-apple-ios
-
-ios_CC=clang -target $(CC_target) -miphoneos-version-min=$(IOS_MIN_VERSION) -isysroot $(IOS_SDK_PATH)
-ios_CXX=clang++ -target $(CC_target) -miphoneos-version-min=$(IOS_MIN_VERSION) -isysroot $(IOS_SDK_PATH) -stdlib=libc++
+ios_CC=clang -target $(CC_target) -isysroot $(IOS_SDK_PATH)
+ios_CXX=clang++ -target $(CC_target) -isysroot $(IOS_SDK_PATH) -stdlib=libc++
 
 ios_CFLAGS=-pipe
 ios_CXXFLAGS=$(ios_CFLAGS)
