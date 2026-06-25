@@ -500,6 +500,7 @@ namespace cryptonote
     if(bvc.m_added_to_main_chain)
     {
       //TODO: Add here announce protocol usage
+      m_core.relay_uncle_blocks(b, arg.current_blockchain_height); // relay uncle blocks BEFORE main block
       relay_block(arg, context);
     }else if(bvc.m_marked_as_orphaned)
     {
@@ -791,6 +792,7 @@ namespace cryptonote
         if( bvc.m_added_to_main_chain )
         {
           //TODO: Add here announce protocol usage
+          m_core.relay_uncle_blocks(new_block, arg.current_blockchain_height); // relay uncle blocks BEFORE main block
           NOTIFY_NEW_BLOCK::request reg_arg = AUTO_VAL_INIT(reg_arg);
           reg_arg.current_blockchain_height = arg.current_blockchain_height;
           reg_arg.b = b;
