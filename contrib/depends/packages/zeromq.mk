@@ -27,3 +27,8 @@ define $(package)_postprocess_cmds
   rm -rf bin share &&\
   rm lib/*.la
 endef
+
+# zeromq's configure has no ios host_os case; alias it to the darwin one
+define $(package)_preprocess_cmds
+  case "$(host_os)" in *ios*) sed -i.bak 's/\*darwin\*)/\*ios\*|\*darwin\*)/' configure ;; esac
+endef
