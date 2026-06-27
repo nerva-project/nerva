@@ -84,6 +84,10 @@
 #define AUTODETECT_WINDOW 10 // seconds
 #define AUTODETECT_GAIN_THRESHOLD 1.02f  // 2%
 
+#define ADAPTIVE_DROP_THRESHOLD 0.85f      // re-detect if H/s falls below 85% of baseline
+#define ADAPTIVE_DWELL_SAMPLES 2           // require this many consecutive low samples
+#define ADAPTIVE_COOLDOWN_MS (30 * 60 * 1000ull)  // wait 30 min between re-detections
+
 using namespace epee;
 
 #include "miner.h"
@@ -97,6 +101,7 @@ namespace cryptonote
     const command_line::arg_descriptor<std::string> arg_start_mining =    {"start-mining", "Specify wallet address to mining for", "", true};
     const command_line::arg_descriptor<uint16_t>    arg_donate_mining =    {"donate-level", "Specify a percentage of blocks to mine to the development wallet", miner::MINING_DEFAULT_DONATION_LEVEL, true};
     const command_line::arg_descriptor<uint32_t>      arg_mining_threads =  {"mining-threads", "Specify mining threads count", 0, true};
+    const command_line::arg_descriptor<bool>          arg_mining_threads_adaptive = {"mining-threads-adaptive", "Re-run --mining-threads 0 autodetect if hashrate drops (needs --mining-threads 0)", false, true};
     const command_line::arg_descriptor<bool>        arg_bg_mining_enable =  {"bg-mining-enable", "enable background mining", true, true};
     const command_line::arg_descriptor<bool>        arg_bg_mining_ignore_battery =  {"bg-mining-ignore-battery", "if true, assumes plugged in when unable to query system power status", false, true};    
     const command_line::arg_descriptor<uint64_t>    arg_bg_mining_min_idle_interval_seconds =  {"bg-mining-min-idle-interval", "Specify min lookback interval in seconds for determining idle state", miner::BACKGROUND_MINING_DEFAULT_MIN_IDLE_INTERVAL_IN_SECONDS, true};
@@ -131,7 +136,11 @@ namespace cryptonote
     m_idle_threshold(BACKGROUND_MINING_DEFAULT_IDLE_THRESHOLD_PERCENTAGE),
     m_mining_target(BACKGROUND_MINING_DEFAULT_MINING_TARGET_PERCENTAGE),
     m_miner_extra_sleep(BACKGROUND_MINING_DEFAULT_MINER_EXTRA_SLEEP_MILLIS),
-    m_block_reward(0)
+    m_block_reward(0),
+    m_adaptive_threads(false),
+    m_adaptive_baseline_hr(0),
+    m_adaptive_low_count(0),
+    m_adaptive_cooldown_until_ms(0)
   {
     m_attrs.set_stack_size(THREAD_STACK_SIZE);
   }
@@ -261,6 +270,11 @@ namespace cryptonote
       return true;
     });
 
+    m_adaptive_interval.do_call([&](){
+      update_adaptive_threads();
+      return true;
+    });
+
     return true;
   }
   //-----------------------------------------------------------------------------------------------------
@@ -331,7 +345,73 @@ namespace cryptonote
       m_threads_total = m_threads_autodetect.size();
     }
 
-    // restart all threads
+    restart_workers();
+  }
+  //-----------------------------------------------------------------------------------------------------
+  void miner::update_adaptive_threads()
+  {
+    if (!m_adaptive_threads || !is_mining())
+    {
+      m_adaptive_baseline_hr = 0;
+      m_adaptive_low_count = 0;
+      return;
+    }
+
+    // While autodetect is climbing, baseline isn't valid; recapture once it locks in.
+    if (!m_threads_autodetect.empty())
+    {
+      m_adaptive_baseline_hr = 0;
+      m_adaptive_low_count = 0;
+      return;
+    }
+
+    uint64_t hr = 0;
+    {
+      CRITICAL_REGION_LOCAL(m_last_hash_rates_lock);
+      if (!m_last_hash_rates.empty())
+        hr = std::accumulate(m_last_hash_rates.begin(), m_last_hash_rates.end(), (uint64_t)0) / m_last_hash_rates.size();
+    }
+    if (hr == 0)
+      return;
+
+    if (m_adaptive_baseline_hr == 0)
+    {
+      m_adaptive_baseline_hr = hr;
+      MGINFO("Adaptive mining: baseline locked at " << hr << " H/s");
+      return;
+    }
+
+    const uint64_t now_ms = misc_utils::get_tick_count();
+    if (now_ms < m_adaptive_cooldown_until_ms)
+      return;
+
+    if (hr < (uint64_t)(m_adaptive_baseline_hr * ADAPTIVE_DROP_THRESHOLD))
+    {
+      m_adaptive_low_count++;
+      MGINFO("Adaptive mining: " << hr << " H/s vs baseline " << m_adaptive_baseline_hr
+          << " H/s (sample " << m_adaptive_low_count << "/" << ADAPTIVE_DWELL_SAMPLES << ")");
+      if (m_adaptive_low_count >= ADAPTIVE_DWELL_SAMPLES)
+      {
+        MGINFO("Adaptive mining: hashrate dropped, re-running autodetect");
+        m_adaptive_cooldown_until_ms = now_ms + ADAPTIVE_COOLDOWN_MS;
+        m_adaptive_low_count = 0;
+        m_adaptive_baseline_hr = 0;
+
+        m_threads_autodetect.clear();
+        m_threads_autodetect.push_back({epee::misc_utils::get_ns_count(), (uint64_t)m_total_hashes});
+        m_threads_total = 1;
+
+        restart_workers();
+      }
+    }
+    else
+    {
+      m_adaptive_low_count = 0;
+    }
+  }
+  //-----------------------------------------------------------------------------------------------------
+  void miner::restart_workers()
+  {
     {
       CRITICAL_REGION_LOCAL(m_threads_lock);
       boost::interprocess::ipcdetail::atomic_write32(&m_stop, 1);
@@ -341,7 +421,7 @@ namespace cryptonote
     }
     boost::interprocess::ipcdetail::atomic_write32(&m_stop, 0);
     boost::interprocess::ipcdetail::atomic_write32(&m_thread_index, 0);
-    for(size_t i = 0; i != m_threads_total; i++)
+    for (size_t i = 0; i != m_threads_total; i++)
       m_threads.push_back(boost::thread(m_attrs, boost::bind(&miner::worker_thread, this)));
   }
   //-----------------------------------------------------------------------------------------------------
@@ -351,6 +431,7 @@ namespace cryptonote
     command_line::add_arg(desc, arg_start_mining);
     command_line::add_arg(desc, arg_donate_mining);
     command_line::add_arg(desc, arg_mining_threads);
+    command_line::add_arg(desc, arg_mining_threads_adaptive);
     command_line::add_arg(desc, arg_bg_mining_enable);
     command_line::add_arg(desc, arg_bg_mining_ignore_battery);    
     command_line::add_arg(desc, arg_bg_mining_min_idle_interval_seconds);
@@ -399,6 +480,20 @@ namespace cryptonote
       if(command_line::has_arg(vm, arg_mining_threads))
       {
         m_threads_total = command_line::get_arg(vm, arg_mining_threads);
+      }
+      if(command_line::get_arg(vm, arg_mining_threads_adaptive))
+      {
+        if (m_threads_total != 0)
+        {
+          MGUSER_YELLOW("--mining-threads-adaptive needs --mining-threads 0 (autodetect), ignoring");
+        }
+        else
+        {
+          m_adaptive_threads = true;
+          MGINFO("Adaptive mining enabled: re-autodetect when hashrate stays below "
+              << (int)(ADAPTIVE_DROP_THRESHOLD * 100) << "% of baseline for "
+              << ADAPTIVE_DWELL_SAMPLES << " samples");
+        }
       }
     }
 
