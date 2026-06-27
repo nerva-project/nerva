@@ -3510,12 +3510,11 @@ leave:
   crypto::hash proof_of_work;
   memset(proof_of_work.data, 0xff, sizeof(proof_of_work.data));
 
-  // Formerly the code below contained an if loop with the following condition
-  // !m_checkpoints.is_in_checkpoint_zone(get_current_blockchain_height())
-  // however, this caused the daemon to not bother checking PoW for blocks
-  // before checkpoints, which is very dangerous behaviour. We moved the PoW
-  // validation out of the next chunk of code to make sure that we correctly
-  // check PoW now.
+  // An earlier revision skipped PoW for the entire checkpoint zone unconditionally
+  // (an unanchored, dangerous skip) and that was removed. The assume-valid skip
+  // below is the deliberate, bounded replacement: PoW is dropped only for blocks
+  // beneath a hardcoded checkpoint that already pins them by hash, and only during
+  // flag-gated fast sync.
   // FIXME: height parameter is not used...should it be used or should it not
   // be a parameter?
   // validate proof_of_work versus difficulty target
