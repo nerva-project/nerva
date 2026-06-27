@@ -210,6 +210,11 @@ namespace config
     std::string const HF_MIN_VERSION = "0.1.7.0";
     std::string const MIN_VERSION    = "0.1.6.4";
 
+    // Skip PoW recomputation for blocks below this height during sync, anchored
+    // by a hardcoded checkpoint (see checkpoints::init_default_checkpoints).
+    // Gated by --fast-block-sync; bump both each release. 0 = disable.
+    uint64_t const ASSUME_VALID_HEIGHT = 4250000;
+
     static const hard_fork hard_forks[] = {
         { 1,      1},
         { 2,      2},
@@ -235,6 +240,8 @@ namespace config
 
         std::string const HF_MIN_VERSION = "0.1.7.0";
         std::string const MIN_VERSION    = "0.1.6.4";
+
+        uint64_t const ASSUME_VALID_HEIGHT = 0; // 0 = full PoW verification
 
         static const hard_fork hard_forks[] = {
             { 1,   1},
@@ -326,6 +333,7 @@ namespace cryptonote
         uint32_t const GENESIS_NONCE;
         std::string const HF_MIN_VERSION;
         std::string const MIN_VERSION;
+        uint64_t const ASSUME_VALID_HEIGHT;
     };
 
     inline const config_t &get_config(network_type nettype)
@@ -341,7 +349,8 @@ namespace cryptonote
             ::config::GENESIS_TX,
             ::config::GENESIS_NONCE,
             ::config::HF_MIN_VERSION,
-            ::config::MIN_VERSION
+            ::config::MIN_VERSION,
+            ::config::ASSUME_VALID_HEIGHT
             };
         static const config_t testnet = {
             ::config::CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX,
@@ -354,7 +363,8 @@ namespace cryptonote
             ::config::GENESIS_TX,
             ::config::GENESIS_NONCE,
             ::config::testnet::HF_MIN_VERSION,
-            ::config::testnet::MIN_VERSION
+            ::config::testnet::MIN_VERSION,
+            ::config::testnet::ASSUME_VALID_HEIGHT
             };
         static const config_t stagenet = {
             ::config::CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX,
@@ -366,7 +376,8 @@ namespace cryptonote
             ::config::stagenet::NETWORK_ID,
             ::config::GENESIS_TX,
             ::config::GENESIS_NONCE,
-            "", ""
+            "", "",
+            0 // ASSUME_VALID_HEIGHT
             };
 
         switch (nettype)
