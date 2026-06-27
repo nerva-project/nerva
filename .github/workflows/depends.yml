@@ -150,21 +150,19 @@ jobs:
                     path: |
                         build/${{ matrix.toolchain.host }}/release/bin/nerva*
 
-    # iOS has no Linux cross path (no iphoneos SDK to host, no Linux->iphoneos
-    # toolchain), so it builds native on macOS with the runner's Xcode. Deps still
-    # go through contrib/depends (apple-ios host). iOS ships a wallet library, not
-    # daemons, so we build the wallet_api target.
+    # iOS has no Linux cross path (no iphoneos SDK to host), so it builds native on
+    # macOS with the runner's Xcode. Deps go through contrib/depends; iOS ships a
+    # wallet library (wallet_api), not daemons. We build two slices - arm64 device
+    # and arm64 simulator - and bundle them into one .xcframework, since lipo can't
+    # combine same-arch/different-platform slices.
     build-ios:
+        name: ARMv8 iOS (xcframework)
         runs-on: macos-14
-        timeout-minutes: 120
-        strategy:
-            fail-fast: false
-            matrix:
-                toolchain:
-                    -   name: "ARMv8 iOS"
-                        host: "aarch64-apple-ios"
-                        artifact-name: "nerva-ios-armv8"
-        name: ${{ matrix.toolchain.name }}
+        timeout-minutes: 180
+        env:
+            DEVICE_HOST: aarch64-apple-ios
+            SIM_HOST: aarch64-apple-iossimulator
+            ARTIFACT: nerva-ios-armv8
         steps:
             -   name: Install dependencies
                 run: brew install autoconf automake libtool pkg-config gperf ccache coreutils
@@ -184,46 +182,53 @@ jobs:
                 uses: actions/cache@v5
                 with:
                     path: ~/Library/Caches/ccache
-                    key: ccache-${{ matrix.toolchain.host }}-${{ github.sha }}
-                    restore-keys: ccache-${{ matrix.toolchain.host }}-
+                    key: ccache-ios-${{ github.sha }}
+                    restore-keys: ccache-ios-
             -   name: Depends cache
                 uses: actions/cache@v5
                 with:
                     path: contrib/depends/built
-                    key: depends-${{ matrix.toolchain.host }}-${{ hashFiles('contrib/depends/packages/*') }}
-                    restore-keys: |
-                        depends-${{ matrix.toolchain.host }}-${{ hashFiles('contrib/depends/packages/*') }}
-                        depends-${{ matrix.toolchain.host }}-
+                    key: depends-ios-${{ hashFiles('contrib/depends/packages/*') }}
+                    restore-keys: depends-ios-
             -   uses: ./.github/actions/set-make-job-count
-            -   name: Build
+            -   name: Build device + simulator slices
                 run: |
                     ${{env.CCACHE_SETTINGS}}
-                    make -C contrib/depends HOST=${{ matrix.toolchain.host }} -j${{env.MAKE_JOB_COUNT}}
-                    mkdir -p build/${{ matrix.toolchain.host }}/release
-                    cd build/${{ matrix.toolchain.host }}/release
-                    cmake -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/contrib/depends/${{ matrix.toolchain.host }}/share/toolchain.cmake ../../..
-                    make -j${{env.MAKE_JOB_COUNT}} wallet_api
-            -   name: Package wallet library
+                    for H in "$DEVICE_HOST" "$SIM_HOST"; do
+                        make -C contrib/depends HOST=$H -j${{env.MAKE_JOB_COUNT}}
+                        mkdir -p build/$H/release
+                        ( cd build/$H/release && \
+                          cmake -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/contrib/depends/$H/share/toolchain.cmake ../../.. && \
+                          make -j${{env.MAKE_JOB_COUNT}} wallet_api )
+                        # one linkable slice: merge project + depends archives, minus
+                        # boost's test-only frameworks (unused, and they collide on names)
+                        ARCHIVES=$(find "build/$H/release" -name '*.a'; \
+                          find "contrib/depends/$H/lib" -name '*.a' \
+                            ! -name 'libboost_unit_test_framework.a' \
+                            ! -name 'libboost_test_exec_monitor.a')
+                        libtool -static -o "build/$H/libnerva_wallet.a" $ARCHIVES
+                        # the slice must actually carry the wallet API symbols a
+                        # consumer links against (i.e. not empty / stripped)
+                        nm "build/$H/libnerva_wallet.a" 2>/dev/null | grep -q WalletManagerFactory \
+                          || { echo "no wallet_api symbols in $H slice"; exit 1; }
+                    done
+            -   name: Assemble xcframework
                 run: |
-                    # A bare libwallet_api.a doesn't bundle its deps, so it isn't
-                    # linkable on its own. Merge the project archives and the depends
-                    # archives into one device-only (arm64 iphoneos) static lib and
-                    # ship it with the wallet/api headers. Multi-slice .xcframework
-                    # (device + simulator) is tracked as a follow-up.
-                    HOST=${{ matrix.toolchain.host }}
-                    STAGE="$GITHUB_WORKSPACE/${{ matrix.toolchain.artifact-name }}"
-                    mkdir -p "$STAGE/lib" "$STAGE/include"
-                    # skip boost's test-only frameworks: no wallet code calls them
-                    # and they collide on member names during the merge
-                    ARCHIVES=$(find "build/$HOST/release" -name '*.a'; \
-                      find "contrib/depends/$HOST/lib" -name '*.a' \
-                        ! -name 'libboost_unit_test_framework.a' \
-                        ! -name 'libboost_test_exec_monitor.a')
-                    libtool -static -o "$STAGE/lib/libnerva_wallet.a" $ARCHIVES
-                    cp src/wallet/api/*.h "$STAGE/include/"
-                    printf 'Device-only (arm64 iphoneos), pre-release.\nMulti-slice .xcframework (device + simulator) tracked separately.\n' > "$STAGE/README-ios.txt"
+                    STAGE="$GITHUB_WORKSPACE/$ARTIFACT"
+                    mkdir -p "$STAGE"
+                    xcodebuild -create-xcframework \
+                        -library "build/$DEVICE_HOST/libnerva_wallet.a" -headers src/wallet/api \
+                        -library "build/$SIM_HOST/libnerva_wallet.a"    -headers src/wallet/api \
+                        -output "$STAGE/libnerva_wallet.xcframework"
+                    printf 'libnerva_wallet.xcframework: arm64 device + arm64 simulator slices.\n' > "$STAGE/README-ios.txt"
+            -   name: Verify both slices present
+                run: |
+                    INFO=$(plutil -p "$ARTIFACT/libnerva_wallet.xcframework/Info.plist")
+                    echo "$INFO"
+                    echo "$INFO" | grep -q '"ios-arm64"'           || { echo "missing device slice";    exit 1; }
+                    echo "$INFO" | grep -q '"ios-arm64-simulator"' || { echo "missing simulator slice"; exit 1; }
             -   uses: actions/upload-artifact@v7
                 if: github.event_name != 'schedule'
                 with:
-                    name: ${{ matrix.toolchain.artifact-name }}
-                    path: ${{ matrix.toolchain.artifact-name }}/
+                    name: ${{ env.ARTIFACT }}
+                    path: nerva-ios-armv8/

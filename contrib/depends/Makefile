@@ -63,6 +63,7 @@ endif
 host_os+=$(findstring darwin,$(full_host_os))
 host_os+=$(findstring freebsd,$(full_host_os))
 host_os+=$(findstring mingw32,$(full_host_os))
+host_os+=$(findstring ios,$(full_host_os))  # ios and iossimulator both -> hosts/ios.mk
 host_os:=$(strip $(host_os))
 ifeq ($(host_os),)
 host_os=$(full_host_os)
@@ -70,6 +71,12 @@ endif
 
 $(host_arch)_$(host_os)_prefix=$(BASEDIR)/$(host)
 $(host_arch)_$(host_os)_host=$(host)
+# packages' bundled config.sub don't know the 'iossimulator' triple; the
+# simulator target is carried by the compiler flags (see hosts/ios.mk), so hand
+# configure the plain ios triple while keeping the distinct prefix above.
+ifneq (,$(findstring iossimulator,$(host)))
+$(host_arch)_$(host_os)_host=$(host_arch)-apple-ios
+endif
 host_prefix=$($(host_arch)_$(host_os)_prefix)
 build_prefix=$(host_prefix)/native
 
