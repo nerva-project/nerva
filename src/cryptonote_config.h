@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -169,6 +169,9 @@
 #define DEFAULT_TXPOOL_MAX_WEIGHT                                       648000000ull
 
 #define HF_VERSION_LONG_TERM_BLOCK_WEIGHT                               12
+#define HF_VERSION_MIN_2_OUTPUTS                                        13
+#define HF_VERSION_ENFORCE_MIN_AGE                                      13
+#define HF_VERSION_TX_KEY_VALIDATION                                    13
 #define CRYPTONOTE_SHORT_TERM_BLOCK_WEIGHT_SURGE_FACTOR                 50
 
 #define CRYPTONOTE_NOISE_MIN_EPOCH                                      5
@@ -224,7 +227,8 @@ namespace config
         { 9, 240500},
         {10, 341000},
         {11, 500000},
-        {12, 930000}
+        {12, 930000},
+        {13, 4320000}   // CryptoNight-Adaptive v6: 8 MB scratchpad + random VM program
     };
 
     namespace testnet
@@ -251,7 +255,8 @@ namespace config
             { 9, 570},
             {10, 580},
             {11, 590},
-            {12, 2000}
+            {12, 2000},
+            {13, 2100}
         };
     }
 
@@ -274,7 +279,8 @@ namespace config
             { 9, 570},
             {10, 580},
             {11, 590},
-            {12, 700}
+            {12, 700},
+            {13, 800}
         };
     }
 }

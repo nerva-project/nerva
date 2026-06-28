@@ -1,4 +1,4 @@
-# Copyright (c) 2018-2024, The Nerva Project
+# Copyright (c) 2018-2026, The Nerva Project
 # Copyright (c) 2014-2024, The Monero Project
 #
 # All rights reserved.
@@ -31,6 +31,7 @@ set(crypto_sources
   aesb.c
   blake256.c
   chacha.c
+  cna-vm.c
   crypto-ops-data.c
   crypto-ops.c
   crypto.cpp
@@ -56,6 +57,7 @@ set(crypto_headers)
 set(crypto_private_headers
   blake256.h
   chacha.h
+  cna-vm.h
   crypto-ops.h
   crypto.h
   generic-ops.h

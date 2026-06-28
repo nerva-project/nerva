@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -50,6 +50,7 @@
 #include "hash-ops.h"
 #include "oaes_lib.h"
 #include "slow-hash.h"
+#include "cna-vm.h"
 
 #if defined(SLOW_HASH_HW_AES_BUILT)
 extern void cn_slow_hash_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters);
@@ -57,6 +58,7 @@ extern void cn_slow_hash_v7_8_hw(cn_hash_context_t *context, const void *data, s
 extern void cn_slow_hash_v9_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters);
 extern void cn_slow_hash_v10_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww);
 extern void cn_slow_hash_v11_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
+extern void cn_slow_hash_v13_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
 #endif
 
 extern void cn_slow_hash_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters);
@@ -64,6 +66,7 @@ extern void cn_slow_hash_v7_8_sw(cn_hash_context_t *context, const void *data, s
 extern void cn_slow_hash_v9_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters);
 extern void cn_slow_hash_v10_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww);
 extern void cn_slow_hash_v11_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
+extern void cn_slow_hash_v13_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
 
 /* Runtime CPU detection. Cached in a function-static so the per-hash overhead
  * is one branch on a hot variable. Override with NERVA_FORCE_SOFTWARE_AES=1 to
@@ -141,6 +144,12 @@ void cn_slow_hash_v11(cn_hash_context_t *ctx, const void *data, size_t length, c
                 cn_slow_hash_v11_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy));
 }
 
+void cn_slow_hash_v13(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, const uint8_t *seed)
+{
+    CN_DISPATCH(cn_slow_hash_v13_hw(ctx, data, length, hash, seed),
+                cn_slow_hash_v13_sw(ctx, data, length, hash, seed));
+}
+
 static int allocate_hugepage(size_t size, void **hp)
 {
 #if defined(_MSC_VER) || defined(__MINGW32__)
@@ -180,7 +189,9 @@ static void free_hugepage(void *hp, size_t size, int is_mapped)
 
 cn_hash_context_t *cn_hash_context_create(void)
 {
-    cn_hash_context_t *ctx = (cn_hash_context_t *)malloc(sizeof(cn_hash_context_t));
+    // calloc so pointer fields start NULL; a failed alloc can't leave
+    // cn_hash_context_free freeing an uninitialized pointer.
+    cn_hash_context_t *ctx = (cn_hash_context_t *)calloc(1, sizeof(cn_hash_context_t));
     if (ctx == NULL) {
         return NULL;
     }
@@ -191,6 +202,11 @@ cn_hash_context_t *cn_hash_context_create(void)
     }
     ctx->scratchpad_is_mapped = allocate_hugepage(CN_SCRATCHPAD_MEMORY, (void **)&(ctx->scratchpad));
     if (ctx->scratchpad == NULL) {
+        cn_hash_context_free(ctx);
+        return NULL;
+    }
+    ctx->cna_scratchpad_is_mapped = allocate_hugepage(CN_SCRATCHPAD_MEMORY_V13, (void **)&(ctx->cna_scratchpad));
+    if (ctx->cna_scratchpad == NULL) {
         cn_hash_context_free(ctx);
         return NULL;
     }
@@ -215,6 +231,11 @@ void cn_hash_context_free(cn_hash_context_t *context)
     if (context->scratchpad != NULL) {
         free_hugepage(context->scratchpad, CN_SCRATCHPAD_MEMORY, context->scratchpad_is_mapped);
         context->scratchpad = NULL;
+    }
+
+    if (context->cna_scratchpad != NULL) {
+        free_hugepage(context->cna_scratchpad, CN_SCRATCHPAD_MEMORY_V13, context->cna_scratchpad_is_mapped);
+        context->cna_scratchpad = NULL;
     }
 
     if (context->salt != NULL) {
@@ -277,6 +298,19 @@ int cn_slow_hash_self_test(void)
     memset(ctx->salt, 0, CN_SALT_MEMORY);
     cn_slow_hash_v11_sw(ctx, input, sizeof(input) - 1, sw, 64, 8, 2, 2);
     if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
+
+    /* v13: 8 MB scratchpad + VM. seed is a fixed 32-byte value; salt and
+     * random_values reset so both paths see identical inputs. */
+    {
+        static const uint8_t seed[32] = {0};
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        memset(ctx->salt, 0, CN_SALT_MEMORY);
+        cn_slow_hash_v13_hw(ctx, input, sizeof(input) - 1, hw, seed);
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        memset(ctx->salt, 0, CN_SALT_MEMORY);
+        cn_slow_hash_v13_sw(ctx, input, sizeof(input) - 1, sw, seed);
+        if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
+    }
 
     cn_hash_context_free(ctx);
     return ok;
