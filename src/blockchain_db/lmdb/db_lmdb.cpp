@@ -2393,7 +2393,7 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
   if (m_block_cache_height.load(std::memory_order_acquire) >= height)
     return;
 
-  CRITICAL_REGION_BEGIN(m_block_cache_lock);
+  boost::unique_lock<boost::shared_mutex> cache_lock(m_block_cache_lock);
 
   m_block_cache.reserve(height);
 
@@ -2425,7 +2425,6 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
   }
 
   m_block_cache_height.store(height, std::memory_order_release);
-  CRITICAL_REGION_END();
 }
 
 void BlockchainLMDB::get_cna_v2_data(cn_random_values_t *rv, uint64_t height, uint32_t scratchpad_size)
@@ -2433,6 +2432,7 @@ void BlockchainLMDB::get_cna_v2_data(cn_random_values_t *rv, uint64_t height, ui
   // Use block cache for the 5 hash lookups to avoid 5 random LMDB reads per block.
   // build_block_cache is a no-op if the cache is already current (called by get_cna_v5_data too).
   build_block_cache(height + 1);
+  boost::shared_lock<boost::shared_mutex> cache_lock(m_block_cache_lock);
   const crypto::hash &h0 = m_block_cache[height].hash;
   const crypto::hash h1 = m_block_cache[height - (uint64_t)((uint8_t)h0.data[0] ^ (uint8_t)h0.data[16])].hash;
   const crypto::hash h2 = m_block_cache[height - (uint64_t)((uint8_t)h0.data[4] ^ (uint8_t)h0.data[20])].hash;
@@ -2578,6 +2578,7 @@ void BlockchainLMDB::get_cna_v4_data(char *salt, uint64_t height, uint32_t seed)
   uint8_t a = 32, b = 64;
 
   build_block_cache(height);
+  boost::shared_lock<boost::shared_mutex> cache_lock(m_block_cache_lock);
   std::array<uint32_t, 36864> rand_seq = mt.generate_v4_sequence(seed, (uint32_t)height);
   uint32_t i_config = 0;
   const block_cache_data *bi;
@@ -2628,6 +2629,7 @@ void BlockchainLMDB::get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t
 {
   // TODO: Do not assume little-endian architecture
   build_block_cache(height);
+  boost::shared_lock<boost::shared_mutex> cache_lock(m_block_cache_lock);
   const block_cache_data *bi;
   size_t rng_key_idx = 0;
   unsigned char msg[64];
