@@ -81,10 +81,10 @@ static int detect_hardware_aes(void)
     return 1;
 #elif (defined(__linux__) || defined(__ANDROID__)) && defined(__aarch64__)
     return (getauxval(AT_HWCAP) & HWCAP_AES) != 0;
-#elif defined(__x86_64__) || (defined(_MSC_VER) && defined(_WIN64))
+#elif defined(__x86_64__) || defined(__i386__) || (defined(_MSC_VER) && (defined(_WIN64) || defined(_M_IX86)))
     /* Delegate to the existing C++ helper (crypto::has_aesni in crypto.cpp)
      * via its C-linkage wrapper, so we reuse the project's tested cpuid
-     * code instead of writing our own. */
+     * code instead of writing our own. AES-NI exists in 32-bit mode too. */
     return crypto_has_aesni();
 #else
     return 0;
