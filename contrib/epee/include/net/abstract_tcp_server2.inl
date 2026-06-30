@@ -129,15 +129,12 @@ PRAGMA_WARNING_DISABLE_VS(4355)
   template<class t_protocol_handler>
   boost::shared_ptr<connection<t_protocol_handler> > connection<t_protocol_handler>::safe_shared_from_this()
   {
-    try
-    {
-      return connection<t_protocol_handler>::shared_from_this();
-    }
-    catch (const boost::bad_weak_ptr&)
-    {
-      // It happens when the connection is being deleted
-      return boost::shared_ptr<connection<t_protocol_handler> >();
-    }
+    // Returns empty while the connection is being deleted, same as catching
+    // bad_weak_ptr from shared_from_this() but without the throw. On 32-bit mingw
+    // the throwing path crashed: the SjLj exception unwind landed in the catch
+    // with a corrupted (zero) stack pointer. weak_from_this().lock() is noexcept
+    // and uses the same atomic acquire, so every "if(!self)" caller still works.
+    return this->weak_from_this().lock();
   }
   //---------------------------------------------------------------------------------
   template<class t_protocol_handler>
