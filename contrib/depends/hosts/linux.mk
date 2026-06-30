@@ -11,6 +11,9 @@ linux_debug_CXXFLAGS=$(linux_debug_CFLAGS)
 linux_debug_CPPFLAGS=-D_GLIBCXX_DEBUG -D_GLIBCXX_DEBUG_PEDANTIC
 
 ifeq (86,$(findstring 86,$(build_arch)))
+# glibc x86 targets build with the host's multilib gcc. musl x86 targets must
+# not: they fall through to their own cross toolchain (default_host_CC).
+ifeq (,$(findstring musl,$(host)))
 i686_linux_CC=gcc -m32
 i686_linux_CXX=g++ -m32
 i686_linux_AR=ar
@@ -24,6 +27,7 @@ x86_64_linux_AR=ar
 x86_64_linux_RANLIB=ranlib
 x86_64_linux_NM=nm
 x86_64_linux_STRIP=strip
+endif
 else
 i686_linux_CC=$(default_host_CC) -m32
 i686_linux_CXX=$(default_host_CXX) -m32
