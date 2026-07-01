@@ -35,6 +35,7 @@
 #include "cryptonote_basic/blobdatatype.h" // for type blobdata
 #include "ringct/rctTypes.h"
 #include <boost/thread/tss.hpp>
+#include <boost/thread/shared_mutex.hpp>
 
 #include <lmdb.h>
 
@@ -519,7 +520,12 @@ private:
 
   std::vector<block_cache_data> m_block_cache;
   std::atomic<uint64_t> m_block_cache_height;
-  mutable epee::critical_section m_block_cache_lock;
+  // shared_mutex: get_cna_v*_data readers take a shared lock for their hot
+  // lookups; build_block_cache takes a unique lock for the reserve/push_back
+  // that can reallocate the vector. A plain mutex was effectively absent on
+  // the read side, so a reallocation from one thread freed the buffer another
+  // thread was mid-read - a use-after-free crash.
+  mutable boost::shared_mutex m_block_cache_lock;
 
 
 #if defined(__arm__)
