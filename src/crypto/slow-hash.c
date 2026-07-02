@@ -30,6 +30,7 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -150,36 +151,134 @@ void cn_slow_hash_v13(cn_hash_context_t *ctx, const void *data, size_t length, c
                 cn_slow_hash_v13_sw(ctx, data, length, hash, seed));
 }
 
+const char *cn_page_tier_name(int tier)
+{
+    switch (tier)
+    {
+    case CN_PAGES_HUGE:       return "huge pages";
+    case CN_PAGES_THP:        return "transparent huge pages";
+    case CN_PAGES_PLAIN_MMAP: return "normal pages (mmap)";
+    default:                  return "normal pages (malloc)";
+    }
+}
+
+/* Allocate `size` bytes on the largest page size the OS will give us, and
+ * return the CN_PAGES_* tier it landed on (hash-ops.h). Stays silent on
+ * purpose; the caller decides whether the tier is worth a user-facing
+ * warning (the miner does, block validation does not care).
+ *
+ * Tier ladder per platform:
+ *   Windows:  MEM_LARGE_PAGES (one retry after working-set trim) -> malloc
+ *   Linux:    MAP_HUGETLB -> mmap + madvise(MADV_HUGEPAGE) (THP) -> mmap
+ *   FreeBSD:  mmap + MAP_ALIGNED_SUPER (transparent superpages) -> mmap
+ *   others:   mmap -> malloc (no huge-page mechanism exposed) */
 static int allocate_hugepage(size_t size, void **hp)
 {
 #if defined(_MSC_VER) || defined(__MINGW32__)
-    SetLockPagesPrivilege(GetCurrentProcess(), TRUE);
-    *hp = VirtualAlloc(*hp, size, MEM_LARGE_PAGES | MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (*hp == NULL) {
-        *hp = malloc(size);
-        return 0;
+    /* Large pages need the SeLockMemory privilege ("Lock pages in memory")
+     * and physically contiguous memory, which fragments away with uptime.
+     * No THP equivalent on Windows, so the only fallback is malloc. */
+    const SIZE_T lp_min = GetLargePageMinimum();
+    if (lp_min != 0 && SetLockPagesPrivilege(GetCurrentProcess(), TRUE))
+    {
+        /* VirtualAlloc rejects large-page requests that are not a multiple
+         * of the large-page size, so round up (mmap does the same rounding
+         * for hugetlb on Linux). Costs at most one extra large page for the
+         * salt and the 1 MB legacy pad. */
+        const SIZE_T lp_size = (size + lp_min - 1) & ~(lp_min - 1);
+        *hp = VirtualAlloc(NULL, lp_size, MEM_LARGE_PAGES | MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (*hp == NULL) {
+            /* Contiguous memory fragments with uptime; trimming our own
+             * working set nudges the memory manager to free contiguous runs
+             * and one retry rescues a good share of borderline failures
+             * (same technique as XMRig). Only worth it while the privilege
+             * is held - without it large pages can never succeed. */
+            SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1);
+            *hp = VirtualAlloc(NULL, lp_size, MEM_LARGE_PAGES | MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        }
+        if (*hp != NULL)
+            return CN_PAGES_HUGE;
     }
-#else
-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__DragonFly__) || defined(__NetBSD__)
-    *hp = mmap(0, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, 0, 0);
-#else
-    *hp = mmap(0, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, 0, 0);
-#endif
-    if (*hp == MAP_FAILED) {
-        *hp = malloc(size);
-        return 0;
+    *hp = malloc(size);
+    return CN_PAGES_MALLOC;
+#elif defined(__FreeBSD__)
+    /* No hugetlb pool on FreeBSD; superpages are transparent. The aligned
+     * mapping plus a full prefault lets the VM promote it to superpages. */
+    *hp = mmap(0, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_ALIGNED_SUPER, -1, 0);
+    if (*hp != MAP_FAILED) {
+        memset(*hp, 0, size);
+        return CN_PAGES_THP;
     }
+    *hp = mmap(0, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (*hp != MAP_FAILED)
+        return CN_PAGES_PLAIN_MMAP;
+    *hp = malloc(size);
+    return CN_PAGES_MALLOC;
+#elif defined(__APPLE__) || defined(__OpenBSD__) || defined(__DragonFly__) || defined(__NetBSD__)
+    *hp = mmap(0, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (*hp != MAP_FAILED)
+        return CN_PAGES_PLAIN_MMAP;
+    *hp = malloc(size);
+    return CN_PAGES_MALLOC;
+#else
+    *hp = mmap(0, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+    if (*hp != MAP_FAILED)
+        return CN_PAGES_HUGE;
+    /* No hugetlb pool reserved (vm.nr_hugepages). Take regular pages and
+     * hint transparent huge pages; with THP enabled the prefault typically
+     * lands the region on 2 MB pages right away, which is most of what the
+     * v13 pointer chase wants. */
+    *hp = mmap(0, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (*hp != MAP_FAILED) {
+        int thp = -1;
+#ifdef MADV_HUGEPAGE
+        thp = madvise(*hp, size, MADV_HUGEPAGE);
 #endif
-
-    return 1;
+        memset(*hp, 0, size);
+        return (thp == 0) ? CN_PAGES_THP : CN_PAGES_PLAIN_MMAP;
+    }
+    *hp = malloc(size);
+    return CN_PAGES_MALLOC;
+#endif
 }
 
-static void free_hugepage(void *hp, size_t size, int is_mapped)
+#if !defined(_MSC_VER) && !defined(__MINGW32__) && defined(__linux__)
+/* munmap length must be a multiple of the huge page size for hugetlb
+ * mappings; the kernel rounds up at mmap time but does not tell us, so
+ * read the default size (Hugepagesize in /proc/meminfo) once. */
+static size_t default_hugepage_size(void)
 {
-    if (is_mapped) {
+    static unsigned long kb = 0;
+    if (kb == 0)
+    {
+        char line[128];
+        FILE *f = fopen("/proc/meminfo", "r");
+        if (f != NULL)
+        {
+            while (fgets(line, sizeof(line), f) && sscanf(line, "Hugepagesize: %lu kB", &kb) != 1)
+                ;
+            fclose(f);
+        }
+        if (kb == 0)
+            kb = 2048;
+    }
+    return (size_t)kb * 1024;
+}
+#endif
+
+static void free_hugepage(void *hp, size_t size, int page_tier)
+{
+    if (page_tier) {
 #if defined(_MSC_VER) || defined(__MINGW32__)
         VirtualFree(hp, 0, MEM_RELEASE);
 #else
+#if defined(__linux__)
+        if (page_tier == CN_PAGES_HUGE)
+        {
+            const size_t hps = default_hugepage_size();
+            size = (size + hps - 1) & ~(hps - 1);
+        }
+#endif
         munmap(hp, size);
 #endif
     } else {

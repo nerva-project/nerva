@@ -140,6 +140,9 @@ namespace cryptonote
     volatile uint32_t m_thread_index; 
     volatile uint32_t m_threads_total;
     std::atomic<uint32_t> m_threads_active;
+    // one user-facing warning per mining session when the v13 scratchpad
+    // ends up on slow pages, instead of a line per thread
+    std::atomic<bool> m_slow_pages_warned;
     uint8_t m_donate_percent;
     uint8_t m_donate_counter;
     volatile bool m_donating;

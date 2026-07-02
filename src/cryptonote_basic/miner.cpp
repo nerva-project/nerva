@@ -114,6 +114,7 @@ namespace cryptonote
     m_pbc(pbc),
     m_height(0),
     m_threads_active(0),
+    m_slow_pages_warned(false),
     m_pausers_count(0),
     m_threads_total(0),
     m_donate_percent(MINING_DEFAULT_DONATION_LEVEL),
@@ -480,6 +481,8 @@ namespace cryptonote
 
     boost::interprocess::ipcdetail::atomic_write32(&m_stop, 0);
     boost::interprocess::ipcdetail::atomic_write32(&m_thread_index, 0);
+    // page situation can change between sessions, warn again if still bad
+    m_slow_pages_warned = false;
     set_is_background_mining_enabled(do_background);
     set_ignore_battery(ignore_battery);
     
@@ -612,6 +615,33 @@ namespace cryptonote
     {
       MERROR("Unable to allocate hash context, terminating miner thread");
       return false;
+    }
+    // Report which pages the v13 scratchpad landed on. The allocation used to
+    // fall back to normal pages silently and mining just looked slow until the
+    // next reboot, with nothing in the log explaining why.
+    {
+      const int tier = hash_context->cna_scratchpad_is_mapped;
+      // one INFO line for the session; per-thread detail stays at debug since
+      // tiers can differ per thread when the reserved pages run out mid-spawn
+      if (th_local_index == 0)
+        MGINFO("Mining scratchpads on " << crypto::cn_page_tier_name(tier));
+      MDEBUG("Miner thread [" << th_local_index << "] scratchpad on " << crypto::cn_page_tier_name(tier));
+#if defined(__APPLE__) || defined(__OpenBSD__) || defined(__DragonFly__) || defined(__NetBSD__)
+      const int good_tier = CN_PAGES_PLAIN_MMAP; // best this platform offers, nothing to warn about
+#else
+      const int good_tier = CN_PAGES_THP;
+#endif
+      // the 8 MB pad only matters once CNA v6 (v13) is what we mine, no point
+      // nagging pre-fork miners about it
+      uint8_t template_version = 0;
+      CRITICAL_REGION_BEGIN(m_template_lock);
+      template_version = m_template.major_version;
+      CRITICAL_REGION_END();
+      if (tier < good_tier && template_version >= 13 && !m_slow_pages_warned.exchange(true))
+        MGUSER_YELLOW("Mining is running on normal memory pages, hashrate will be lower. "
+            "Huge/large pages were not available (Windows: enable \"Lock pages in memory\" for your user; "
+            "Linux: set vm.nr_hugepages or leave transparent hugepages enabled). "
+            "Freeing memory or rebooting, then restarting mining, retries the allocation.");
     }
     block b;
     ++m_threads_active;
