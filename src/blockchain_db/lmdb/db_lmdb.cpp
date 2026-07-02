@@ -4466,7 +4466,10 @@ uint8_t BlockchainLMDB::get_hard_fork_version(uint64_t height) const
 
 void BlockchainLMDB::set_expected_min_height(uint64_t height)
 {
+  // reserve can reallocate; unlike open/close/reset this is callable while
+  // readers may be live, so take the unique lock (uncontended in practice)
   const size_t size = static_cast<size_t>(height);
+  boost::unique_lock<boost::shared_mutex> cache_lock(m_block_cache_lock);
   if (m_block_cache.capacity() < size)
     m_block_cache.reserve(size);
 }

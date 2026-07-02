@@ -525,6 +525,10 @@ private:
   // that can reallocate the vector. A plain mutex was effectively absent on
   // the read side, so a reallocation from one thread freed the buffer another
   // thread was mid-read - a use-after-free crash.
+  // open/close and the reset path also mutate the vector without this lock:
+  // they run single-threaded at init/shutdown, before any reader exists or
+  // after they are gone. set_expected_min_height can run while readers are
+  // live, so it does take the lock.
   mutable boost::shared_mutex m_block_cache_lock;
 
 
