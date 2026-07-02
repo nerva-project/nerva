@@ -221,7 +221,9 @@ static int allocate_hugepage(size_t size, void **hp)
     *hp = malloc(size);
     return CN_PAGES_MALLOC;
 #else
-    *hp = mmap(0, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+    /* MAP_POPULATE faults the huge pages in now instead of one by one
+     * during the first hash. */
+    *hp = mmap(0, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, -1, 0);
     if (*hp != MAP_FAILED)
         return CN_PAGES_HUGE;
     /* No hugetlb pool reserved (vm.nr_hugepages). Take regular pages and

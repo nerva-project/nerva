@@ -639,8 +639,8 @@ namespace cryptonote
       CRITICAL_REGION_END();
       if (tier < good_tier && template_version >= 13 && !m_slow_pages_warned.exchange(true))
         MGUSER_YELLOW("Mining is running on normal memory pages, hashrate will be lower. "
-            "Huge/large pages were not available (Windows: enable \"Lock pages in memory\" for your user; "
-            "Linux: set vm.nr_hugepages or leave transparent hugepages enabled). "
+            "Windows: run 'nervad --setup-large-pages' once as administrator, then log out and back in. "
+            "Linux: set vm.nr_hugepages or leave transparent hugepages enabled. "
             "Freeing memory or rebooting, then restarting mining, retries the allocation.");
     }
     block b;
