@@ -162,6 +162,32 @@ const char *cn_page_tier_name(int tier)
     }
 }
 
+#ifdef __linux__
+/* madvise(MADV_HUGEPAGE) returns success even when transparent huge pages
+ * are switched off system-wide (transparent_hugepage=never), in which case
+ * the hint is a no-op and the region stays on 4 KB pages. Read the mode once
+ * so we only claim the THP tier when the hint can actually take effect; a
+ * mode we cannot read is treated as "might work" so a real THP mapping is
+ * never hidden. */
+static int thp_hint_effective(void)
+{
+    static int effective = -1;
+    if (effective < 0)
+    {
+        char line[128];
+        FILE *f = fopen("/sys/kernel/mm/transparent_hugepage/enabled", "r");
+        effective = 1;
+        if (f != NULL)
+        {
+            if (fgets(line, sizeof(line), f) && strstr(line, "[never]"))
+                effective = 0;
+            fclose(f);
+        }
+    }
+    return effective;
+}
+#endif
+
 /* Allocate `size` bytes on the largest page size the OS will give us, and
  * return the CN_PAGES_* tier it landed on (hash-ops.h). Stays silent on
  * purpose; the caller decides whether the tier is worth a user-facing
@@ -237,6 +263,14 @@ static int allocate_hugepage(size_t size, void **hp)
         thp = madvise(*hp, size, MADV_HUGEPAGE);
 #endif
         memset(*hp, 0, size);
+#ifdef __linux__
+        /* madvise accepted the hint but that is not a promise of huge pages;
+         * if THP is off system-wide we are on 4 KB pages, so report plain
+         * mmap and let the miner warn instead of claiming a tier we did not
+         * get. */
+        if (thp == 0 && !thp_hint_effective())
+            return CN_PAGES_PLAIN_MMAP;
+#endif
         return (thp == 0) ? CN_PAGES_THP : CN_PAGES_PLAIN_MMAP;
     }
     *hp = malloc(size);
