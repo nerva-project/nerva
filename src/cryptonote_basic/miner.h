@@ -34,6 +34,8 @@
 #include <boost/program_options.hpp>
 #include <boost/logic/tribool_fwd.hpp>
 #include <atomic>
+#include <utility>
+#include <vector>
 #include "cryptonote_basic.h"
 #include "verification_context.h"
 #include "difficulty.h"
@@ -75,6 +77,9 @@ namespace cryptonote
     bool set_block_template(const block& bl, const uint64_t& diffic, uint64_t height, uint64_t block_reward);
     bool on_block_chain_update();
     bool start(const account_public_address& adr, size_t threads_count, bool do_background = false, bool ignore_battery = false);
+    // set before start() so a front end (e.g. NervaOne) can toggle core
+    // pinning over RPC without the daemon being launched with the flag
+    void set_mining_affinity(bool on) { m_mining_affinity = on; }
     uint64_t get_speed() const;
     uint32_t get_threads_count() const;
     void send_stop_signal();
@@ -116,6 +121,7 @@ namespace cryptonote
 
   private:
     bool worker_thread();
+    void build_affinity_plan();
     bool request_block_template();
     void  merge_hr();
     void  update_autodetection();
@@ -143,6 +149,9 @@ namespace cryptonote
     // one user-facing warning per mining session when the v13 scratchpad
     // ends up on slow pages, instead of a line per thread
     std::atomic<bool> m_slow_pages_warned;
+    // (windows group, cpu) per worker, built at start(); empty = no pinning
+    std::vector<std::pair<int, int>> m_affinity_plan;
+    bool m_mining_affinity;
     uint8_t m_donate_percent;
     uint8_t m_donate_counter;
     volatile bool m_donating;

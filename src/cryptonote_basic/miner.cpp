@@ -43,6 +43,7 @@
 #include "file_io_utils.h"
 #include "common/command_line.h"
 #include "common/util.h"
+#include "common/threadpool.h"
 #include "string_coding.h"
 #include "string_tools.h"
 #include "storages/portable_storage_template_helper.h"
@@ -65,6 +66,9 @@
   #include <sys/resource.h>
   #include <sys/times.h>
   #include <time.h>
+  #include <fstream>
+  #include <set>
+  #include <sched.h>
 #elif defined(__FreeBSD__)
   #include <devstat.h>
   #include <errno.h>
@@ -75,8 +79,12 @@
   #include <sys/sysctl.h>
   #include <sys/times.h>
   #include <sys/types.h>
+  #include <sys/param.h>
+  #include <sys/cpuset.h>
   #include <unistd.h>
 #endif
+
+#include <map>
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "miner"
@@ -102,6 +110,166 @@ namespace cryptonote
     const command_line::arg_descriptor<uint64_t>    arg_bg_mining_min_idle_interval_seconds =  {"bg-mining-min-idle-interval", "Specify min lookback interval in seconds for determining idle state", miner::BACKGROUND_MINING_DEFAULT_MIN_IDLE_INTERVAL_IN_SECONDS, true};
     const command_line::arg_descriptor<uint16_t>     arg_bg_mining_idle_threshold_percentage =  {"bg-mining-idle-threshold", "Specify minimum avg idle percentage over lookback interval", miner::BACKGROUND_MINING_DEFAULT_IDLE_THRESHOLD_PERCENTAGE, true};
     const command_line::arg_descriptor<uint16_t>     arg_bg_mining_miner_target_percentage =  {"bg-mining-miner-target", "Specify maximum percentage cpu use by miner(s)", miner::BACKGROUND_MINING_DEFAULT_MINING_TARGET_PERCENTAGE, true};
+    const command_line::arg_descriptor<bool>        arg_mining_affinity = {"mining-affinity", "Pin mining threads to physical cores, one per core and inside a single L3 group when they fit", false, true};
+
+    /* Mining thread affinity. The v13 scratchpad is 8 MB per thread and only
+     * hashes at full speed while it stays resident in L3; every scheduler
+     * migration refills it from DRAM into another cache. The plan pins one
+     * worker per physical core (SMT siblings skipped) and, when the thread
+     * count fits, keeps all of them inside a single L3 group (the last one,
+     * the OS and foreground apps land on the first cores) so the other
+     * chiplet is left to the user's apps. Unreadable topology means an empty
+     * plan and no pinning at all. */
+    // (windows processor group, cpu index); group is -1 outside windows
+    typedef std::pair<int, int> cpu_slot;
+
+#if defined(__linux__)
+    std::vector<std::pair<cpu_slot, long>> enumerate_cores()
+    {
+      std::vector<std::pair<cpu_slot, long>> cores;
+      cpu_set_t allowed;
+      if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0)
+        return cores;
+      std::set<std::pair<long, long>> seen;
+      for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu)
+      {
+        if (!CPU_ISSET(cpu, &allowed))
+          continue;
+        const std::string base = "/sys/devices/system/cpu/cpu" + std::to_string(cpu);
+        long pkg = -1, core = -1;
+        std::ifstream(base + "/topology/physical_package_id") >> pkg;
+        std::ifstream(base + "/topology/core_id") >> core;
+        // SMT siblings share (package, core); no core ids means nothing gets skipped
+        if (core >= 0 && !seen.insert(std::make_pair(pkg, core)).second)
+          continue;
+        long l3 = -1;
+        std::string shared;
+        if (std::getline(std::ifstream(base + "/cache/index3/shared_cpu_list"), shared) && !shared.empty())
+          l3 = atol(shared.c_str());
+        cores.push_back(std::make_pair(cpu_slot(-1, cpu), l3));
+      }
+      return cores;
+    }
+#elif defined(_WIN32)
+    /* Local replicas of the Win7 processor-group topology types, fixed
+     * Windows ABI. The build targets an older _WIN32_WINNT globally and
+     * bumping it in one TU would compile boost and class miner at a
+     * different API level than the rest of the tree, so the SDK types stay
+     * out of this file and the two functions come from kernel32 at runtime
+     * (older Windows keeps running, it just does not pin). */
+    typedef struct { KAFFINITY Mask; WORD Group; WORD Reserved[3]; } nv_group_affinity_t;
+    typedef struct { BYTE Flags; BYTE EfficiencyClass; BYTE Reserved[20]; WORD GroupCount; nv_group_affinity_t GroupMask[1]; } nv_processor_relationship_t;
+    typedef struct { BYTE Level; BYTE Associativity; WORD LineSize; DWORD CacheSize; DWORD Type; BYTE Reserved[20]; nv_group_affinity_t GroupMask; } nv_cache_relationship_t;
+    typedef struct { DWORD Relationship; DWORD Size; union { nv_processor_relationship_t Processor; nv_cache_relationship_t Cache; } u; } nv_slpi_ex_t;
+    enum { nv_relation_processor_core = 0, nv_relation_cache = 2, nv_relation_all = 0xffff };
+    typedef BOOL (WINAPI *glpi_ex_t)(DWORD, nv_slpi_ex_t*, PDWORD);
+    typedef BOOL (WINAPI *set_thread_group_affinity_t)(HANDLE, const nv_group_affinity_t*, nv_group_affinity_t*);
+
+    std::vector<std::pair<cpu_slot, long>> enumerate_cores()
+    {
+      std::vector<std::pair<cpu_slot, long>> cores;
+      const glpi_ex_t glpi_ex = (glpi_ex_t)(void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetLogicalProcessorInformationEx");
+      if (glpi_ex == NULL)
+        return cores;
+      DWORD len = 0;
+      glpi_ex(nv_relation_all, NULL, &len);
+      if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || len == 0)
+        return cores;
+      std::vector<BYTE> buf(len);
+      if (!glpi_ex(nv_relation_all, (nv_slpi_ex_t*)buf.data(), &len))
+        return cores;
+      std::vector<nv_group_affinity_t> l3s;
+      for (BYTE *p = buf.data(); p < buf.data() + len; p += ((const nv_slpi_ex_t*)p)->Size)
+      {
+        const nv_slpi_ex_t *info = (const nv_slpi_ex_t*)p;
+        if (info->Relationship == nv_relation_cache && info->u.Cache.Level == 3)
+          l3s.push_back(info->u.Cache.GroupMask);
+      }
+      for (BYTE *p = buf.data(); p < buf.data() + len; p += ((const nv_slpi_ex_t*)p)->Size)
+      {
+        const nv_slpi_ex_t *info = (const nv_slpi_ex_t*)p;
+        if (info->Relationship != nv_relation_processor_core)
+          continue;
+        const nv_group_affinity_t &ga = info->u.Processor.GroupMask[0];
+        int bit = -1;
+        for (int b = 0; b < (int)(8 * sizeof(KAFFINITY)); ++b)
+          if (ga.Mask & ((KAFFINITY)1 << b)) { bit = b; break; }  // first SMT sibling
+        if (bit < 0)
+          continue;
+        long l3 = -1;
+        for (size_t i = 0; i < l3s.size(); ++i)
+          if (l3s[i].Group == ga.Group && (l3s[i].Mask & ga.Mask)) { l3 = (long)i; break; }
+        cores.push_back(std::make_pair(cpu_slot((int)ga.Group, bit), l3));
+      }
+      return cores;
+    }
+#elif defined(__FreeBSD__)
+    std::vector<std::pair<cpu_slot, long>> enumerate_cores()
+    {
+      std::vector<std::pair<cpu_slot, long>> cores;
+      int ncpu = 0, tpc = 1;
+      size_t sz = sizeof(ncpu);
+      if (sysctlbyname("hw.ncpu", &ncpu, &sz, NULL, 0) != 0 || ncpu <= 0)
+        return cores;
+      sz = sizeof(tpc);
+      if (sysctlbyname("kern.smp.threads_per_core", &tpc, &sz, NULL, 0) != 0 || tpc <= 0)
+        tpc = 1;
+      // SMT siblings get adjacent ids, so one cpu every threads_per_core
+      for (int cpu = 0; cpu < ncpu; cpu += tpc)
+        cores.push_back(std::make_pair(cpu_slot(-1, cpu), (long)-1));
+      return cores;
+    }
+#else
+    // macOS and the rest only offer advisory affinity, stay hands off
+    std::vector<std::pair<cpu_slot, long>> enumerate_cores() { return {}; }
+#endif
+
+    std::vector<cpu_slot> plan_mining_affinity(size_t threads)
+    {
+      std::vector<cpu_slot> plan;
+      const std::vector<std::pair<cpu_slot, long>> cores = enumerate_cores();
+      if (threads == 0 || cores.size() < 2)
+        return plan;
+      std::map<long, std::vector<cpu_slot>> groups;
+      for (size_t i = 0; i < cores.size(); ++i)
+        if (cores[i].second >= 0)
+          groups[cores[i].second].push_back(cores[i].first);
+      for (std::map<long, std::vector<cpu_slot>>::reverse_iterator it = groups.rbegin(); it != groups.rend(); ++it)
+        if (it->second.size() >= threads)
+          return std::vector<cpu_slot>(it->second.begin(), it->second.begin() + threads);
+      for (size_t i = 0; i < cores.size() && i < threads; ++i)
+        plan.push_back(cores[i].first);
+      return plan;
+    }
+
+    bool pin_this_thread(const cpu_slot &slot)
+    {
+#if defined(__linux__)
+      cpu_set_t set;
+      CPU_ZERO(&set);
+      CPU_SET(slot.second, &set);
+      // pid 0 = calling thread; unlike pthread_setaffinity_np this exists in
+      // glibc, musl and bionic alike
+      return sched_setaffinity(0, sizeof(set), &set) == 0;
+#elif defined(_WIN32)
+      static const set_thread_group_affinity_t set_ga = (set_thread_group_affinity_t)(void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "SetThreadGroupAffinity");
+      if (set_ga == NULL)
+        return false;
+      nv_group_affinity_t ga;
+      memset(&ga, 0, sizeof(ga));
+      ga.Group = (WORD)slot.first;
+      ga.Mask = (KAFFINITY)1 << slot.second;
+      return set_ga(GetCurrentThread(), &ga, NULL) != 0;
+#elif defined(__FreeBSD__)
+      cpuset_t set;
+      CPU_ZERO(&set);
+      CPU_SET(slot.second, &set);
+      return cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_TID, -1, sizeof(set), &set) == 0;
+#else
+      (void)slot;
+      return false;
+#endif
+    }
   }
 
 
@@ -115,6 +283,7 @@ namespace cryptonote
     m_height(0),
     m_threads_active(0),
     m_slow_pages_warned(false),
+    m_mining_affinity(false),
     m_pausers_count(0),
     m_threads_total(0),
     m_donate_percent(MINING_DEFAULT_DONATION_LEVEL),
@@ -292,6 +461,22 @@ namespace cryptonote
     m_hashes = 0;
   }
   //-----------------------------------------------------------------------------------------------------
+  void miner::build_affinity_plan()
+  {
+    m_affinity_plan.clear();
+    if (!m_mining_affinity)
+      return;
+    m_affinity_plan = plan_mining_affinity(m_threads_total);
+    if (!m_affinity_plan.empty())
+    {
+      MGINFO("Pinning " << m_affinity_plan.size() << " mining thread(s), one per physical core");
+      // warm the lazy pool here, off the pinned miner threads
+      tools::threadpool::getInstance();
+    }
+    else
+      MGINFO("Mining affinity requested but cpu topology is unavailable, not pinning");
+  }
+  //-----------------------------------------------------------------------------------------------------
   void miner::update_autodetection()
   {
     if (m_threads_autodetect.empty())
@@ -342,6 +527,7 @@ namespace cryptonote
     }
     boost::interprocess::ipcdetail::atomic_write32(&m_stop, 0);
     boost::interprocess::ipcdetail::atomic_write32(&m_thread_index, 0);
+    build_affinity_plan();
     for(size_t i = 0; i != m_threads_total; i++)
       m_threads.push_back(boost::thread(m_attrs, boost::bind(&miner::worker_thread, this)));
   }
@@ -357,6 +543,7 @@ namespace cryptonote
     command_line::add_arg(desc, arg_bg_mining_min_idle_interval_seconds);
     command_line::add_arg(desc, arg_bg_mining_idle_threshold_percentage);
     command_line::add_arg(desc, arg_bg_mining_miner_target_percentage);
+    command_line::add_arg(desc, arg_mining_affinity);
   }
   //-----------------------------------------------------------------------------------------------------
   bool miner::init(const boost::program_options::variables_map& vm, network_type nettype)
@@ -411,6 +598,7 @@ namespace cryptonote
         return false;
       }
     }
+    m_mining_affinity = command_line::get_arg(vm, arg_mining_affinity);
     if(!cryptonote::get_account_address_from_str(info, nettype, DONATION_ADDR))
     {
       LOG_ERROR("Invalid donation address, starting daemon canceled");
@@ -483,6 +671,7 @@ namespace cryptonote
     boost::interprocess::ipcdetail::atomic_write32(&m_thread_index, 0);
     // page situation can change between sessions, warn again if still bad
     m_slow_pages_warned = false;
+    build_affinity_plan();
     set_is_background_mining_enabled(do_background);
     set_ignore_battery(ignore_battery);
     
@@ -610,6 +799,13 @@ namespace cryptonote
     uint64_t height = 0;
     uint64_t local_diff = 0;
     uint32_t local_template_ver = 0;
+    if (th_local_index < m_affinity_plan.size())
+    {
+      if (pin_this_thread(m_affinity_plan[th_local_index]))
+        MDEBUG("Miner thread [" << th_local_index << "] pinned to cpu " << m_affinity_plan[th_local_index].second);
+      else
+        MDEBUG("Miner thread [" << th_local_index << "] could not be pinned");
+    }
     crypto::cn_hash_context_t *hash_context = crypto::cn_hash_context_create();
     if (hash_context == NULL)
     {
