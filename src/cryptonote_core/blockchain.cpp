@@ -2719,6 +2719,23 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
 
   const uint8_t hf_version = m_hardfork->get_current_version();
 
+  // From HF13, require at least two outputs so single-output txs can't leak the
+  // exact spent amount (no change output to obscure it). Coinbase is validated
+  // separately and never reaches here. The wallet already always emits >= 2
+  // outputs (adding a dummy zero-amount output when change is zero).
+  if (hf_version >= HF_VERSION_MIN_2_OUTPUTS)
+  {
+    if (tx.version >= 2)
+    {
+      if (tx.vout.size() < 2)
+      {
+        MERROR_VER("Tx " << get_transaction_hash(tx) << " has fewer than two outputs");
+        tvc.m_too_few_outputs = true;
+        return false;
+      }
+    }
+  }
+
   // Forbid non-zero amounts
   for (auto &o: tx.vout) {
     if (o.amount != 0) {
@@ -2734,6 +2751,14 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
       if (!crypto::check_key(out_to_key.key)) {
         tvc.m_invalid_output = true;
         return false;
+      }
+      // From HF13 only (gated so historical resync is unaffected).
+      if (hf_version >= HF_VERSION_TX_KEY_VALIDATION) {
+        if (!rct::isInMainSubgroup(rct::pk2rct(out_to_key.key)) || out_to_key.key == rct::rct2pk(rct::identity())) {
+          MERROR_VER("Output public key is identity or not in main subgroup");
+          tvc.m_invalid_output = true;
+          return false;
+        }
       }
     }
   }
@@ -2863,8 +2888,13 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   PERF_TIMER(check_tx_inputs);
   LOG_PRINT_L3("Blockchain::" << __func__);
   size_t sig_index = 0;
-  if(pmax_used_block_height)
-    *pmax_used_block_height = 0;
+  // The block-verification path (handle_block_to_main_chain) passes NULL here,
+  // but the HF13 min-output-age check below needs the youngest referenced output
+  // height on every path, so point at a local when the caller doesn't want it back.
+  uint64_t max_used_block_height = 0;
+  if (!pmax_used_block_height)
+    pmax_used_block_height = &max_used_block_height;
+  *pmax_used_block_height = 0;
 
   if (tx.pruned)
     return true;
@@ -2923,11 +2953,31 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     // make sure tx output has key offset(s) (is signed to be used)
     CHECK_AND_ASSERT_MES(in_to_key.key_offsets.size(), false, "empty in_to_key.key_offsets in transaction with id " << get_transaction_hash(tx));
 
+    // From HF13 only (gated so historical resync is unaffected).
+    if (hf_version >= HF_VERSION_TX_KEY_VALIDATION) {
+      for (size_t k = 1; k < in_to_key.key_offsets.size(); ++k) {
+        if (in_to_key.key_offsets[k] == 0) {
+          MERROR_VER("Transaction input has duplicate ring member");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+      }
+    }
+
     if(have_tx_keyimg_as_spent(in_to_key.k_image))
     {
       MERROR_VER("Key image already spent in blockchain: " << epee::string_tools::pod_to_hex(in_to_key.k_image));
       tvc.m_double_spend = true;
       return false;
+    }
+
+    // From HF13 only (gated so historical resync is unaffected).
+    if (hf_version >= HF_VERSION_TX_KEY_VALIDATION) {
+      if (!rct::isInMainSubgroup(rct::ki2rct(in_to_key.k_image)) || rct::ki2rct(in_to_key.k_image) == rct::identity()) {
+        MERROR_VER("Key image is identity or not in main subgroup");
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
     }
 
     // make sure that output being spent matches up correctly with the
@@ -2944,6 +2994,16 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     }
 
     sig_index++;
+  }
+
+  // From HF13, require every output referenced by the ring (real + decoys) to be
+  // at least CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE blocks old, closing a decoy-timing
+  // leak. The wallet already selects outputs within this bound (gamma picker end +
+  // daemon distribution to current_height-1), so legitimate txs are unaffected.
+  if (hf_version >= HF_VERSION_ENFORCE_MIN_AGE)
+  {
+    CHECK_AND_ASSERT_MES(*pmax_used_block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE <= m_db->height(),
+        false, "Transaction spends at least one output which is too young");
   }
 
   if (!expand_transaction(tx, tx_prefix_hash, pubkeys))
@@ -3646,6 +3706,14 @@ leave:
 
     // validate that transaction inputs and the keys spending them are correct.
     tx_verification_context tvc;
+    if(!check_tx_outputs(tx, tvc))
+    {
+      MERROR_VER("Block with id: " << id << " has at least one transaction (id: " << tx_id << ") with invalid outputs.");
+      add_block_as_invalid(bl, id);
+      bvc.m_verifivation_failed = true;
+      return_tx_to_pool(txs);
+      goto leave;
+    }
     if(!check_tx_inputs(tx, tvc))
     {
       MERROR_VER("Block with id: " << id  << " has at least one transaction (id: " << tx_id << ") with wrong inputs.");

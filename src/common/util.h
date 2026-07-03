@@ -164,6 +164,14 @@ namespace tools
 
   bool check_aesni();
 
+#ifdef WIN32
+  // Windows: add "Lock pages in memory" to the current user via the LSA
+  // policy so mining can use large pages. Needs an elevated prompt, takes
+  // effect on the next logon. Prints what it did and returns the process
+  // exit code.
+  int setup_large_pages_win();
+#endif
+
   bool on_startup();
 
   /*! \brief Defines a signal handler for win32 and *nix

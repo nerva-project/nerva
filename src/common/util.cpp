@@ -55,6 +55,9 @@
   #include <fstream>
 #endif
 
+//tools::setup_large_pages_win
+#include <iostream>
+
 #include "unbound.h"
 
 #include "include_base_utils.h"
@@ -79,6 +82,7 @@ using namespace epee;
   #include <windows.h>
   #include <shlobj.h>
   #include <strsafe.h>
+  #include <ntsecapi.h>
 #else 
   #include <sys/file.h>
   #include <sys/utsname.h>
@@ -825,6 +829,55 @@ std::string get_nix_version_display_string()
 #endif // !defined NO_AES
     return true;
   }
+
+#ifdef WIN32
+  namespace
+  {
+    bool grant_lock_pages_privilege()
+    {
+      // current user's SID
+      HANDLE token = NULL;
+      if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return false;
+      BYTE user_buf[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+      DWORD len = 0;
+      const BOOL got_user = GetTokenInformation(token, TokenUser, user_buf, sizeof(user_buf), &len);
+      CloseHandle(token);
+      if (!got_user)
+        return false;
+      PSID sid = reinterpret_cast<TOKEN_USER*>(user_buf)->User.Sid;
+
+      // add SeLockMemoryPrivilege to the account rights; the LSA route works
+      // on every edition (Home has no gpedit/secpol). Needs an elevated prompt.
+      LSA_OBJECT_ATTRIBUTES attrs;
+      memset(&attrs, 0, sizeof(attrs));
+      LSA_HANDLE policy = NULL;
+      if (LsaOpenPolicy(NULL, &attrs, POLICY_CREATE_ACCOUNT | POLICY_LOOKUP_NAMES, &policy) != 0)
+        return false;
+      wchar_t name[] = L"SeLockMemoryPrivilege";
+      LSA_UNICODE_STRING right;
+      right.Buffer = name;
+      right.Length = (USHORT)(sizeof(name) - sizeof(wchar_t)); // bytes, without the null
+      right.MaximumLength = (USHORT)sizeof(name);
+      const NTSTATUS status = LsaAddAccountRights(policy, sid, &right, 1);
+      LsaClose(policy);
+      return status == 0;
+    }
+  }
+
+  int setup_large_pages_win()
+  {
+    if (grant_lock_pages_privilege())
+    {
+      std::cout << "\"Lock pages in memory\" granted to your user. "
+        "Log out and back in (or reboot), then mining can use large pages." << std::endl;
+      return 0;
+    }
+    std::cout << "Could not grant \"Lock pages in memory\". "
+      "Run this from an elevated (administrator) prompt." << std::endl;
+    return 1;
+  }
+#endif
 
   bool on_startup()
   {

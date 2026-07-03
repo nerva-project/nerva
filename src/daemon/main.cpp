@@ -132,6 +132,7 @@ int main(int argc, char const * argv[])
       command_line::add_arg(visible_options, command_line::arg_help);
       command_line::add_arg(visible_options, command_line::arg_version);
       command_line::add_arg(visible_options, daemon_args::arg_os_version);
+      command_line::add_arg(visible_options, daemon_args::arg_setup_large_pages);
       command_line::add_arg(visible_options, daemon_args::arg_config_file);
 
       // Settings
@@ -197,6 +198,18 @@ int main(int argc, char const * argv[])
     {
       std::cout << "OS: " << tools::get_os_version_string() << ENDL;
       return 0;
+    }
+
+    if (command_line::get_arg(vm, daemon_args::arg_setup_large_pages))
+    {
+#if defined(WIN32)
+      return tools::setup_large_pages_win();
+#else
+      std::cout << "Nothing to set up on this platform. Linux gets transparent hugepages "
+        "automatically (reserve vm.nr_hugepages yourself if you want guaranteed pages), "
+        "FreeBSD superpages just work, macOS exposes no huge page mechanism." << ENDL;
+      return 0;
+#endif
     }
 
     std::string config = command_line::get_arg(vm, daemon_args::arg_config_file);
