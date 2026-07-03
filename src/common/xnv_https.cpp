@@ -153,7 +153,15 @@ namespace analytics
             return false;
         }
 
-        http_client.set_server(url, boost::none);
+        // Honor the URL scheme instead of autodetecting. The endpoint is a known
+        // http:// address, so probing SSL first just fails against the plaintext
+        // server ("wrong version number"), logs an error, and falls back to
+        // plaintext anyway. Disabling SSL for http:// skips the pointless probe;
+        // https:// still autodetects.
+        const auto ssl = u_c.schema == "http"
+            ? epee::net_utils::ssl_support_t::e_ssl_support_disabled
+            : epee::net_utils::ssl_support_t::e_ssl_support_autodetect;
+        http_client.set_server(url, boost::none, ssl);
         if (!http_client.connect(std::chrono::seconds(30)))
         {
             MGINFO("Sending analytics failed. Connection.");

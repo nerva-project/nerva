@@ -179,9 +179,9 @@ static BOOL SetLockPagesPrivilege(HANDLE hProcess, BOOL bEnable)
     randomize_scratchpad(r, scratchpad);
 
 
-#if !defined(CN_FORCE_SOFTWARE_AES) && !defined(NO_AES) && (         \
-        defined(__x86_64__) ||                                       \
-        (defined(_MSC_VER) && defined(_WIN64)) ||                    \
+#if !defined(CN_FORCE_SOFTWARE_AES) && !defined(NO_AES) && (              \
+        defined(__x86_64__) || defined(__i386__) ||                       \
+        (defined(_MSC_VER) && (defined(_WIN64) || defined(_M_IX86))) ||   \
         (defined(__aarch64__) && defined(__ARM_FEATURE_CRYPTO)))
 
 #if defined(__aarch64__) && defined(__ARM_FEATURE_CRYPTO)
