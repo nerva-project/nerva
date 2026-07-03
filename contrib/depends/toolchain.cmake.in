@@ -116,7 +116,11 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
   # iOS: native Xcode (clang + iphoneos SDK). the aarch64 block below sets ARM/AES.
   SET(IOS ON)  # single source of truth for the if(IOS)/if(NOT IOS) guards
   SET(CMAKE_OSX_ARCHITECTURES "arm64")
-  SET(CMAKE_OSX_SYSROOT "iphoneos")
+  if("@HOST@" MATCHES "simulator")
+    SET(CMAKE_OSX_SYSROOT "iphonesimulator")
+  else()
+    SET(CMAKE_OSX_SYSROOT "iphoneos")
+  endif()
   SET(CMAKE_OSX_DEPLOYMENT_TARGET "12.0")
   SET(CMAKE_C_COMPILER clang)
   SET(CMAKE_CXX_COMPILER clang++ -stdlib=libc++)
