@@ -2724,6 +2724,7 @@ void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t
   // and reduces post-HF13 sync time regardless of chain length.  The remaining
   // ~5% draw from the full history to preserve pool resistance.
   build_block_cache(height);
+  boost::shared_lock<boost::shared_mutex> cache_lock(m_block_cache_lock);
   const uint64_t window_size = (height > (uint64_t)CNA_V6_WINDOW_BLOCKS) ? (uint64_t)CNA_V6_WINDOW_BLOCKS : height;
   const uint64_t window_base = height - window_size;
 
