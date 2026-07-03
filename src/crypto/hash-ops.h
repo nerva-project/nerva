@@ -114,6 +114,18 @@ typedef struct cn_random_values
   int8_t values[CN_RANDOM_VALUES];
 } cn_random_values_t;
 
+/* Backing-page tier of a scratchpad/salt allocation. Stored in the
+ * *_is_mapped context fields; ordered so any tier >= CN_PAGES_PLAIN_MMAP
+ * is released with munmap/VirtualFree and 0 keeps the legacy meaning
+ * "release with free()". Higher tier = fewer TLB misses on the 8 MB pad. */
+#define CN_PAGES_MALLOC     0   /* plain malloc, base pages (worst case)   */
+#define CN_PAGES_PLAIN_MMAP 1   /* mmap, base pages                        */
+#define CN_PAGES_THP        2   /* mmap + THP/superpage hint (best effort) */
+#define CN_PAGES_HUGE       3   /* explicit hugetlb / large pages          */
+
+/* Human-readable name for a CN_PAGES_* tier (miner logs / status). */
+const char *cn_page_tier_name(int tier);
+
 typedef struct cn_hash_context
 {
   /* Software-AES path always has its context allocated so the runtime

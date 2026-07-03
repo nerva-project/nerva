@@ -1268,6 +1268,7 @@ namespace cryptonote
       res.status = "Already mining";
       return true;
     }
+    miner.set_mining_affinity(req.mining_affinity);
     if(!miner.start(info.address, static_cast<size_t>(req.threads_count), req.do_background_mining, req.ignore_battery))
     {
       res.status = "Failed, mining not started";

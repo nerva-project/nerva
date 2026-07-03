@@ -139,6 +139,14 @@ namespace daemon_args
   , false
   };
 
+  const command_line::arg_descriptor<bool> arg_setup_large_pages = {
+    "setup-large-pages"
+  , "Grant \"Lock pages in memory\" to the current user so mining can use large pages, then exit. "
+    "Run once from an administrator prompt, takes effect after logging out and back in. Windows only, "
+    "Linux and FreeBSD need no setup"
+  , false
+  };
+
   const command_line::arg_descriptor<bool> arg_nodns = {
     "no-dns"
   , "Do not use DNS to get seed nodes, update links or anything else from the web"
