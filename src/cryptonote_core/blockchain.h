@@ -237,7 +237,7 @@ namespace cryptonote
      *
      * @return true if the block was found, else false
      */
-    bool get_block_by_hash(const crypto::hash &h, block &blk, bool *orphan = NULL) const;
+    bool get_block_by_hash(const crypto::hash &h, block &blk, bool *orphan = NULL, bool *uncle = NULL) const;
 
     /**
      * @brief performs some preprocessing on a group of incoming blocks to speed up verification
@@ -1096,6 +1096,8 @@ namespace cryptonote
     uint64_t m_prepare_nblocks;
     uint64_t m_batch_start_height;
     std::vector<block> *m_prepare_blocks;
+
+    std::list<std::pair<crypto::hash, uint64_t>> m_uncle_candidates; // id, height
 
     /**
      * @brief collects the keys for all outputs being "spent" as an input
