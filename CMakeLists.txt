@@ -305,6 +305,19 @@ if (ARM_ID STREQUAL "aarch64" OR ARM_ID STREQUAL "arm64" OR ARM_ID STREQUAL "arm
     set(ARCH "armv8-a")
 endif ()
 
+# Detect a musl libc target (e.g. aarch64-linux-musl). Unlike glibc, musl ships
+# no execinfo.h and links cleanly as a fully static binary, so a couple of the
+# choices below (stack tracing, -static) branch on this.
+execute_process(
+    COMMAND ${CMAKE_C_COMPILER} -dumpmachine
+    OUTPUT_VARIABLE NERVA_COMPILER_TRIPLE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+if (NERVA_COMPILER_TRIPLE MATCHES "musl")
+    set(MUSL_LIBC 1)
+    message(STATUS "Detected musl libc target (${NERVA_COMPILER_TRIPLE})")
+endif ()
+
 if (ARCH_ID STREQUAL "ppc64le")
     set(PPC64LE 1)
     set(PPC64 0)
@@ -527,7 +540,12 @@ add_definitions("-DBLOCKCHAIN_DB=${BLOCKCHAIN_DB}")
 # Can't install hook in static build on OSX, because OSX linker does not support --wrap
 # On ARM, having libunwind package (with .so's only) installed breaks static link.
 # When possible, avoid stack tracing using libunwind in favor of using easylogging++.
-if (APPLE OR NETBSD)
+if (MUSL_LIBC)
+    # musl has no execinfo.h (easylogging++ backtraces) and we don't ship a
+    # static libunwind for it, so stack tracing on exception is unavailable here.
+    set(DEFAULT_STACK_TRACE OFF)
+    set(LIBUNWIND_LIBRARIES "")
+elseif (APPLE OR NETBSD)
     set(DEFAULT_STACK_TRACE OFF)
     set(LIBUNWIND_LIBRARIES "")
 elseif (DEPENDS AND NOT LINUX)
@@ -1061,8 +1079,12 @@ else ()
             # On Windows, this is as close to fully-static as we get:
             # this leaves only deps on /c/Windows/system32/*.dll
             set(STATIC_FLAGS "-static")
+        elseif (MUSL_LIBC)
+            # musl links cleanly when fully static (no glibc NSS dlopen problem),
+            # so we can drop the glibc version dependency entirely here.
+            set(STATIC_FLAGS "-static")
         elseif (NOT (APPLE OR FREEBSD OR OPENBSD OR DRAGONFLY))
-            # On Linux, we don't support fully static build, but these can be static
+            # On glibc Linux, we don't support fully static build, but these can be static
             set(STATIC_FLAGS "-static-libgcc -static-libstdc++")
         endif ()
         set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${STATIC_FLAGS} ")

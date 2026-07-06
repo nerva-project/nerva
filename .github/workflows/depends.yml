@@ -75,6 +75,22 @@ jobs:
                         host: "aarch64-linux-gnu"
                         packages: "python3 gperf g++-aarch64-linux-gnu"
                         artifact-name: "nerva-linux-armv8"
+                    -   name: "ARM v8 musl"
+                        host: "aarch64-unknown-linux-musl"
+                        packages: "python3 gperf"
+                        artifact-name: "nerva-linux-armv8-musl"
+                    -   name: "x86_64 musl"
+                        host: "x86_64-unknown-linux-musl"
+                        packages: "python3 gperf"
+                        artifact-name: "nerva-linux-x86_64-musl"
+                    -   name: "i686 musl"
+                        host: "i686-unknown-linux-musl"
+                        packages: "python3 gperf"
+                        artifact-name: "nerva-linux-i686-musl"
+                    -   name: "ARM v7 musl"
+                        host: "armv7-unknown-linux-musleabihf"
+                        packages: "python3 gperf"
+                        artifact-name: "nerva-linux-armv7-musl"
                     -   name: "i686 Win"
                         host: "i686-w64-mingw32"
                         packages: "python3 g++-mingw-w64-i686"
@@ -138,6 +154,23 @@ jobs:
                 run: |
                     update-alternatives --set ${{ matrix.toolchain.host }}-g++ $(which ${{ matrix.toolchain.host }}-g++-posix)
                     update-alternatives --set ${{ matrix.toolchain.host }}-gcc $(which ${{ matrix.toolchain.host }}-gcc-posix)
+            -   name: Fetch musl cross toolchain
+                # No apt musl cross packages exist and musl.cc is unreachable from CI,
+                # so pull the matching cross-tools toolchain (the tarball is named by
+                # the host triple), checksum it, and put it on PATH; depends then finds
+                # <triple>-gcc by name.
+                if: ${{ contains(matrix.toolchain.host, 'musl') }}
+                env:
+                    XTOOLS_TAG: "20250206"
+                run: |
+                    cd /opt
+                    BASE="https://github.com/cross-tools/musl-cross/releases/download/${XTOOLS_TAG}"
+                    curl -fsSL --retry 3 -O "${BASE}/${{ matrix.toolchain.host }}.tar.xz"
+                    curl -fsSL --retry 3 -O "${BASE}/${{ matrix.toolchain.host }}.tar.xz.sha256"
+                    SUM=$(awk '{print $1}' "${{ matrix.toolchain.host }}.tar.xz.sha256")
+                    echo "${SUM}  ${{ matrix.toolchain.host }}.tar.xz" | sha256sum -c -
+                    tar -xf "${{ matrix.toolchain.host }}.tar.xz"
+                    echo "/opt/${{ matrix.toolchain.host }}/bin" >> "$GITHUB_PATH"
             -   uses: ./.github/actions/set-make-job-count
             -   name: Build
                 run: |
