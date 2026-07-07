@@ -123,7 +123,14 @@ namespace cryptonote
     // (windows processor group, cpu index); group is -1 outside windows
     typedef std::pair<int, int> cpu_slot;
 
-#if defined(__linux__)
+// Android is excluded on purpose (falls through to the empty enumerator
+// below, so --mining-affinity is a no-op there). Phone SoCs are big.LITTLE
+// and expose no L3, so the plan's fallback pins one worker per core starting
+// at cpu0, the LITTLE (efficiency) cluster, cutting the hashrate several-fold
+// until Android's cpuset controller overrides the pin on a screen-state
+// change. Nothing to gain either: no big shared L3 to keep the scratchpad
+// resident in, and Android's own scheduler already places threads well.
+#if defined(__linux__) && !defined(__ANDROID__)
     std::vector<std::pair<cpu_slot, long>> enumerate_cores()
     {
       std::vector<std::pair<cpu_slot, long>> cores;
