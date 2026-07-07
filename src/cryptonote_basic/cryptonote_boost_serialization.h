@@ -240,6 +240,15 @@ namespace boost
   }
 
   template <class Archive>
+  inline void serialize(Archive &a, rct::clsag &x, const boost::serialization::version_type ver)
+  {
+    a & x.s;
+    a & x.c1;
+    // a & x.I; // not serialized, we can recover it from the tx vin
+    a & x.D;
+  }
+
+  template <class Archive>
   inline void serialize(Archive &a, rct::ecdhTuple &x, const boost::serialization::version_type ver)
   {
     a & x.mask;
@@ -289,9 +298,9 @@ namespace boost
     a & x.type;
     if (x.type == rct::RCTTypeNull)
       return;
-    if (x.type != rct::RCTTypeFull && x.type != rct::RCTTypeSimple && 
-        x.type != rct::RCTTypeBulletproof1Full && x.type != rct::RCTTypeBulletproof1Simple && 
-        x.type != rct::RCTTypeBulletproof2)
+    if (x.type != rct::RCTTypeFull && x.type != rct::RCTTypeSimple &&
+        x.type != rct::RCTTypeBulletproof1Full && x.type != rct::RCTTypeBulletproof1Simple &&
+        x.type != rct::RCTTypeBulletproof2 && x.type != rct::RCTTypeCLSAG)
       throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception, "Unsupported rct type");
     // a & x.message; message is not serialized, as it can be reconstructed from the tx data
     // a & x.mixRing; mixRing is not serialized, as it can be reconstructed from the offsets
@@ -309,6 +318,8 @@ namespace boost
     if (x.rangeSigs.empty())
       a & x.bulletproofs;
     a & x.MGs;
+    if (ver >= 1u)
+      a & x.CLSAGs;
     if (x.rangeSigs.empty())
       a & x.pseudoOuts;
   }
@@ -319,9 +330,9 @@ namespace boost
     a & x.type;
     if (x.type == rct::RCTTypeNull)
       return;
-    if (x.type != rct::RCTTypeFull && x.type != rct::RCTTypeSimple && 
-        x.type != rct::RCTTypeBulletproof1Full && x.type != rct::RCTTypeBulletproof1Simple && 
-        x.type != rct::RCTTypeBulletproof2)
+    if (x.type != rct::RCTTypeFull && x.type != rct::RCTTypeSimple &&
+        x.type != rct::RCTTypeBulletproof1Full && x.type != rct::RCTTypeBulletproof1Simple &&
+        x.type != rct::RCTTypeBulletproof2 && x.type != rct::RCTTypeCLSAG)
       throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception, "Unsupported rct type");
     // a & x.message; message is not serialized, as it can be reconstructed from the tx data
     // a & x.mixRing; mixRing is not serialized, as it can be reconstructed from the offsets
@@ -335,8 +346,11 @@ namespace boost
     if (x.p.rangeSigs.empty())
       a & x.p.bulletproofs;
     a & x.p.MGs;
+    if (ver >= 1u)
+      a & x.p.CLSAGs;
     if (x.type == rct::RCTTypeBulletproof1Simple ||
-        x.type == rct::RCTTypeBulletproof2)
+        x.type == rct::RCTTypeBulletproof2 ||
+        x.type == rct::RCTTypeCLSAG)
       a & x.p.pseudoOuts;
   }
 
@@ -377,3 +391,7 @@ namespace boost
 }
 }
 
+// Class version gates the HF14 CLSAGs field so wallet caches written by
+// older code still load, as Monero master.
+BOOST_CLASS_VERSION(rct::rctSigPrunable, 1)
+BOOST_CLASS_VERSION(rct::rctSig, 1)

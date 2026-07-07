@@ -545,6 +545,23 @@ namespace rct {
         ge_tobytes(aAbB.bytes, &rv);
     }
 
+    // addKeys_aGbBcC
+    // computes aG + bB + cC
+    // G is the fixed basepoint and B,C require precomputation
+    void addKeys_aGbBcC(key &aGbBcC, const key &a, const key &b, const ge_dsmp B, const key &c, const ge_dsmp C) {
+        ge_p2 rv;
+        ge_triple_scalarmult_base_vartime(&rv, a.bytes, b.bytes, B, c.bytes, C);
+        ge_tobytes(aGbBcC.bytes, &rv);
+    }
+
+    // addKeys_aAbBcC
+    // computes aA + bB + cC
+    // A,B,C require precomputation
+    void addKeys_aAbBcC(key &aAbBcC, const key &a, const ge_dsmp A, const key &b, const ge_dsmp B, const key &c, const ge_dsmp C) {
+        ge_p2 rv;
+        ge_triple_scalarmult_precomp_vartime(&rv, a.bytes, A, b.bytes, B, c.bytes, C);
+        ge_tobytes(aAbBcC.bytes, &rv);
+    }
 
     //subtract Keys (subtracts curve points)
     //AB = A - B where A, B are curve points
@@ -704,6 +721,16 @@ namespace rct {
         ge_p1p1_to_p3(&res, &point2);        
         ge_p3_tobytes(pointk.bytes, &res);
     }    
+
+    // Hash a key to p3 representation
+    void hash_to_p3(ge_p3 &hash8_p3, const key &k) {
+      key hash_key = cn_fast_hash(k);
+      ge_p2 hash_p2;
+      ge_fromfe_frombytes_vartime(&hash_p2, hash_key.bytes);
+      ge_p1p1 hash8_p1p1;
+      ge_mul8(&hash8_p1p1, &hash_p2);
+      ge_p1p1_to_p3(&hash8_p3, &hash8_p1p1);
+    }
 
     //sums a vector of curve points (for scalars use sc_add)
     void sumKeys(key & Csum, const keyV &  Cis) {

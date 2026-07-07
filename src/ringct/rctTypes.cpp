@@ -217,6 +217,7 @@ namespace rct {
             case RCTTypeSimple:
             case RCTTypeBulletproof1Simple:
             case RCTTypeBulletproof2:
+            case RCTTypeCLSAG:
                 return true;
             default:
                 return false;
@@ -230,6 +231,18 @@ namespace rct {
             case RCTTypeBulletproof1Simple:
             case RCTTypeBulletproof1Full:
             case RCTTypeBulletproof2:
+            case RCTTypeCLSAG:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool is_rct_clsag(int type)
+    {
+        switch (type)
+        {
+            case RCTTypeCLSAG:
                 return true;
             default:
                 return false;

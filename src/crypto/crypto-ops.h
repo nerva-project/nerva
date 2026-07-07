@@ -81,6 +81,10 @@ extern const ge_precomp ge_Bi[8];
 void ge_dsm_precomp(ge_dsmp r, const ge_p3 *s);
 void ge_double_scalarmult_base_vartime(ge_p2 *, const unsigned char *, const ge_p3 *, const unsigned char *);
 void ge_double_scalarmult_base_vartime_p3(ge_p3 *, const unsigned char *, const ge_p3 *, const unsigned char *);
+/* aG + bB + cC where G is the basepoint; B, C via ge_dsm_precomp. CLSAG (HF14), from Monero. */
+void ge_triple_scalarmult_base_vartime(ge_p2 *, const unsigned char *, const unsigned char *, const ge_dsmp, const unsigned char *, const ge_dsmp);
+/* aA + bB + cC, all three via ge_dsm_precomp. CLSAG (HF14), from Monero. */
+void ge_triple_scalarmult_precomp_vartime(ge_p2 *, const unsigned char *, const ge_dsmp, const unsigned char *, const ge_dsmp, const unsigned char *, const ge_dsmp);
 
 /* From ge_frombytes.c, modified */
 
