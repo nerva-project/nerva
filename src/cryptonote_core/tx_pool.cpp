@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "tx_pool.h"
+#include "cryptonote_core/tx_verification_utils.h"
 #include "cryptonote_tx_utils.h"
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
 #include "cryptonote_config.h"
@@ -79,11 +80,6 @@ namespace cryptonote
     uint64_t template_accept_threshold(uint64_t amount)
     {
       return amount * ACCEPT_THRESHOLD;
-    }
-
-    uint64_t get_transaction_weight_limit(uint8_t version)
-    {
-      return get_min_block_weight(version) - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
     }
 
     // This class is meant to create a batch when none currently exists.

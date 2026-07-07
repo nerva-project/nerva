@@ -1002,6 +1002,15 @@ namespace cryptonote
      */
     bool has_block_weights(uint64_t height, uint64_t nblocks) const;
 
+    /**
+     * @brief expands transaction data from blockchain
+     *
+     * RingCT transactions do not transmit some of their data if it
+     * can be reconstituted by the receiver. This function expands
+     * that implicit data.
+     */
+    static bool expand_transaction(transaction &tx, const crypto::hash &tx_prefix_hash, const std::vector<std::vector<rct::ctkey>> &pubkeys);
+
 #ifndef IN_UNIT_TESTS
   private:
 #endif
@@ -1459,14 +1468,6 @@ namespace cryptonote
     void check_ring_signature(const crypto::hash &tx_prefix_hash, const crypto::key_image &key_image,
         const std::vector<rct::ctkey> &pubkeys, const std::vector<crypto::signature> &sig, uint64_t &result) const;
 
-    /**
-     * @brief expands transaction data from blockchain
-     *
-     * RingCT transactions do not transmit some of their data if it
-     * can be reconstituted by the receiver. This function expands
-     * that implicit data.
-     */
-    bool expand_transaction(transaction &tx, const crypto::hash &tx_prefix_hash, const std::vector<std::vector<rct::ctkey>> &pubkeys) const;
     
     /**
      * @brief invalidates any cached block template

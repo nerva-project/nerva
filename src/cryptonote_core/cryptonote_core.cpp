@@ -37,6 +37,7 @@ using namespace epee;
 
 #include <unordered_set>
 #include "cryptonote_core.h"
+#include "cryptonote_core/tx_verification_utils.h"
 #include "common/command_line.h"
 #include "common/util.h"
 #include "common/updates.h"
@@ -859,26 +860,6 @@ namespace cryptonote
       bad_semantics_txes[0].clear();
     }
     bad_semantics_txes_lock.unlock();
-  }
-  //-----------------------------------------------------------------------------------------------
-  static bool is_canonical_bulletproof_layout(const std::vector<rct::Bulletproof> &proofs)
-  {
-    if (proofs.size() != 1)
-      return false;
-    const size_t sz = proofs[0].V.size();
-    if (sz == 0 || sz > BULLETPROOF_MAX_OUTPUTS)
-      return false;
-    return true;
-  }
-  //-----------------------------------------------------------------------------------------------
-  static bool is_canonical_bulletproof_plus_layout(const std::vector<rct::BulletproofPlus> &proofs)
-  {
-    if (proofs.size() != 1)
-      return false;
-    const size_t sz = proofs[0].V.size();
-    if (sz == 0 || sz > BULLETPROOF_PLUS_MAX_OUTPUTS)
-      return false;
-    return true;
   }
   //-----------------------------------------------------------------------------------------------
   bool core::handle_incoming_tx_accumulated_batch(std::vector<tx_verification_batch_info> &tx_info, bool keeped_by_block)
