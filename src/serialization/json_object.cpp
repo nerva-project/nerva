@@ -1012,6 +1012,7 @@ void toJsonValue(rapidjson::Document& doc, const rct::rctSig& sig, rapidjson::Va
     INSERT_INTO_JSON_OBJECT(prunable, doc, range_proofs, sig.p.rangeSigs);
     INSERT_INTO_JSON_OBJECT(prunable, doc, bulletproofs, sig.p.bulletproofs);
     INSERT_INTO_JSON_OBJECT(prunable, doc, mlsags, sig.p.MGs);
+    INSERT_INTO_JSON_OBJECT(prunable, doc, clsags, sig.p.CLSAGs);
     INSERT_INTO_JSON_OBJECT(prunable, doc, pseudo_outs, sig.get_pseudo_outs());
 
     val.AddMember("prunable", prunable, doc.GetAllocator());
@@ -1044,6 +1045,7 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
     GET_FROM_JSON_OBJECT(prunable, sig.p.rangeSigs, range_proofs);
     GET_FROM_JSON_OBJECT(prunable, sig.p.bulletproofs, bulletproofs);
     GET_FROM_JSON_OBJECT(prunable, sig.p.MGs, mlsags);
+    GET_FROM_JSON_OBJECT(prunable, sig.p.CLSAGs, clsags);
     GET_FROM_JSON_OBJECT(prunable, pseudo_outs, pseudo_outs);
 
     sig.get_pseudo_outs() = std::move(pseudo_outs);
@@ -1215,6 +1217,28 @@ void fromJsonValue(const rapidjson::Value& val, rct::mgSig& sig)
 
   GET_FROM_JSON_OBJECT(val, sig.ss, ss);
   GET_FROM_JSON_OBJECT(val, sig.cc, cc);
+}
+
+void toJsonValue(rapidjson::Document& doc, const rct::clsag& sig, rapidjson::Value& val)
+{
+  val.SetObject();
+
+  INSERT_INTO_JSON_OBJECT(val, doc, s, sig.s);
+  INSERT_INTO_JSON_OBJECT(val, doc, c1, sig.c1);
+  // sig.I not serialized, it can be reconstructed from the tx vin
+  INSERT_INTO_JSON_OBJECT(val, doc, D, sig.D);
+}
+
+void fromJsonValue(const rapidjson::Value& val, rct::clsag& sig)
+{
+  if (!val.IsObject())
+  {
+    throw WRONG_TYPE("json object");
+  }
+
+  GET_FROM_JSON_OBJECT(val, sig.s, s);
+  GET_FROM_JSON_OBJECT(val, sig.c1, c1);
+  GET_FROM_JSON_OBJECT(val, sig.D, D);
 }
 
 void toJsonValue(rapidjson::Document& doc, const cryptonote::rpc::DaemonInfo& info, rapidjson::Value& val)

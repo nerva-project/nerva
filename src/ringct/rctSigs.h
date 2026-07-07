@@ -77,6 +77,13 @@ namespace rct {
     mgSig MLSAG_Gen(const key &message, const keyM & pk, const keyV & xx, const multisig_kLRki *kLRki, key *mscout, const unsigned int index, size_t dsRows, hw::device &hwdev);
     bool MLSAG_Ver(const key &message, const keyM &pk, const mgSig &sig, size_t dsRows);
 
+    //CLSAG signatures (HF14, ported from Monero)
+    // c.f. https://eprint.iacr.org/2019/654
+    clsag CLSAG_Gen(const key &message, const keyV & P, const key & p, const keyV & C, const key & z, const keyV & C_nonzero, const key & C_offset, const unsigned int l, hw::device &hwdev);
+    clsag CLSAG_Gen(const key &message, const keyV & P, const key & p, const keyV & C, const key & z, const keyV & C_nonzero, const key & C_offset, const unsigned int l);
+    clsag proveRctCLSAGSimple(const key &, const ctkeyV &, const ctkey &, const key &, const key &, unsigned int, hw::device &);
+    bool verRctCLSAGSimple(const key &, const clsag &, const ctkeyV &, const key &);
+
     //proveRange and verRange
     //proveRange gives C, and mask such that \sumCi = C
     //   c.f. https://eprint.iacr.org/2015/1098 section 5.1

@@ -215,6 +215,13 @@ namespace config
     // Gated by --fast-block-sync; bump both each release. 0 = disable.
     uint64_t const ASSUME_VALID_HEIGHT = 4290000;
 
+    // CLSAG (HF14) hash domain separators. Byte-identical to Monero's so the
+    // signature scheme stays bit-compatible with the battle-tested upstream
+    // implementation; consensus-critical once HF14 activates.
+    const unsigned char HASH_KEY_CLSAG_ROUND[] = "CLSAG_round";
+    const unsigned char HASH_KEY_CLSAG_AGG_0[] = "CLSAG_agg_0";
+    const unsigned char HASH_KEY_CLSAG_AGG_1[] = "CLSAG_agg_1";
+
     static const hard_fork hard_forks[] = {
         { 1,      1},
         { 2,      2},
