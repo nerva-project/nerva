@@ -31,6 +31,7 @@ set(cryptonote_core_sources
   blockchain.cpp
   cryptonote_core.cpp
   tx_pool.cpp
+  tx_verification_utils.cpp
   tx_sanity_check.cpp
   cryptonote_tx_utils.cpp)
 
@@ -41,6 +42,7 @@ set(cryptonote_core_private_headers
   blockchain.h
   cryptonote_core.h
   tx_pool.h
+  tx_verification_utils.h
   tx_sanity_check.h
   cryptonote_tx_utils.h)
 

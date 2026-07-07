@@ -38,6 +38,7 @@
 #include "include_base_utils.h"
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "tx_pool.h"
+#include "cryptonote_core/tx_verification_utils.h"
 #include "blockchain.h"
 #include "blockchain_db/blockchain_db.h"
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
@@ -2832,7 +2833,7 @@ bool Blockchain::have_tx_keyimges_as_spent(const transaction &tx) const
   }
   return false;
 }
-bool Blockchain::expand_transaction(transaction &tx, const crypto::hash &tx_prefix_hash, const std::vector<std::vector<rct::ctkey>> &pubkeys) const
+bool Blockchain::expand_transaction(transaction &tx, const crypto::hash &tx_prefix_hash, const std::vector<std::vector<rct::ctkey>> &pubkeys)
 {
   PERF_TIMER(expand_transaction);
 
@@ -3045,167 +3046,10 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         false, "Transaction spends at least one output which is too young");
   }
 
-  if (!expand_transaction(tx, tx_prefix_hash, pubkeys))
-  {
-    MERROR_VER("Failed to expand rct signatures!");
+  if (!ver_input_proofs_rings(tx, pubkeys))
     return false;
-  }
 
-  // check ringct signatures
-  // obviously, the original and simple rct APIs use a mixRing that's indexes
-  // in opposite orders, because it'd be too simple otherwise...
   const rct::rctSig &rv = tx.rct_signatures;
-  switch (rv.type)
-  {
-  case rct::RCTTypeNull: {
-    // we only accept no signatures for coinbase txes
-    MERROR_VER("Null rct signature on non-coinbase tx");
-    return false;
-  }
-  case rct::RCTTypeSimple:
-  case rct::RCTTypeBulletproof1Simple:
-  case rct::RCTTypeBulletproof2:
-  case rct::RCTTypeCLSAG:
-  case rct::RCTTypeBulletproofPlus:
-  {
-    // check all this, either reconstructed (so should really pass), or not
-    {
-      if (pubkeys.size() != rv.mixRing.size())
-      {
-        MERROR_VER("Failed to check ringct signatures: mismatched pubkeys/mixRing size");
-        return false;
-      }
-      for (size_t i = 0; i < pubkeys.size(); ++i)
-      {
-        if (pubkeys[i].size() != rv.mixRing[i].size())
-        {
-          MERROR_VER("Failed to check ringct signatures: mismatched pubkeys/mixRing size");
-          return false;
-        }
-      }
-
-      for (size_t n = 0; n < pubkeys.size(); ++n)
-      {
-        for (size_t m = 0; m < pubkeys[n].size(); ++m)
-        {
-          if (pubkeys[n][m].dest != rct::rct2pk(rv.mixRing[n][m].dest))
-          {
-            MERROR_VER("Failed to check ringct signatures: mismatched pubkey at vin " << n << ", index " << m);
-            return false;
-          }
-          if (pubkeys[n][m].mask != rct::rct2pk(rv.mixRing[n][m].mask))
-          {
-            MERROR_VER("Failed to check ringct signatures: mismatched commitment at vin " << n << ", index " << m);
-            return false;
-          }
-        }
-      }
-    }
-
-    if (rct::is_rct_clsag(rv.type))
-    {
-      if (rv.p.CLSAGs.size() != tx.vin.size())
-      {
-        MERROR_VER("Failed to check ringct signatures: mismatched CLSAGs/vin sizes");
-        return false;
-      }
-      for (size_t n = 0; n < tx.vin.size(); ++n)
-      {
-        if (memcmp(&boost::get<txin_to_key>(tx.vin[n]).k_image, &rv.p.CLSAGs[n].I, 32))
-        {
-          MERROR_VER("Failed to check ringct signatures: mismatched key image");
-          return false;
-        }
-      }
-    }
-    else
-    {
-      if (rv.p.MGs.size() != tx.vin.size())
-      {
-        MERROR_VER("Failed to check ringct signatures: mismatched MGs/vin sizes");
-        return false;
-      }
-      for (size_t n = 0; n < tx.vin.size(); ++n)
-      {
-        if (rv.p.MGs[n].II.empty() || memcmp(&boost::get<txin_to_key>(tx.vin[n]).k_image, &rv.p.MGs[n].II[0], 32))
-        {
-          MERROR_VER("Failed to check ringct signatures: mismatched key image");
-          return false;
-        }
-      }
-    }
-
-    if (!(rv.type == rct::RCTTypeSimple || rv.type == rct::RCTTypeBulletproof1Simple ? rct::verRctNonSemanticsSimple_v1(rv) : rct::verRctNonSemanticsSimple(rv)))
-    {
-      MERROR_VER("Failed to check ringct signatures!");
-      return false;
-    }
-    break;
-  }
-  case rct::RCTTypeFull:
-  case rct::RCTTypeBulletproof1Full:
-  {
-    // check all this, either reconstructed (so should really pass), or not
-    {
-      bool size_matches = true;
-      for (size_t i = 0; i < pubkeys.size(); ++i)
-        size_matches &= pubkeys[i].size() == rv.mixRing.size();
-      for (size_t i = 0; i < rv.mixRing.size(); ++i)
-        size_matches &= pubkeys.size() == rv.mixRing[i].size();
-      if (!size_matches)
-      {
-        MERROR_VER("Failed to check ringct signatures: mismatched pubkeys/mixRing size");
-        return false;
-      }
-
-      for (size_t n = 0; n < pubkeys.size(); ++n)
-      {
-        for (size_t m = 0; m < pubkeys[n].size(); ++m)
-        {
-          if (pubkeys[n][m].dest != rct::rct2pk(rv.mixRing[m][n].dest))
-          {
-            MERROR_VER("Failed to check ringct signatures: mismatched pubkey at vin " << n << ", index " << m);
-            return false;
-          }
-          if (pubkeys[n][m].mask != rct::rct2pk(rv.mixRing[m][n].mask))
-          {
-            MERROR_VER("Failed to check ringct signatures: mismatched commitment at vin " << n << ", index " << m);
-            return false;
-          }
-        }
-      }
-    }
-
-    if (rv.p.MGs.size() != 1)
-    {
-      MERROR_VER("Failed to check ringct signatures: Bad MGs size");
-      return false;
-    }
-    if (rv.p.MGs.empty() || rv.p.MGs[0].II.size() != tx.vin.size())
-    {
-      MERROR_VER("Failed to check ringct signatures: mismatched II/vin sizes");
-      return false;
-    }
-    for (size_t n = 0; n < tx.vin.size(); ++n)
-    {
-      if (memcmp(&boost::get<txin_to_key>(tx.vin[n]).k_image, &rv.p.MGs[0].II[n], 32))
-      {
-        MERROR_VER("Failed to check ringct signatures: mismatched II/vin sizes");
-        return false;
-      }
-    }
-
-    if (!rct::verRct(rv, false))
-    {
-      MERROR_VER("Failed to check ringct signatures!");
-      return false;
-    }
-    break;
-  }
-  default:
-    MERROR_VER("Unsupported rct type: " << rv.type);
-    return false;
-  }
 
   // for bulletproofs, check they're only multi-output after v8
   if (rct::is_rct_bulletproof(rv.type))
