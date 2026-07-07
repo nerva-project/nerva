@@ -302,7 +302,10 @@ namespace rct {
     enum RangeProofType { RangeProofBorromean, RangeProofBulletproof, RangeProofMultiOutputBulletproof, RangeProofPaddedBulletproof };
     struct RCTConfig {
       RangeProofType range_proof_type;
-      bool is_v2;
+      // Monero master's field, replacing the old bool is_v2 at HF14:
+      // 0 = latest, 1 = BP v1 (MLSAG), 2 = BP v2 (MLSAG),
+      // 3 = BP with CLSAG, 4 = BP+ with CLSAG
+      int bp_version;
     };
     struct rctSigBase {
         uint8_t type;

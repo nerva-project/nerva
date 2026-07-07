@@ -383,7 +383,16 @@ namespace boost
   inline void serialize(Archive &a, rct::RCTConfig &x, const boost::serialization::version_type ver)
   {
     a & x.range_proof_type;
-    a & x.is_v2;
+    if (ver < 1)
+    {
+      // pre-HF14 archives stored the old bool is_v2; map it onto bp_version
+      bool is_v2 = x.bp_version >= 2;
+      a & is_v2;
+      if (Archive::is_loading::value)
+        x.bp_version = is_v2 ? 2 : 1;
+      return;
+    }
+    a & x.bp_version;
   }
 
   template <class Archive>
@@ -420,3 +429,4 @@ namespace boost
 // so wallet caches written by older code still load, as Monero master.
 BOOST_CLASS_VERSION(rct::rctSigPrunable, 2)
 BOOST_CLASS_VERSION(rct::rctSig, 2)
+BOOST_CLASS_VERSION(rct::RCTConfig, 1)

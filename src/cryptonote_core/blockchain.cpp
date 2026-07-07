@@ -2790,6 +2790,34 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     return false;
   }
 
+  // from v14, allow CLSAGs and bulletproofs plus (Monero's HF_VERSION_CLSAG /
+  // HF_VERSION_BULLETPROOF_PLUS gates, folded into one fork here)
+  if (hf_version < HF_VERSION_CLSAG) {
+    if (tx.version >= 2) {
+      if (tx.rct_signatures.type == rct::RCTTypeCLSAG || tx.rct_signatures.type == rct::RCTTypeBulletproofPlus || !tx.rct_signatures.p.bulletproofs_plus.empty())
+      {
+        MERROR_VER("Ringct type " << (unsigned)tx.rct_signatures.type << " is not allowed before v" << HF_VERSION_CLSAG);
+        tvc.m_invalid_output = true;
+        return false;
+      }
+    }
+  }
+
+  // from v14, allow only bulletproofs plus: type 6 (CLSAG with Bulletproofs)
+  // is the verified stepping stone and is never activated, new transactions
+  // must be type 7. Stray legacy bulletproofs are rejected like stray
+  // bulletproofs_plus are before the fork.
+  if (hf_version >= HF_VERSION_BULLETPROOF_PLUS) {
+    if (tx.version >= 2) {
+      if (tx.rct_signatures.type != rct::RCTTypeBulletproofPlus || !tx.rct_signatures.p.bulletproofs.empty())
+      {
+        MERROR_VER("Ringct type " << (unsigned)tx.rct_signatures.type << " is not allowed from v" << HF_VERSION_BULLETPROOF_PLUS);
+        tvc.m_invalid_output = true;
+        return false;
+      }
+    }
+  }
+
   return true;
 }
 //------------------------------------------------------------------
@@ -2827,7 +2855,7 @@ bool Blockchain::expand_transaction(transaction &tx, const crypto::hash &tx_pref
         rv.mixRing[m].push_back(pubkeys[n][m]);
     }
   }
-  else if (rv.type == rct::RCTTypeSimple || rv.type == rct::RCTTypeBulletproof1Simple || rv.type == rct::RCTTypeBulletproof2)
+  else if (rv.type == rct::RCTTypeSimple || rv.type == rct::RCTTypeBulletproof1Simple || rv.type == rct::RCTTypeBulletproof2 || rv.type == rct::RCTTypeCLSAG || rv.type == rct::RCTTypeBulletproofPlus)
   {
     CHECK_AND_ASSERT_MES(!pubkeys.empty() && !pubkeys[0].empty(), false, "empty pubkeys");
     rv.mixRing.resize(pubkeys.size());
@@ -2865,6 +2893,17 @@ bool Blockchain::expand_transaction(transaction &tx, const crypto::hash &tx_pref
       {
         rv.p.MGs[n].II.resize(1);
         rv.p.MGs[n].II[0] = rct::ki2rct(boost::get<txin_to_key>(tx.vin[n]).k_image);
+      }
+    }
+  }
+  else if (rv.type == rct::RCTTypeCLSAG || rv.type == rct::RCTTypeBulletproofPlus)
+  {
+    if (!tx.pruned)
+    {
+      CHECK_AND_ASSERT_MES(rv.p.CLSAGs.size() == tx.vin.size(), false, "Bad CLSAGs size");
+      for (size_t n = 0; n < tx.vin.size(); ++n)
+      {
+        rv.p.CLSAGs[n].I = rct::ki2rct(boost::get<txin_to_key>(tx.vin[n]).k_image);
       }
     }
   }
@@ -3026,6 +3065,8 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   case rct::RCTTypeSimple:
   case rct::RCTTypeBulletproof1Simple:
   case rct::RCTTypeBulletproof2:
+  case rct::RCTTypeCLSAG:
+  case rct::RCTTypeBulletproofPlus:
   {
     // check all this, either reconstructed (so should really pass), or not
     {
@@ -3061,21 +3102,40 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       }
     }
 
-    if (rv.p.MGs.size() != tx.vin.size())
+    if (rct::is_rct_clsag(rv.type))
     {
-      MERROR_VER("Failed to check ringct signatures: mismatched MGs/vin sizes");
-      return false;
-    }
-    for (size_t n = 0; n < tx.vin.size(); ++n)
-    {
-      if (rv.p.MGs[n].II.empty() || memcmp(&boost::get<txin_to_key>(tx.vin[n]).k_image, &rv.p.MGs[n].II[0], 32))
+      if (rv.p.CLSAGs.size() != tx.vin.size())
       {
-        MERROR_VER("Failed to check ringct signatures: mismatched key image");
+        MERROR_VER("Failed to check ringct signatures: mismatched CLSAGs/vin sizes");
         return false;
+      }
+      for (size_t n = 0; n < tx.vin.size(); ++n)
+      {
+        if (memcmp(&boost::get<txin_to_key>(tx.vin[n]).k_image, &rv.p.CLSAGs[n].I, 32))
+        {
+          MERROR_VER("Failed to check ringct signatures: mismatched key image");
+          return false;
+        }
+      }
+    }
+    else
+    {
+      if (rv.p.MGs.size() != tx.vin.size())
+      {
+        MERROR_VER("Failed to check ringct signatures: mismatched MGs/vin sizes");
+        return false;
+      }
+      for (size_t n = 0; n < tx.vin.size(); ++n)
+      {
+        if (rv.p.MGs[n].II.empty() || memcmp(&boost::get<txin_to_key>(tx.vin[n]).k_image, &rv.p.MGs[n].II[0], 32))
+        {
+          MERROR_VER("Failed to check ringct signatures: mismatched key image");
+          return false;
+        }
       }
     }
 
-    if (!(rv.type == rct::RCTTypeBulletproof2 ? rct::verRctNonSemanticsSimple(rv) : rct::verRctNonSemanticsSimple_v1(rv)))
+    if (!(rv.type == rct::RCTTypeSimple || rv.type == rct::RCTTypeBulletproof1Simple ? rct::verRctNonSemanticsSimple_v1(rv) : rct::verRctNonSemanticsSimple(rv)))
     {
       MERROR_VER("Failed to check ringct signatures!");
       return false;
