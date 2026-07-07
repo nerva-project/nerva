@@ -186,7 +186,12 @@ namespace cryptonote
       }
     }
 
-    if (!m_blockchain.check_tx_outputs(tx, tvc))
+    // not for kept_by_block: the output rules follow the pool tip's fork
+    // version, but a tx carried by a block belongs to that block's height.
+    // An alternative chain crossing the HF14 boundary would fail here and
+    // drop the peer; block transactions get this check with the right
+    // hardfork state in handle_block_to_main_chain instead.
+    if (!kept_by_block && !m_blockchain.check_tx_outputs(tx, tvc))
     {
       LOG_PRINT_L1("Transaction with id= "<< id << " has at least one invalid output");
       tvc.m_verifivation_failed = true;
@@ -1093,6 +1098,12 @@ namespace cryptonote
         }
       }
     }
+    // the output rules can flip at the fork boundary while a tx sits in the
+    // pool (re-validation can leave one behind on a transient failure);
+    // never hand the miner a tx every other node would reject
+    tx_verification_context tvc_out{};
+    if(!m_blockchain.check_tx_outputs(lazy_tx(), tvc_out))
+      return false;
     //if we here, transaction seems valid, but, anyway, check for key_images collisions with blockchain, just to be sure
     if(m_blockchain.have_tx_keyimges_as_spent(lazy_tx()))
     {

@@ -173,6 +173,10 @@
 #define HF_VERSION_MIN_2_OUTPUTS                                        13
 #define HF_VERSION_ENFORCE_MIN_AGE                                      13
 #define HF_VERSION_TX_KEY_VALIDATION                                    13
+// Monero forks these separately (v13 and v15); Nerva does both at HF14 and
+// only ever creates type 7 (CLSAG with Bulletproofs+)
+#define HF_VERSION_CLSAG                                                14
+#define HF_VERSION_BULLETPROOF_PLUS                                     14
 #define CRYPTONOTE_SHORT_TERM_BLOCK_WEIGHT_SURGE_FACTOR                 50
 
 #define CRYPTONOTE_NOISE_MIN_EPOCH                                      5
@@ -268,6 +272,7 @@ namespace config
             {11, 590},
             {12, 2000},
             {13, 2100}
+            // {14, TBD}  // CLSAG + Bulletproofs+ (type 7 only)
         };
     }
 
@@ -292,6 +297,7 @@ namespace config
             {11, 590},
             {12, 700},
             {13, 800}
+            // {14, TBD}  // CLSAG + Bulletproofs+ (type 7 only)
         };
     }
 }

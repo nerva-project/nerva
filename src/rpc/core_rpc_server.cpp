@@ -768,6 +768,8 @@ namespace cryptonote
                 case rct::RCTTypeSimple:
                 case rct::RCTTypeBulletproof1Simple:
                 case rct::RCTTypeBulletproof2:
+                case rct::RCTTypeCLSAG:
+                case rct::RCTTypeBulletproofPlus:
                   tx_amount = rct::decodeRctSimple(tx.rct_signatures, rct::sk2rct(scalar1), i, mask, hwdev);
                   break;
                 case rct::RCTTypeFull:

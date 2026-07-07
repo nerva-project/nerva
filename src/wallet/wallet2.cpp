@@ -6419,11 +6419,11 @@ bool wallet2::sign_tx(unsigned_tx_set &exported_txs, std::vector<wallet2::pendin
     LOG_PRINT_L1(" " << (n+1) << ": " << sd.sources.size() << " inputs, ring size " << sd.sources[0].outputs.size());
     signed_txes.ptx.push_back(pending_tx());
     tools::wallet2::pending_tx &ptx = signed_txes.ptx.back();
-    rct::RCTConfig rct_config = { rct::RangeProofBorromean, 0 };
+    rct::RCTConfig rct_config = { rct::RangeProofBorromean, 1 };
     if (sd.use_bulletproofs)
     {
       rct_config.range_proof_type = rct::RangeProofPaddedBulletproof;
-      rct_config.is_v2 = use_fork_rules(BULLETPROOF_FULL_FORK_HEIGHT, 0);
+      rct_config.bp_version = use_fork_rules(BULLETPROOF_FULL_FORK_HEIGHT, 0) ? 2 : 1;
     }
     crypto::secret_key tx_key;
     std::vector<crypto::secret_key> additional_tx_keys;
@@ -6900,11 +6900,11 @@ bool wallet2::sign_multisig_tx(multisig_tx_set &exported_txs, std::vector<crypto
     cryptonote::transaction tx;
     rct::multisig_out msout = ptx.multisig_sigs.front().msout;
     auto sources = sd.sources;
-    rct::RCTConfig rct_config = { rct::RangeProofBorromean, 0 };
+    rct::RCTConfig rct_config = { rct::RangeProofBorromean, 1 };
     if (sd.use_bulletproofs)
     {
       rct_config.range_proof_type = rct::RangeProofPaddedBulletproof;
-      rct_config.is_v2 = use_fork_rules(BULLETPROOF_FULL_FORK_HEIGHT, 0);
+      rct_config.bp_version = use_fork_rules(BULLETPROOF_FULL_FORK_HEIGHT, 0) ? 2 : 1;
     }
     bool r = cryptonote::construct_tx_with_tx_key(m_account.get_keys(), m_subaddresses, sources, sd.splitted_dsts, ptx.change_dts.addr, sd.extra, tx, sd.unlock_time, 
       ptx.tx_key, ptx.additional_tx_keys, current_tx_version, rct_config, &msout, false);
@@ -7368,7 +7368,7 @@ void wallet2::light_wallet_get_outs(std::vector<std::vector<tools::wallet2::get_
   tools::COMMAND_RPC_GET_RANDOM_OUTS::response ores;
   
   size_t light_wallet_requested_outputs_count = (size_t)((fake_outputs_count + 1) * 1.5 + 1);
-  const bool v2 = (rct_config.range_proof_type != rct::RangeProofBorromean && rct_config.is_v2);
+  const bool v2 = (rct_config.range_proof_type != rct::RangeProofBorromean && rct_config.bp_version >= 2);
   
   // Amounts to ask for
   // MyMonero api handle amounts and fees as strings
@@ -7479,7 +7479,7 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
     return;
   }
 
-  const bool v2 = (rct_config.range_proof_type != rct::RangeProofBorromean && rct_config.is_v2);
+  const bool v2 = (rct_config.range_proof_type != rct::RangeProofBorromean && rct_config.bp_version >= 2);
 
   if (fake_outputs_count > 0)
   {
@@ -8205,7 +8205,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     THROW_WALLET_EXCEPTION_IF(it_to_replace == src.outputs.end(), error::wallet_internal_error,
         "real output not found");
 
-    const bool v2 = (rct_config.range_proof_type != rct::RangeProofBorromean && rct_config.is_v2);
+    const bool v2 = (rct_config.range_proof_type != rct::RangeProofBorromean && rct_config.bp_version >= 2);
 
     tx_output_entry real_oe;
     real_oe.first = td.m_global_output_index;
@@ -9037,7 +9037,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
   const bool bulletproof = use_fork_rules(BULLETPROOF_SIMPLE_FORK_HEIGHT, 0);
   const rct::RCTConfig rct_config {
     bulletproof ? rct::RangeProofPaddedBulletproof : rct::RangeProofBorromean,
-    bulletproof && use_fork_rules(BULLETPROOF_FULL_FORK_HEIGHT, 0)
+    bulletproof && use_fork_rules(BULLETPROOF_FULL_FORK_HEIGHT, 0) ? 2 : 1
   };
 
   const uint64_t fee_per_kb  = get_per_kb_fee();
@@ -9660,7 +9660,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const crypton
   const rct::RCTConfig rct_config
   {
     bulletproof ? rct::RangeProofPaddedBulletproof : rct::RangeProofBorromean,
-    bulletproof && use_fork_rules(BULLETPROOF_FULL_FORK_HEIGHT, 0)
+    bulletproof && use_fork_rules(BULLETPROOF_FULL_FORK_HEIGHT, 0) ? 2 : 1
   };
 
   LOG_PRINT_L2("Starting with " << unused_transfers_indices.size() << " non-dust outputs and " << unused_dust_indices.size() << " dust outputs");
