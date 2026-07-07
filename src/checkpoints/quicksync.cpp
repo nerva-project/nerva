@@ -32,6 +32,7 @@
 
 #include "quicksync.h"
 
+#include "checkpoints.h"
 #include "common/dns_utils.h"
 #include "string_tools.h"
 #include "storages/portable_storage_template_helper.h" // epee json include
@@ -47,19 +48,36 @@ namespace cryptonote
 {
   quicksync::quicksync() { }
   //---------------------------------------------------------------------------
-  bool quicksync::check_block(uint32_t height, const crypto::hash h) const
+  bool quicksync::check_block(uint64_t height, const crypto::hash &h, bool &is_present) const
   {
+    is_present = false;
+
     if (!m_is_loaded)
       return false;
 
     auto it = m_data.find(height);
-    
-    if(it == m_data.end())
+
+    if (it == m_data.end())
       return false;
 
-    if (it->second != h)
-      return false;
-
+    is_present = true;
+    return it->second == h;
+  }
+  //---------------------------------------------------------------------------
+  bool quicksync::check_against_checkpoints(const checkpoints &cp) const
+  {
+    for (const auto &point : cp.get_points())
+    {
+      const uint64_t height = point.first;
+      auto it = m_data.find(height);
+      if (it == m_data.end())
+        continue;
+      if (it->second != point.second)
+      {
+        MERROR("Quick sync hash at height " << height << " conflicts with hardcoded checkpoint; rejecting quick sync file");
+        return false;
+      }
+    }
     return true;
   }
   //---------------------------------------------------------------------------
@@ -85,29 +103,57 @@ namespace cryptonote
     }
 
     uint32_t quicksync_magic = 0x149f943e;
-    
+
     uint32_t comp = 0;
     import_file.read ((char*)&comp, sizeof(comp));
-    
+
     if (comp != quicksync_magic)
     {
       MERROR("Quick sync file magic incorrect. ignoring file");
       return false;
     }
 
-    import_file.read ((char*)&m_min, sizeof(m_min));
-    import_file.read ((char*)&m_max, sizeof(m_max));
+    if (!import_file.read((char*)&m_min, sizeof(m_min)) ||
+        !import_file.read((char*)&m_max, sizeof(m_max)))
+    {
+      MERROR("Quick sync file header truncated. ignoring file");
+      return false;
+    }
+
+    if (m_min > m_max)
+    {
+      MERROR("Quick sync file header invalid: min " << m_min << " > max " << m_max << ". ignoring file");
+      return false;
+    }
+
+    // Bound the entry count by the real file size so a hostile header can't drive a huge allocation.
+    const std::streampos data_start = import_file.tellg();
+    import_file.seekg(0, std::ios::end);
+    const std::streamoff bytes_available = import_file.tellg() - data_start;
+    import_file.seekg(data_start);
+
+    const uint64_t count = (uint64_t)m_max - (uint64_t)m_min;
+    if (data_start == std::streampos(-1) || bytes_available < 0 ||
+        (uint64_t)bytes_available < count * sizeof(crypto::hash))
+    {
+      MERROR("Quick sync file truncated: header declares " << count << " hashes but file is too small. ignoring file");
+      return false;
+    }
 
     LOG_PRINT_L0("Loading quick sync data for blocks " << m_min << " - " << m_max);
 
-    uint32_t count = m_max - m_min;
-    uint32_t x = m_min;
+    uint64_t height = m_min;
 
-    for (uint32_t i = 0; i < count; i++)
+    for (uint64_t i = 0; i < count; i++)
     {
       crypto::hash h = crypto::null_hash;
-      import_file.read ((char*)&h.data, 32);
-      m_data[x++] = h;
+      if (!import_file.read((char*)&h.data, sizeof(h.data)))
+      {
+        MERROR("Quick sync file read failed at block " << height << ". ignoring file");
+        m_data.clear();
+        return false;
+      }
+      m_data[height++] = h;
     }
 
     m_is_loaded = true;

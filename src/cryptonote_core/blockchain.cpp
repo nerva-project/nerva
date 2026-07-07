@@ -3570,22 +3570,26 @@ leave:
   crypto::hash proof_of_work;
   memset(proof_of_work.data, 0xff, sizeof(proof_of_work.data));
 
-  // An earlier revision skipped PoW for the entire checkpoint zone unconditionally
-  // (an unanchored, dangerous skip) and that was removed. The assume-valid skip
-  // below is the deliberate, bounded replacement: PoW is dropped only for blocks
-  // beneath a hardcoded checkpoint that already pins them by hash, and only during
-  // flag-gated fast sync.
-  // FIXME: height parameter is not used...should it be used or should it not
-  // be a parameter?
-  // validate proof_of_work versus difficulty target
-
-  // Skip PoW for deep historical blocks below ASSUME_VALID_HEIGHT during sync
-  // (anchored by a checkpoint). Gated by --fast-block-sync; FAKECHAIN excluded
-  // as it inherits the mainnet config but never reaches that height.
+  // Both skips below are bounded to the range the hardcoded checkpoints pin, and
+  // gated by --fast-block-sync; FAKECHAIN inherits the mainnet config but never
+  // reaches that height.
   const uint64_t assume_valid_height = cryptonote::get_config(m_nettype).ASSUME_VALID_HEIGHT;
   const bool assume_valid = m_fast_sync && m_nettype != FAKECHAIN && assume_valid_height != 0 && blockchain_height < assume_valid_height;
 
-  const bool quicksync_verified = m_quicksync.check_block(blockchain_height, id);
+  // Above the highest checkpoint the file is unanchored, so PoW is always required.
+  const bool quicksync_active = m_fast_sync && m_nettype != FAKECHAIN && blockchain_height <= m_checkpoints.get_max_height();
+  bool quicksync_has_block = false;
+  const bool quicksync_match = m_quicksync.check_block(blockchain_height, id, quicksync_has_block);
+
+  // A present-but-mismatching entry must fail hard, not fall through to the assume-valid skip.
+  if (quicksync_active && quicksync_has_block && !quicksync_match)
+  {
+    MERROR_VER("Block with id: " << id << " at height " << blockchain_height << " does not match the quick sync hash");
+    bvc.m_verifivation_failed = true;
+    goto leave;
+  }
+
+  const bool quicksync_verified = quicksync_active && quicksync_match;
   if (!quicksync_verified && !assume_valid)
   {
     get_block_longhash(m_hash_context, this, bl, proof_of_work, blockchain_height);
@@ -4103,7 +4107,17 @@ void Blockchain::set_enforce_dns_checkpoints(bool enforce_checkpoints)
 {
   m_enforce_dns_checkpoints = enforce_checkpoints;
 }
-
+//------------------------------------------------------------------
+void Blockchain::set_quicksync(quicksync&& qs)
+{
+  // Reject an unanchored/forged file rather than trusting it to skip PoW.
+  if (!qs.check_against_checkpoints(m_checkpoints))
+  {
+    MERROR("Quick sync data conflicts with hardcoded checkpoints; ignoring quick sync file");
+    return;
+  }
+  m_quicksync = qs;
+}
 //------------------------------------------------------------------
 bool Blockchain::cleanup_handle_incoming_blocks(bool force_sync)
 {

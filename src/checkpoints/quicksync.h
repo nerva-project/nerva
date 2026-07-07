@@ -37,11 +37,16 @@
 
 namespace cryptonote
 {
+  class checkpoints;
+
   class quicksync
   {
   public:
     quicksync();
-    bool check_block(uint32_t height, const crypto::hash h) const;
+    // is_present lets callers tell "absent" apart from "present but mismatching".
+    bool check_block(uint64_t height, const crypto::hash &h, bool &is_present) const;
+    // Trust anchor: rejects the file if any hash conflicts with a hardcoded checkpoint.
+    bool check_against_checkpoints(const checkpoints &cp) const;
     bool load(const std::string &qs_file);
     bool is_loaded() { return m_is_loaded; }
     uint32_t min() { return m_min; }
