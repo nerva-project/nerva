@@ -116,7 +116,10 @@ void read_hex(const rapidjson::Value& val, epee::span<std::uint8_t> dest)
     throw WRONG_TYPE("string");
   }
 
-  if (!epee::from_hex::to_buffer(dest, {val.GetString(), val.Size()}))
+  // GetStringLength, not Size: Size() is the array accessor and reads the
+  // wrong union member for strings (asserts in debug builds). Matches
+  // Monero master.
+  if (!epee::from_hex::to_buffer(dest, {val.GetString(), val.GetStringLength()}))
   {
     throw BAD_INPUT();
   }
