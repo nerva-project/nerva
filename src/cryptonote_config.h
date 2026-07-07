@@ -53,6 +53,7 @@
 #define CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE                             10
 
 #define BULLETPROOF_MAX_OUTPUTS                                         16
+#define BULLETPROOF_PLUS_MAX_OUTPUTS                                    16
 #define BULLETPROOF_SIMPLE_FORK_HEIGHT                                  8
 #define BULLETPROOF_FULL_FORK_HEIGHT                                    11
 
@@ -221,6 +222,9 @@ namespace config
     const unsigned char HASH_KEY_CLSAG_ROUND[] = "CLSAG_round";
     const unsigned char HASH_KEY_CLSAG_AGG_0[] = "CLSAG_agg_0";
     const unsigned char HASH_KEY_CLSAG_AGG_1[] = "CLSAG_agg_1";
+    // Bulletproofs+ (HF14) domain separators, byte-identical to Monero's
+    const char HASH_KEY_BULLETPROOF_PLUS_EXPONENT[] = "bulletproof_plus";
+    const char HASH_KEY_BULLETPROOF_PLUS_TRANSCRIPT[] = "bulletproof_plus_transcript";
 
     static const hard_fork hard_forks[] = {
         { 1,      1},

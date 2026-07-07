@@ -1013,6 +1013,7 @@ void toJsonValue(rapidjson::Document& doc, const rct::rctSig& sig, rapidjson::Va
     INSERT_INTO_JSON_OBJECT(prunable, doc, bulletproofs, sig.p.bulletproofs);
     INSERT_INTO_JSON_OBJECT(prunable, doc, mlsags, sig.p.MGs);
     INSERT_INTO_JSON_OBJECT(prunable, doc, clsags, sig.p.CLSAGs);
+    INSERT_INTO_JSON_OBJECT(prunable, doc, bulletproofs_plus, sig.p.bulletproofs_plus);
     INSERT_INTO_JSON_OBJECT(prunable, doc, pseudo_outs, sig.get_pseudo_outs());
 
     val.AddMember("prunable", prunable, doc.GetAllocator());
@@ -1046,6 +1047,7 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
     GET_FROM_JSON_OBJECT(prunable, sig.p.bulletproofs, bulletproofs);
     GET_FROM_JSON_OBJECT(prunable, sig.p.MGs, mlsags);
     GET_FROM_JSON_OBJECT(prunable, sig.p.CLSAGs, clsags);
+    GET_FROM_JSON_OBJECT(prunable, sig.p.bulletproofs_plus, bulletproofs_plus);
     GET_FROM_JSON_OBJECT(prunable, pseudo_outs, pseudo_outs);
 
     sig.get_pseudo_outs() = std::move(pseudo_outs);
@@ -1151,6 +1153,39 @@ void fromJsonValue(const rapidjson::Value& val, rct::Bulletproof& p)
   GET_FROM_JSON_OBJECT(val, p.a, a);
   GET_FROM_JSON_OBJECT(val, p.b, b);
   GET_FROM_JSON_OBJECT(val, p.t, t);
+}
+
+void toJsonValue(rapidjson::Document& doc, const rct::BulletproofPlus& p, rapidjson::Value& val)
+{
+  val.SetObject();
+
+  INSERT_INTO_JSON_OBJECT(val, doc, V, p.V);
+  INSERT_INTO_JSON_OBJECT(val, doc, A, p.A);
+  INSERT_INTO_JSON_OBJECT(val, doc, A1, p.A1);
+  INSERT_INTO_JSON_OBJECT(val, doc, B, p.B);
+  INSERT_INTO_JSON_OBJECT(val, doc, r1, p.r1);
+  INSERT_INTO_JSON_OBJECT(val, doc, s1, p.s1);
+  INSERT_INTO_JSON_OBJECT(val, doc, d1, p.d1);
+  INSERT_INTO_JSON_OBJECT(val, doc, L, p.L);
+  INSERT_INTO_JSON_OBJECT(val, doc, R, p.R);
+}
+
+void fromJsonValue(const rapidjson::Value& val, rct::BulletproofPlus& p)
+{
+  if (!val.IsObject())
+  {
+    throw WRONG_TYPE("json object");
+  }
+
+  GET_FROM_JSON_OBJECT(val, p.V, V);
+  GET_FROM_JSON_OBJECT(val, p.A, A);
+  GET_FROM_JSON_OBJECT(val, p.A1, A1);
+  GET_FROM_JSON_OBJECT(val, p.B, B);
+  GET_FROM_JSON_OBJECT(val, p.r1, r1);
+  GET_FROM_JSON_OBJECT(val, p.s1, s1);
+  GET_FROM_JSON_OBJECT(val, p.d1, d1);
+  GET_FROM_JSON_OBJECT(val, p.L, L);
+  GET_FROM_JSON_OBJECT(val, p.R, R);
 }
 
 void toJsonValue(rapidjson::Document& doc, const rct::boroSig& sig, rapidjson::Value& val)

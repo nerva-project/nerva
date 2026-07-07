@@ -128,6 +128,7 @@ namespace rct {
 	key scalarmultH_v2(const key & a);
 
 	key scalarmult8(const key & P);
+    void scalarmult8(ge_p3 &res, const key & P);
     bool isInMainSubgroup(const key & a);
 
     //Curve addition / subtractions
