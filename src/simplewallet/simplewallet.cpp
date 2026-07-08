@@ -4647,6 +4647,10 @@ boost::optional<epee::wipeable_string> simple_wallet::open_wallet(const boost::p
       prefix = tr("Opened wallet");
     message_writer(console_color_white, true) <<
       prefix << ": " << m_wallet->get_account().get_public_address_str(m_wallet->nettype());
+    if (m_wallet->multisig())
+    {
+      message_writer(console_color_red, true) << tr("WARNING: multisig is a disabled legacy feature. From fork 14 this wallet cannot spend; move any funds before the fork.");
+    }
     if (m_wallet->get_account().get_device()) {
        message_writer(console_color_white, true) << "Wallet is on device: " << m_wallet->get_account().get_device().get_name();
     }
