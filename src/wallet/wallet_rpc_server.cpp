@@ -4087,7 +4087,18 @@ namespace tools
       return false;
     }
 
-    res.multisig_info = m_wallet->get_multisig_info();
+    // get_multisig_info refuses with a throw now that enrollment is
+    // disabled; answer with a proper RPC error instead of a dropped call
+    try
+    {
+      res.multisig_info = m_wallet->get_multisig_info();
+    }
+    catch (const std::exception &e)
+    {
+      er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
+      er.message = e.what();
+      return false;
+    }
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
