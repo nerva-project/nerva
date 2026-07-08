@@ -1067,6 +1067,7 @@ namespace cryptonote
     checkpoints m_checkpoints;
     bool m_enforce_dns_checkpoints;
     quicksync m_quicksync;
+    uint64_t m_quicksync_max_height = 0; // top checkpoint quicksync was anchored against; PoW-skip ceiling
 
     HardFork *m_hardfork;
 

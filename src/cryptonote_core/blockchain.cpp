@@ -3570,27 +3570,26 @@ leave:
   crypto::hash proof_of_work;
   memset(proof_of_work.data, 0xff, sizeof(proof_of_work.data));
 
-  // Both skips below are bounded to the range the hardcoded checkpoints pin, and
-  // gated by --fast-block-sync; FAKECHAIN inherits the mainnet config but never
+  // Gated by --fast-block-sync; FAKECHAIN inherits the mainnet config but never
   // reaches that height.
   const uint64_t assume_valid_height = cryptonote::get_config(m_nettype).ASSUME_VALID_HEIGHT;
   const bool assume_valid = m_fast_sync && m_nettype != FAKECHAIN && assume_valid_height != 0 && blockchain_height < assume_valid_height;
 
-  // Above the highest checkpoint the file is unanchored, so PoW is always required.
-  const bool quicksync_active = m_fast_sync && m_nettype != FAKECHAIN && blockchain_height <= m_checkpoints.get_max_height();
+  // Quicksync is trusted only up to the checkpoint height it was anchored against
+  // (m_quicksync_max_height, captured at set_quicksync before any DNS/JSON checkpoints);
+  // above that it is unanchored, so PoW is always required.
+  const bool quicksync_active = m_fast_sync && m_nettype != FAKECHAIN && blockchain_height <= m_quicksync_max_height;
   bool quicksync_has_block = false;
   const bool quicksync_match = m_quicksync.check_block(blockchain_height, id, quicksync_has_block);
-
-  // A present-but-mismatching entry must fail hard, not fall through to the assume-valid skip.
-  if (quicksync_active && quicksync_has_block && !quicksync_match)
-  {
-    MERROR_VER("Block with id: " << id << " at height " << blockchain_height << " does not match the quick sync hash");
-    bvc.m_verifivation_failed = true;
-    goto leave;
-  }
-
   const bool quicksync_verified = quicksync_active && quicksync_match;
-  if (!quicksync_verified && !assume_valid)
+
+  // A present-but-mismatching entry could be a forged block or a wrong/corrupt file;
+  // let PoW decide rather than trusting the file or stalling the node on a bad file.
+  const bool quicksync_conflict = quicksync_active && quicksync_has_block && !quicksync_match;
+  if (quicksync_conflict)
+    MWARNING("Block with id: " << id << " at height " << blockchain_height << " does not match the quick sync hash; verifying PoW");
+
+  if ((!quicksync_verified && !assume_valid) || quicksync_conflict)
   {
     get_block_longhash(m_hash_context, this, bl, proof_of_work, blockchain_height);
 
@@ -4116,7 +4115,11 @@ void Blockchain::set_quicksync(quicksync&& qs)
     MERROR("Quick sync data conflicts with hardcoded checkpoints; ignoring quick sync file");
     return;
   }
-  m_quicksync = qs;
+  // Pin the trusted range to the checkpoints just validated against. This runs
+  // before DNS/JSON checkpoints load, so it is the hardcoded checkpoint max and
+  // can't be stretched at runtime.
+  m_quicksync_max_height = m_checkpoints.get_max_height();
+  m_quicksync = std::move(qs);
 }
 //------------------------------------------------------------------
 bool Blockchain::cleanup_handle_incoming_blocks(bool force_sync)
