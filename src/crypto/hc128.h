@@ -31,6 +31,7 @@
 #define _HC128_H_
 
 #include <stdint.h>
+#include <stddef.h>   /* size_t, used by HC128_U32 below */
 
 typedef unsigned char hc_byte;
 
@@ -55,7 +56,9 @@ void HC128_Init(HC128_State *state, hc_byte *key, hc_byte *iv);
 void HC128_NextKeys(HC128_State *state);
 
 /* Generate a random number in the range [0, max) */
-inline uint32_t HC128_U32(HC128_State *state, size_t *key_idx, uint32_t max)
+/* static: a plain C99 `inline` in a header emits no external definition, so
+ * any C TU built without inlining (-O0) fails to link */
+static inline uint32_t HC128_U32(HC128_State *state, size_t *key_idx, uint32_t max)
 {
     uint32_t mask = (uint32_t)0xFFFFFFFFU;
     --max;

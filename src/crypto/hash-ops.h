@@ -91,6 +91,10 @@ void cn_fast_hash(const void *data, size_t length, char *hash);
 #define CN_SCRATCHPAD_MEMORY    1048576         // 1 MB — used by v9–v12
 #define CN_SCRATCHPAD_MEMORY_V13 (8*1024*1024)  // 8 MB — v13: a bigger pad keeps hashing memory-bound
                                                 // (1 CPU = 1 vote) and costlier to put on an ASIC
+#define CN_SCRATCHPAD_MEMORY_V14 (256*1024)     // 256 KB, v14: the pad is write-hardness only; the
+                                                // memory binding moved to the per-nonce 24 MB chase
+                                                // buffer. Small enough to fit every cache, so the v13
+                                                // per-nonce refill stops amplifying fast cores. Power of 2.
 #define CN_SALT_MEMORY 262144
 #define CNA_V6_WINDOW_BLOCKS     100000U        // recent-block window for sliding reads (~5.6 MB)
 #define CNA_V6_FULL_HISTORY_ODDS 13U            // out of 256 (~5%) go to full history
@@ -135,6 +139,8 @@ typedef struct cn_hash_context
   int scratchpad_is_mapped;
   uint8_t *cna_scratchpad;   // 8 MB  — v13 (CryptoNight-Adaptive v6)
   int cna_scratchpad_is_mapped;
+  uint8_t *cna_v7_buffer;    // 24 MB, v14 (CNA v7) per-nonce chase buffer
+  int cna_v7_buffer_is_mapped;
   char *salt;
   int salt_is_mapped;
   cn_random_values_t random_values;
@@ -161,6 +167,9 @@ int cn_slow_hash_self_test(void);
 void cn_slow_hash(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters);
 void cn_slow_hash_v11(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 void cn_slow_hash_v13(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
+/* v14 (CNA v7): fills a 24 MB per-nonce chase buffer (context->cna_v7_buffer)
+ * from the seed and walks it, mutating as it goes. No external dataset. */
+void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
 void cn_slow_hash_v10(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww);
 void cn_slow_hash_v9(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters);
 void cn_slow_hash_v7_8(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters);
