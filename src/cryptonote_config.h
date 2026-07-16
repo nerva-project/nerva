@@ -244,6 +244,10 @@ namespace config
         {11, 500000},
         {12, 930000},
         {13, 4320000}   // CryptoNight-Adaptive v6: 8 MB scratchpad + random VM program
+        // {14, TBD}    // CLSAG + Bulletproofs+ (type 7 only) and CryptoNight-Adaptive
+                        // v7 (per-nonce mutable-buffer chase, one box ~ one vote).
+                        // Mainnet height is set only after the validation gates pass:
+                        // reference-pair run, testnet fork, GPU port test.
     };
 
     namespace testnet
@@ -272,7 +276,7 @@ namespace config
             {11, 590},
             {12, 2000},
             {13, 2100}
-            // {14, TBD}  // CLSAG + Bulletproofs+ (type 7 only)
+            // {14, TBD}  // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v7
         };
     }
 
@@ -297,7 +301,7 @@ namespace config
             {11, 590},
             {12, 700},
             {13, 800}
-            // {14, TBD}  // CLSAG + Bulletproofs+ (type 7 only)
+            // {14, TBD}  // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v7
         };
     }
 }

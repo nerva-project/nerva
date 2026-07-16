@@ -334,6 +334,141 @@ void cn_slow_hash_v13(cn_hash_context_t *context, const void *data, size_t lengt
     free(text);
 }
 
+// CNA v7 (HF14): same Keccak/AES framing as v13, but the memory-hard middle is
+// a serial chase over a 24 MB per-nonce buffer that the walk writes back to
+// (cn_vm_execute_v7), not v13's VM over the pad. The pad shrinks to
+// CN_SCRATCHPAD_MEMORY_V14 and carries write-hardness only (v13's 8 MB refill
+// was a clock-bound fast-core amplifier; 256 KB fits every cache, so it costs
+// everyone alike). The pad reuses the first 256 KB of cna_scratchpad, whose
+// 8 MB stays allocated for historical v13 validation anyway. chain_state
+// threads through every pass and folds into a register at the end, so the
+// whole walk is load-bearing.
+void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, char *hash,
+                      const uint8_t *seed)
+{
+    uint8_t * const hp_state = context->cna_scratchpad;
+    char * const salt = context->salt;
+    const uint8_t init_size_blk = INIT_SIZE_BLK;
+    const uint32_t init_size_byte = (uint32_t)(init_size_blk * AES_BLOCK_SIZE);
+
+    RDATA_ALIGN16 uint8_t expandedKey[240];
+    uint8_t *text = (uint8_t *)malloc(init_size_byte);
+    union cn_slow_hash_state state;
+    size_t i;
+
+    static void (*const extra_hashes[4])(const void *, size_t, char *) = {
+        hash_extra_blake, hash_extra_groestl, hash_extra_jh, hash_extra_skein};
+
+    hash_process(&state.hs, data, length);
+    memcpy(text, state.init, init_size_byte);
+    aes_expand_key((OAES_CTX *)context->oaes_ctx, state.hs.b, expandedKey);
+    for (i = 0; i < CN_SCRATCHPAD_MEMORY_V14 / init_size_byte; i++)
+    {
+        aes_pseudo_round(text, text, expandedKey, init_size_blk);
+        memcpy(&hp_state[i * init_size_byte], text, init_size_byte);
+    }
+
+    {
+        uint32_t s_off = 0;
+        uint32_t si;
+        for (si = 0; si < CN_SCRATCHPAD_MEMORY_V14; si += 4)
+        {
+            uint32_t sv, sp;
+            memcpy(&sv, (const uint8_t *)salt + s_off, 4);
+            memcpy(&sp, hp_state + si, 4);
+            sp ^= sv;
+            memcpy(hp_state + si, &sp, 4);
+            s_off += 4;
+            if (s_off >= (uint32_t)CN_SALT_MEMORY)
+                s_off = 0;
+        }
+    }
+
+    {
+        // the caller generated random_values against CN_SCRATCHPAD_MEMORY_V14,
+        // so every index lands inside the 256 KB pad
+        const cn_random_values_t rv = context->random_values;
+        int ri;
+        for (ri = 0; ri < CN_RANDOM_VALUES; ri++)
+        {
+            switch (rv.operators[ri])
+            {
+            case ADD:  hp_state[rv.indices[ri]] += (uint8_t)rv.values[ri]; break;
+            case SUB:  hp_state[rv.indices[ri]] -= (uint8_t)rv.values[ri]; break;
+            case XOR:  hp_state[rv.indices[ri]] ^= (uint8_t)rv.values[ri]; break;
+            case OR:   hp_state[rv.indices[ri]] |= (uint8_t)rv.values[ri]; break;
+            case AND:  hp_state[rv.indices[ri]] &= (uint8_t)rv.values[ri]; break;
+            case COMP: hp_state[rv.indices[ri]] = ~(uint8_t)rv.values[ri]; break;
+            case EQ:   hp_state[rv.indices[ri]] =  (uint8_t)rv.values[ri]; break;
+            default: break;
+            }
+        }
+    }
+
+    uint64_t regs[CN_REG_COUNT];
+    {
+        int r;
+        for (r = 0; r < CN_REG_COUNT; r++)
+            memcpy(&regs[r], &state.k[r * sizeof(uint64_t)], sizeof(uint64_t));
+    }
+
+    // per-nonce start of the buffer walk, from the Keccak state
+    uint64_t chain_state;
+    memcpy(&chain_state, state.init + 64, sizeof(uint64_t));
+
+    cn_vm_program_t prog;
+    cn_vm_generate_program(&prog, seed);
+
+    // Fill the 24 MB per-nonce buffer from the seed (light work). The chase
+    // then mutates ~63% of it as it walks, so its cells can't be regenerated
+    // from the fill and the whole buffer has to stay resident. That residency
+    // is the capacity brake: a GPU/ASIC runs only as many nonces as it has
+    // buffers for. Below that coverage the buffer could be stored sparsely and
+    // recomputed, so the pass count is tied to the buffer size.
+    uint8_t * const buffer = context->cna_v7_buffer;
+    const uint64_t buffer_qwords = CN_V7_BUFFER / sizeof(uint64_t);
+    {
+        uint64_t fx;
+        memcpy(&fx, seed, sizeof(uint64_t));
+        uint64_t *bw = (uint64_t *)buffer;
+        uint64_t bi;
+        for (bi = 0; bi < buffer_qwords; bi++)
+        {
+            fx = (fx ^ (fx >> 29)) * UINT64_C(0xbf58476d1ce4e5b9);
+            bw[bi] = fx;
+        }
+    }
+
+    {
+        int iter;
+        for (iter = 0; iter < CN_VM_ITERATIONS_V14; iter++)
+            cn_vm_execute_v7(&prog, buffer, buffer_qwords, hp_state, regs, &chain_state);
+    }
+
+    regs[0] ^= chain_state;   // the walk's final position feeds the result
+
+    {
+        int r;
+        for (r = 0; r < CN_REG_COUNT; r++)
+        {
+            uint64_t tmp;
+            memcpy(&tmp, &state.k[r * sizeof(uint64_t)], sizeof(uint64_t));
+            tmp ^= regs[r];
+            memcpy(&state.k[r * sizeof(uint64_t)], &tmp, sizeof(uint64_t));
+        }
+    }
+
+    memcpy(text, state.init, init_size_byte);
+    aes_expand_key((OAES_CTX *)context->oaes_ctx, &state.hs.b[32], expandedKey);
+    for (i = 0; i < CN_SCRATCHPAD_MEMORY_V14 / init_size_byte; i++)
+        aes_pseudo_round_xor(text, text, expandedKey, &hp_state[i * init_size_byte], init_size_blk);
+    memcpy(state.init, text, init_size_byte);
+    hash_permutation(&state.hs);
+    extra_hashes[state.hs.b[0] & 3](&state, 200, hash);
+
+    free(text);
+}
+
 #else /* CN_USE_SOFTWARE_AES */
 
 void cn_slow_hash_v11(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
@@ -596,6 +731,145 @@ void cn_slow_hash_v13(cn_hash_context_t *context, const void *data, size_t lengt
     memcpy(text, state.init, init_size_byte);
     oaes_key_import_data(aes_ctx, &state.hs.b[32], AES_KEY_SIZE);
     for (i = 0; i < CN_SCRATCHPAD_MEMORY_V13 / init_size_byte; i++)
+    {
+        for (j = 0; j < init_size_blk; j++)
+        {
+            xor_blocks(&text[j * AES_BLOCK_SIZE], &hp_state[i * init_size_byte + j * AES_BLOCK_SIZE]);
+            aesb_pseudo_round(&text[AES_BLOCK_SIZE * j], &text[AES_BLOCK_SIZE * j], aes_ctx->key->exp_data);
+        }
+    }
+    memcpy(state.init, text, init_size_byte);
+    hash_permutation(&state.hs);
+    extra_hashes[state.hs.b[0] & 3](&state, 200, hash);
+
+    free(text);
+}
+
+// Software-AES twin of the HW cn_slow_hash_v14: v13's software path with the
+// same v14 changes (256 KB pad, 24 MB per-nonce buffer chase). Must produce
+// bit-identical hashes to the HW path; cn_slow_hash_self_test compares them at
+// startup.
+void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, char *hash,
+                      const uint8_t *seed)
+{
+    uint8_t * const hp_state = context->cna_scratchpad;
+    char * const salt = context->salt;
+    const uint8_t init_size_blk = INIT_SIZE_BLK;
+    const uint32_t init_size_byte = (uint32_t)(init_size_blk * AES_BLOCK_SIZE);
+
+    uint8_t *text = (uint8_t *)malloc(init_size_byte);
+    union cn_slow_hash_state state;
+    uint8_t aes_key[AES_KEY_SIZE];
+    oaes_ctx * const aes_ctx = (oaes_ctx *)context->oaes_ctx;
+    size_t i, j;
+
+    static void (*const extra_hashes[4])(const void *, size_t, char *) = {
+        hash_extra_blake, hash_extra_groestl, hash_extra_jh, hash_extra_skein};
+
+    hash_process(&state.hs, data, length);
+    memcpy(text, state.init, init_size_byte);
+    memcpy(aes_key, state.hs.b, AES_KEY_SIZE);
+    oaes_key_import_data(aes_ctx, aes_key, AES_KEY_SIZE);
+    for (i = 0; i < CN_SCRATCHPAD_MEMORY_V14 / init_size_byte; i++)
+    {
+        for (j = 0; j < init_size_blk; j++)
+            aesb_pseudo_round(&text[AES_BLOCK_SIZE * j], &text[AES_BLOCK_SIZE * j], aes_ctx->key->exp_data);
+        memcpy(&hp_state[i * init_size_byte], text, init_size_byte);
+    }
+
+    {
+        uint32_t s_off = 0;
+        uint32_t si;
+        for (si = 0; si < CN_SCRATCHPAD_MEMORY_V14; si += 4)
+        {
+            uint32_t sv, sp;
+            memcpy(&sv, (const uint8_t *)salt + s_off, 4);
+            memcpy(&sp, hp_state + si, 4);
+            sp ^= sv;
+            memcpy(hp_state + si, &sp, 4);
+            s_off += 4;
+            if (s_off >= (uint32_t)CN_SALT_MEMORY)
+                s_off = 0;
+        }
+    }
+
+    {
+        // the caller generated random_values against CN_SCRATCHPAD_MEMORY_V14,
+        // so every index lands inside the 256 KB pad
+        const cn_random_values_t rv = context->random_values;
+        int ri;
+        for (ri = 0; ri < CN_RANDOM_VALUES; ri++)
+        {
+            switch (rv.operators[ri])
+            {
+            case ADD:  hp_state[rv.indices[ri]] += (uint8_t)rv.values[ri]; break;
+            case SUB:  hp_state[rv.indices[ri]] -= (uint8_t)rv.values[ri]; break;
+            case XOR:  hp_state[rv.indices[ri]] ^= (uint8_t)rv.values[ri]; break;
+            case OR:   hp_state[rv.indices[ri]] |= (uint8_t)rv.values[ri]; break;
+            case AND:  hp_state[rv.indices[ri]] &= (uint8_t)rv.values[ri]; break;
+            case COMP: hp_state[rv.indices[ri]] = ~(uint8_t)rv.values[ri]; break;
+            case EQ:   hp_state[rv.indices[ri]] =  (uint8_t)rv.values[ri]; break;
+            default: break;
+            }
+        }
+    }
+
+    uint64_t regs[CN_REG_COUNT];
+    {
+        int r;
+        for (r = 0; r < CN_REG_COUNT; r++)
+            memcpy(&regs[r], &state.k[r * sizeof(uint64_t)], sizeof(uint64_t));
+    }
+
+    // per-nonce start of the buffer walk, from the Keccak state
+    uint64_t chain_state;
+    memcpy(&chain_state, state.init + 64, sizeof(uint64_t));
+
+    cn_vm_program_t prog;
+    cn_vm_generate_program(&prog, seed);
+
+    // Fill the 24 MB per-nonce buffer from the seed (light work). The chase
+    // then mutates ~63% of it as it walks, so its cells can't be regenerated
+    // from the fill and the whole buffer has to stay resident. That residency
+    // is the capacity brake: a GPU/ASIC runs only as many nonces as it has
+    // buffers for. Below that coverage the buffer could be stored sparsely and
+    // recomputed, so the pass count is tied to the buffer size.
+    uint8_t * const buffer = context->cna_v7_buffer;
+    const uint64_t buffer_qwords = CN_V7_BUFFER / sizeof(uint64_t);
+    {
+        uint64_t fx;
+        memcpy(&fx, seed, sizeof(uint64_t));
+        uint64_t *bw = (uint64_t *)buffer;
+        uint64_t bi;
+        for (bi = 0; bi < buffer_qwords; bi++)
+        {
+            fx = (fx ^ (fx >> 29)) * UINT64_C(0xbf58476d1ce4e5b9);
+            bw[bi] = fx;
+        }
+    }
+
+    {
+        int iter;
+        for (iter = 0; iter < CN_VM_ITERATIONS_V14; iter++)
+            cn_vm_execute_v7(&prog, buffer, buffer_qwords, hp_state, regs, &chain_state);
+    }
+
+    regs[0] ^= chain_state;   // the walk's final position feeds the result
+
+    {
+        int r;
+        for (r = 0; r < CN_REG_COUNT; r++)
+        {
+            uint64_t tmp;
+            memcpy(&tmp, &state.k[r * sizeof(uint64_t)], sizeof(uint64_t));
+            tmp ^= regs[r];
+            memcpy(&state.k[r * sizeof(uint64_t)], &tmp, sizeof(uint64_t));
+        }
+    }
+
+    memcpy(text, state.init, init_size_byte);
+    oaes_key_import_data(aes_ctx, &state.hs.b[32], AES_KEY_SIZE);
+    for (i = 0; i < CN_SCRATCHPAD_MEMORY_V14 / init_size_byte; i++)
     {
         for (j = 0; j < init_size_blk; j++)
         {

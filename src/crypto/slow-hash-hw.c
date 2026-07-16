@@ -39,6 +39,7 @@
 #define cn_slow_hash_v10   cn_slow_hash_v10_hw
 #define cn_slow_hash_v11   cn_slow_hash_v11_hw
 #define cn_slow_hash_v13   cn_slow_hash_v13_hw
+#define cn_slow_hash_v14   cn_slow_hash_v14_hw
 
 #include "slow-hash.h"
 #include "slow-hash-impl.h"
