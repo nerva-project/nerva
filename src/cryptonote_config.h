@@ -213,7 +213,7 @@ namespace config
     // Skip PoW recomputation for blocks below this height during sync, anchored
     // by a hardcoded checkpoint (see checkpoints::init_default_checkpoints).
     // Gated by --fast-block-sync; bump both each release. 0 = disable.
-    uint64_t const ASSUME_VALID_HEIGHT = 4290000;
+    uint64_t const ASSUME_VALID_HEIGHT = 4320000;
 
     static const hard_fork hard_forks[] = {
         { 1,      1},
