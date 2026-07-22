@@ -987,7 +987,19 @@ bool simple_wallet::prepare_multisig_main(const std::vector<std::string> &args, 
 
   SCOPED_WALLET_UNLOCK_ON_BAD_PASSWORD(return false;);
 
-  std::string multisig_info = m_wallet->get_multisig_info();
+  // get_multisig_info() throws now that enrollment is disabled; without a
+  // catch the exception sails past on_command to epee's console handler and
+  // the user gets a log line instead of an error message
+  std::string multisig_info;
+  try
+  {
+    multisig_info = m_wallet->get_multisig_info();
+  }
+  catch (const std::exception &e)
+  {
+    fail_msg_writer() << tr("Error creating multisig: ") << e.what();
+    return false;
+  }
   success_msg_writer() << multisig_info;
   success_msg_writer() << tr("Send this multisig info to all other participants, then use make_multisig <threshold> <info1> [<info2>...] with others' multisig info");
   success_msg_writer() << tr("This includes the PRIVATE view key, so needs to be disclosed only to that multisig wallet's participants ");
