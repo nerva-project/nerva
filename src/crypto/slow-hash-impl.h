@@ -428,8 +428,22 @@ void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t lengt
     uint8_t * const buffer = context->cna_v7_buffer;
     const uint64_t buffer_qwords = CN_V7_BUFFER / sizeof(uint64_t);
     {
-        uint64_t fx;
-        memcpy(&fx, seed, sizeof(uint64_t));
+        // Fold all 32 seed bytes into the fill seed. Deriving it from just the
+        // first 8 made buffer collisions findable at ~2^32 (a cached fill could
+        // be reused across colliding nonces), and a zero prefix zeroed the
+        // whole buffer: zero is the fill map's only fixed point, so a non-zero
+        // start can never reach it, but a zero start never leaves it.
+        uint64_t fx = UINT64_C(0x9e3779b97f4a7c15);
+        uint64_t sq;
+        int sj;
+        for (sj = 0; sj < 4; sj++)
+        {
+            memcpy(&sq, seed + sj * sizeof(uint64_t), sizeof(uint64_t));
+            fx = (fx ^ sq) * UINT64_C(0xbf58476d1ce4e5b9);
+            fx ^= fx >> 29;
+        }
+        if (fx == 0)  // 2^-64 by chance; grinding for it buys one degenerate fill
+            fx = UINT64_C(0x9e3779b97f4a7c15);
         uint64_t *bw = (uint64_t *)buffer;
         uint64_t bi;
         for (bi = 0; bi < buffer_qwords; bi++)
@@ -837,8 +851,22 @@ void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t lengt
     uint8_t * const buffer = context->cna_v7_buffer;
     const uint64_t buffer_qwords = CN_V7_BUFFER / sizeof(uint64_t);
     {
-        uint64_t fx;
-        memcpy(&fx, seed, sizeof(uint64_t));
+        // Fold all 32 seed bytes into the fill seed. Deriving it from just the
+        // first 8 made buffer collisions findable at ~2^32 (a cached fill could
+        // be reused across colliding nonces), and a zero prefix zeroed the
+        // whole buffer: zero is the fill map's only fixed point, so a non-zero
+        // start can never reach it, but a zero start never leaves it.
+        uint64_t fx = UINT64_C(0x9e3779b97f4a7c15);
+        uint64_t sq;
+        int sj;
+        for (sj = 0; sj < 4; sj++)
+        {
+            memcpy(&sq, seed + sj * sizeof(uint64_t), sizeof(uint64_t));
+            fx = (fx ^ sq) * UINT64_C(0xbf58476d1ce4e5b9);
+            fx ^= fx >> 29;
+        }
+        if (fx == 0)  // 2^-64 by chance; grinding for it buys one degenerate fill
+            fx = UINT64_C(0x9e3779b97f4a7c15);
         uint64_t *bw = (uint64_t *)buffer;
         uint64_t bi;
         for (bi = 0; bi < buffer_qwords; bi++)
