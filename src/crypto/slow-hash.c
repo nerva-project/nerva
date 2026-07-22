@@ -153,8 +153,17 @@ void cn_slow_hash_v13(cn_hash_context_t *ctx, const void *data, size_t length, c
                 cn_slow_hash_v13_sw(ctx, data, length, hash, seed));
 }
 
+static int cn_v7_buffer_ensure(cn_hash_context_t *ctx);
+
 void cn_slow_hash_v14(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, const uint8_t *seed)
 {
+    if (!cn_v7_buffer_ensure(ctx)) {
+        /* PoW cannot proceed without the buffer, and a wrong hash would be
+         * worse than a crash; a 24 MB malloc failing means the process is
+         * out of memory anyway. */
+        fprintf(stderr, "failed to allocate the CNA v7 chase buffer (24 MB)\n");
+        abort();
+    }
     CN_DISPATCH(cn_slow_hash_v14_hw(ctx, data, length, hash, seed),
                 cn_slow_hash_v14_sw(ctx, data, length, hash, seed));
 }
@@ -330,6 +339,16 @@ static void free_hugepage(void *hp, size_t size, int page_tier)
     }
 }
 
+/* Allocate the 24 MB v7 chase buffer on first use. The context is
+ * per-thread, so there is no race to guard. Failure leaves the pointer
+ * NULL and returns 0; the caller decides how loudly to die. */
+static int cn_v7_buffer_ensure(cn_hash_context_t *ctx)
+{
+    if (ctx->cna_v7_buffer == NULL)
+        ctx->cna_v7_buffer_is_mapped = allocate_hugepage(CN_V7_BUFFER, (void **)&(ctx->cna_v7_buffer));
+    return ctx->cna_v7_buffer != NULL;
+}
+
 cn_hash_context_t *cn_hash_context_create(void)
 {
     // calloc so pointer fields start NULL; a failed alloc can't leave
@@ -353,11 +372,10 @@ cn_hash_context_t *cn_hash_context_create(void)
         cn_hash_context_free(ctx);
         return NULL;
     }
-    ctx->cna_v7_buffer_is_mapped = allocate_hugepage(CN_V7_BUFFER, (void **)&(ctx->cna_v7_buffer));
-    if (ctx->cna_v7_buffer == NULL) {
-        cn_hash_context_free(ctx);
-        return NULL;
-    }
+    /* cna_v7_buffer is allocated lazily on first v14 use (cn_v7_buffer_ensure):
+     * contexts are also created for non-PoW work like the wallet KDF, which
+     * would otherwise carry an unused 24 MB each, and until HF14 activates
+     * nothing needs it at all. calloc above leaves the pointer NULL. */
     ctx->salt_is_mapped = allocate_hugepage(CN_SALT_MEMORY, (void **)&(ctx->salt));
     if (ctx->salt == NULL) {
         cn_hash_context_free(ctx);
@@ -467,12 +485,36 @@ int cn_slow_hash_self_test(void)
 
     /* v14: 256 KB pad + a 24 MB per-nonce buffer the hash fills from the seed
      * and walks (mutating as it goes). Both paths mutate the pad; resetting
-     * salt/random_values before each call keeps the inputs identical. */
+     * salt/random_values before each call keeps the inputs identical. The
+     * seed must be varied: with an all-zero seed the old fill zeroed the
+     * whole buffer and the chase collapsed onto the low indices, so the test
+     * exercised under 1% of the buffer while this is the only guard against
+     * an AES-NI / software-AES split on the v14 path. */
     {
-        static const uint8_t seed[32] = {0};
+        uint8_t seed[32];
+        uint32_t si;
+        for (si = 0; si < sizeof(seed); si++)
+            seed[si] = (uint8_t)(si * 47u + 11u);
+        /* this block calls the _hw/_sw entry points directly, so the lazy
+         * buffer allocation in cn_slow_hash_v14 doesn't run for it */
+        if (!cn_v7_buffer_ensure(ctx)) {
+            cn_hash_context_free(ctx);
+            return 0;
+        }
         memset(&ctx->random_values, 0, sizeof(ctx->random_values));
         memset(ctx->salt, 0, CN_SALT_MEMORY);
         cn_slow_hash_v14_hw(ctx, input, sizeof(input) - 1, hw, seed);
+        /* the fill must actually populate the buffer, or the comparison
+         * below is vacuous again; OR-sample it across its whole length */
+        {
+            const uint64_t *bw = (const uint64_t *)ctx->cna_v7_buffer;
+            const uint32_t stride = (uint32_t)(CN_V7_BUFFER / sizeof(uint64_t) / 4096);
+            uint64_t acc = 0;
+            uint32_t bi;
+            for (bi = 0; bi < 4096; bi++)
+                acc |= bw[bi * stride];
+            if (acc == 0) ok = 0;
+        }
         memset(&ctx->random_values, 0, sizeof(ctx->random_values));
         memset(ctx->salt, 0, CN_SALT_MEMORY);
         cn_slow_hash_v14_sw(ctx, input, sizeof(input) - 1, sw, seed);
