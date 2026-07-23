@@ -794,6 +794,16 @@ else ()
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${ARCH_FLAG}")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ARCH_FLAG}")
 
+    # 32-bit x86 defaults to x87 (80-bit) float math, which can round differently
+    # from the 64-bit SSE2 math on other builds. next_difficulty_v6 truncates a
+    # double to the target, so that gap can fork 32-bit vs 64-bit nodes. Force SSE2
+    # so every x86 build computes difficulty identically.
+    if (NOT BUILD_64 AND NOT ARM AND NOT PPC64LE AND NOT PPC64 AND NOT PPC AND NOT S390X AND NOT RISCV AND NOT LOONGARCH)
+        message(STATUS "Forcing SSE2 float math on 32-bit x86 for cross-platform difficulty determinism")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse2 -mfpmath=sse")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse2 -mfpmath=sse")
+    endif ()
+
     set(WARNINGS "-Wall -Wextra -Wpointer-arith -Wundef -Wvla -Wwrite-strings -Wno-error=extra -Wno-error=deprecated-declarations -Wno-unused-parameter -Wno-error=unused-variable -Wno-error=undef -Wno-error=uninitialized")
     if (CMAKE_C_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         if (ARM)
