@@ -62,6 +62,9 @@ using namespace epee;
 
 #define MAX_RESTRICTED_FAKE_OUTS_COUNT 40
 #define MAX_RESTRICTED_GLOBAL_FAKE_OUTS_COUNT 5000
+#define RESTRICTED_TRANSACTIONS_COUNT 100
+#define RESTRICTED_BLOCK_COUNT 1000
+#define RESTRICTED_BLOCK_HEADER_COUNT 1000
 
 #define OUTPUT_HISTOGRAM_RECENT_CUTOFF_RESTRICTION (3 * 86400) // 3 days max, the wallet requests 1.8 days
 
@@ -514,6 +517,14 @@ namespace cryptonote
       return r;
 
     res.status = "Failed";
+
+    const bool restricted = m_restricted && ctx;
+    if (restricted && req.heights.size() > RESTRICTED_BLOCK_COUNT)
+    {
+      res.status = "Too many blocks requested in restricted mode";
+      return true;
+    }
+
     res.blocks.clear();
     res.blocks.reserve(req.heights.size());
     for (uint64_t height : req.heights)
@@ -653,6 +664,13 @@ namespace cryptonote
   {
     PERF_TIMER(on_decode_outputs);
 
+    const bool restricted = m_restricted && ctx;
+    if (restricted && req.tx_hashes.size() > RESTRICTED_TRANSACTIONS_COUNT)
+    {
+      res.status = "Too many transactions requested in restricted mode";
+      return false;
+    }
+
     std::vector<crypto::hash> vh;
     for(const auto& tx_hex_str: req.tx_hashes)
     {
@@ -749,11 +767,19 @@ namespace cryptonote
       for(const tx_out& o: tx.vout)
       {
         found = false;
+
+        const txout_to_key* const out_to_key = boost::get<txout_to_key>(&o.target);
+        if (out_to_key == nullptr)
+        {
+          ++i;
+          continue;
+        }
+        const crypto::public_key target_key = out_to_key->key;
+
         for(const crypto::key_derivation& k: tx_derivations)
         {
           crypto::public_key out_key;
           crypto::derive_public_key(k, i, spend_pubkey, out_key);
-          crypto::public_key target_key = boost::get<txout_to_key>(o.target).key;
 
           if (target_key == out_key)
           {
@@ -857,6 +883,13 @@ namespace cryptonote
     bool ok;
     if (use_bootstrap_daemon_if_necessary<COMMAND_RPC_GET_TRANSACTIONS>(invoke_http_mode::JON, "/gettransactions", req, res, ok))
       return ok;
+
+    const bool restricted = m_restricted && ctx;
+    if (restricted && req.txs_hashes.size() > RESTRICTED_TRANSACTIONS_COUNT)
+    {
+      res.status = "Too many transactions requested in restricted mode";
+      return true;
+    }
 
     std::vector<crypto::hash> vh;
     for(const auto& tx_hex_str: req.txs_hashes)
@@ -1097,6 +1130,7 @@ namespace cryptonote
       if(b.size() != sizeof(crypto::key_image))
       {
         res.status = "Failed, size of data mismatch";
+        return true;
       }
       key_images.push_back(*reinterpret_cast<const crypto::key_image*>(b.data()));
     }
@@ -2050,6 +2084,13 @@ namespace cryptonote
       error_resp.message = "Invalid start/end heights.";
       return false;
     }
+    const bool restricted = m_restricted && ctx;
+    if (restricted && req.end_height - req.start_height + 1 > RESTRICTED_BLOCK_HEADER_COUNT)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT;
+      error_resp.message = "Too many block headers requested in restricted mode";
+      return false;
+    }
     for (uint64_t h = req.start_height; h <= req.end_height; ++h)
     {
       crypto::hash block_hash = m_core.get_block_id_by_height(h);
@@ -2075,7 +2116,6 @@ namespace cryptonote
         return false;
       }
       res.headers.push_back(block_header_response());
-      const bool restricted = m_restricted && ctx;
       bool response_filled = fill_block_header_response(blk, false, block_height, block_hash, res.headers.back());
       if (!response_filled)
       {
