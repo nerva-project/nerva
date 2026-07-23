@@ -312,6 +312,16 @@ uint64_t calculate_fee(uint64_t fee_per_kb, const cryptonote::blobdata &blob, ui
   return calculate_fee(fee_per_kb, blob.size(), fee_multiplier);
 }
 
+uint64_t calculate_fee(uint64_t fee_per_kb, const cryptonote::transaction &tx, const cryptonote::blobdata &blob, uint64_t fee_multiplier)
+{
+  // the daemon fee-checks a type-7 transaction on its clawed-back weight,
+  // not its blob size, so the final fee must be computed on the same
+  // number; legacy types keep the blob-size fee so pre-fork fees do not move
+  if (tx.rct_signatures.type == rct::RCTTypeBulletproofPlus)
+    return calculate_fee(fee_per_kb, cryptonote::get_transaction_weight(tx, blob.size()), fee_multiplier);
+  return calculate_fee(fee_per_kb, blob, fee_multiplier);
+}
+
 std::string get_weight_string(size_t weight)
 {
   return std::to_string(weight) + " weight";
@@ -799,7 +809,7 @@ void drop_from_short_history(std::list<crypto::hash> &short_chain_history, size_
   }
 }
 
-size_t estimate_rct_tx_size(int n_inputs, int mixin, int n_outputs, size_t extra_size, bool bulletproof)
+size_t estimate_rct_tx_size(int n_inputs, int mixin, int n_outputs, size_t extra_size, bool bulletproof, bool clsag, bool bulletproof_plus)
 {
   size_t size = 0;
 
@@ -823,18 +833,21 @@ size_t estimate_rct_tx_size(int n_inputs, int mixin, int n_outputs, size_t extra
   size += 1;
 
   // rangeSigs
-  if (bulletproof)
+  if (bulletproof || bulletproof_plus)
   {
     size_t log_padded_outputs = 0;
     while ((1<<log_padded_outputs) < n_outputs)
       ++log_padded_outputs;
-    size += (2 * (6 + log_padded_outputs) + 4 + 5) * 32 + 3;
+    size += (2 * (6 + log_padded_outputs) + (bulletproof_plus ? 6 : (4 + 5))) * 32 + 3;
   }
   else
     size += (2*64*32+32+64*32) * n_outputs;
 
-  // MGs
-  size += n_inputs * (64 * (mixin+1) + 32);
+  // MGs/CLSAGs
+  if (clsag)
+    size += n_inputs * (32 * (mixin+1) + 64);
+  else
+    size += n_inputs * (64 * (mixin+1) + 32);
 
   // mixRing - not serialized, can be reconstructed
   /* size += 2 * 32 * (mixin+1) * n_inputs; */
@@ -842,19 +855,54 @@ size_t estimate_rct_tx_size(int n_inputs, int mixin, int n_outputs, size_t extra
   // pseudoOuts
   size += 32 * n_inputs;
   // ecdhInfo
-  size += 2 * 32 * n_outputs;
+  // the legacy 64-byte-per-output estimate stays for the pre-HF14 types so
+  // their fee estimates do not move; the CLSAG types use the trimmed
+  // encoding's real cost, as Monero master
+  if (clsag || bulletproof_plus)
+    size += 8 * n_outputs;
+  else
+    size += 2 * 32 * n_outputs;
   // outPk - only commitment is saved
   size += 32 * n_outputs;
   // txnFee
   size += 4;
 
-  LOG_PRINT_L2("estimated rct tx size for " << n_inputs << " inputs with ring size " << (mixin+1) << " and " << n_outputs << " outputs: " << size << " (" << ((32 * n_inputs/*+1*/) + 2 * 32 * (mixin+1) * n_inputs + 32 * n_outputs) << " saved)");
+  LOG_PRINT_L2("estimated " << (bulletproof_plus ? "bulletproof plus" : bulletproof ? "bulletproof" : "borromean") << " rct tx size for " << n_inputs << " inputs with ring size " << (mixin+1) << " and " << n_outputs << " outputs: " << size << " (" << ((32 * n_inputs/*+1*/) + 2 * 32 * (mixin+1) * n_inputs + 32 * n_outputs) << " saved)");
   return size;
 }
 
-size_t estimate_tx_weight(int n_inputs, int mixin, int n_outputs, size_t extra_size, bool bulletproof)
+uint64_t estimate_tx_weight(int n_inputs, int mixin, int n_outputs, size_t extra_size, bool bulletproof, bool clsag, bool bulletproof_plus)
 {
-  return estimate_rct_tx_size(n_inputs, mixin, n_outputs + 1, extra_size, bulletproof);
+  size_t size = estimate_rct_tx_size(n_inputs, mixin, n_outputs + 1, extra_size, bulletproof, clsag, bulletproof_plus);
+  // the consensus weight of a padded Bulletproof+ transaction includes the
+  // clawback (Monero master's estimate_tx_weight shape); without it a
+  // >2 output type-7 transaction would underpay its fee. The change output
+  // estimate_rct_tx_size adds above is a real output of the final
+  // transaction, so the clawback pads from it too
+  const int real_outputs = n_outputs + 1;
+  if (bulletproof_plus && real_outputs > 2)
+  {
+    const uint64_t bp_base = (32 * (6 + 7 * 2)) / 2; // notional size of a 2 output proof, normalized to 1 proof (ie, divided by 2)
+    size_t log_padded_outputs = 2;
+    while ((1<<log_padded_outputs) < real_outputs)
+      ++log_padded_outputs;
+    uint64_t nlr = 2 * (6 + log_padded_outputs);
+    const uint64_t bp_size = 32 * (6 + nlr);
+    const uint64_t bp_clawback = (bp_base * (1<<log_padded_outputs) - bp_size) * 4 / 5;
+    MDEBUG("clawback on tx size: " << bp_clawback);
+    size += bp_clawback;
+  }
+  return size;
+}
+
+uint8_t get_bulletproof_plus_fork()
+{
+  return HF_VERSION_BULLETPROOF_PLUS;
+}
+
+uint8_t get_clsag_fork()
+{
+  return HF_VERSION_CLSAG;
 }
 
 bool get_short_payment_id(crypto::hash8 &payment_id8, const tools::wallet2::pending_tx &ptx, hw::device &hwdev)
@@ -1717,6 +1765,8 @@ static uint64_t decodeRct(const rct::rctSig & rv, const crypto::key_derivation &
     case rct::RCTTypeSimple:
     case rct::RCTTypeBulletproof1Simple:
     case rct::RCTTypeBulletproof2:
+    case rct::RCTTypeCLSAG:
+    case rct::RCTTypeBulletproofPlus:
       return rct::decodeRctSimple(rv, rct::sk2rct(scalar1), i, mask, hwdev);
     case rct::RCTTypeFull:
     case rct::RCTTypeBulletproof1Full:
@@ -4697,6 +4747,13 @@ std::string wallet2::make_multisig(const epee::wipeable_string &password,
   const std::vector<crypto::public_key> &spend_keys,
   uint32_t threshold)
 {
+  // Nerva's multisig is the pre-rework legacy implementation (upstream
+  // replaced its key exchange after the 2022 disclosures and still flags
+  // even the fixed version experimental). New enrollment is disabled;
+  // existing multisig wallets keep working until HF14 so funds can move.
+  THROW_WALLET_EXCEPTION_IF(true, error::wallet_internal_error,
+      "Multisig is disabled: the implementation is legacy and unaudited. Existing multisig wallets can spend until fork 14.");
+
   CHECK_AND_ASSERT_THROW_MES(!view_keys.empty(), "empty view keys");
   CHECK_AND_ASSERT_THROW_MES(view_keys.size() == spend_keys.size(), "Mismatched view/spend key sizes");
   CHECK_AND_ASSERT_THROW_MES(threshold > 1 && threshold <= spend_keys.size() + 1, "Invalid threshold");
@@ -4804,6 +4861,13 @@ std::string wallet2::make_multisig(const epee::wipeable_string &password,
 std::string wallet2::exchange_multisig_keys(const epee::wipeable_string &password,
   const std::vector<std::string> &info)
   {
+  // Nerva's multisig is the pre-rework legacy implementation (upstream
+  // replaced its key exchange after the 2022 disclosures and still flags
+  // even the fixed version experimental). New enrollment is disabled;
+  // existing multisig wallets keep working until HF14 so funds can move.
+  THROW_WALLET_EXCEPTION_IF(true, error::wallet_internal_error,
+      "Multisig is disabled: the implementation is legacy and unaudited. Existing multisig wallets can spend until fork 14.");
+
   THROW_WALLET_EXCEPTION_IF(info.empty(),
     error::wallet_internal_error, "Empty multisig info");
 
@@ -5051,6 +5115,13 @@ bool wallet2::finalize_multisig(const epee::wipeable_string &password, const std
 
 std::string wallet2::get_multisig_info() const
 {
+  // Nerva's multisig is the pre-rework legacy implementation (upstream
+  // replaced its key exchange after the 2022 disclosures and still flags
+  // even the fixed version experimental). New enrollment is disabled;
+  // existing multisig wallets keep working until HF14 so funds can move.
+  THROW_WALLET_EXCEPTION_IF(true, error::wallet_internal_error,
+      "Multisig is disabled: the implementation is legacy and unaudited. Existing multisig wallets can spend until fork 14.");
+
   // It's a signed package of private view key and public spend key
   const crypto::secret_key skey = cryptonote::get_multisig_blinded_secret_key(get_account().get_keys().m_view_secret_key);
   const crypto::public_key pkey = get_multisig_signer_public_key(get_account().get_keys().m_spend_secret_key);
@@ -5497,6 +5568,9 @@ void wallet2::load(const std::string& wallet_, const epee::wipeable_string& pass
   {
     MERROR("Failed to initialize MMS, it will be unusable");
   }
+
+  if (m_multisig)
+    MWARNING("This is a multisig wallet. Multisig is a disabled legacy feature: from fork 14 this wallet cannot spend. Move any funds before the fork.");
 }
 //----------------------------------------------------------------------------------------------------
 void wallet2::trim_hashchain()
@@ -6419,12 +6493,8 @@ bool wallet2::sign_tx(unsigned_tx_set &exported_txs, std::vector<wallet2::pendin
     LOG_PRINT_L1(" " << (n+1) << ": " << sd.sources.size() << " inputs, ring size " << sd.sources[0].outputs.size());
     signed_txes.ptx.push_back(pending_tx());
     tools::wallet2::pending_tx &ptx = signed_txes.ptx.back();
-    rct::RCTConfig rct_config = { rct::RangeProofBorromean, 0 };
-    if (sd.use_bulletproofs)
-    {
-      rct_config.range_proof_type = rct::RangeProofPaddedBulletproof;
-      rct_config.is_v2 = use_fork_rules(BULLETPROOF_FULL_FORK_HEIGHT, 0);
-    }
+    rct::RCTConfig rct_config = sd.rct_config;
+    check_hf14_construction_allowed(rct_config.bp_version == 0 || rct_config.bp_version >= 3);
     crypto::secret_key tx_key;
     std::vector<crypto::secret_key> additional_tx_keys;
     rct::multisig_out msout;
@@ -6900,12 +6970,8 @@ bool wallet2::sign_multisig_tx(multisig_tx_set &exported_txs, std::vector<crypto
     cryptonote::transaction tx;
     rct::multisig_out msout = ptx.multisig_sigs.front().msout;
     auto sources = sd.sources;
-    rct::RCTConfig rct_config = { rct::RangeProofBorromean, 0 };
-    if (sd.use_bulletproofs)
-    {
-      rct_config.range_proof_type = rct::RangeProofPaddedBulletproof;
-      rct_config.is_v2 = use_fork_rules(BULLETPROOF_FULL_FORK_HEIGHT, 0);
-    }
+    rct::RCTConfig rct_config = sd.rct_config;
+    check_hf14_construction_allowed(rct_config.bp_version == 0 || rct_config.bp_version >= 3);
     bool r = cryptonote::construct_tx_with_tx_key(m_account.get_keys(), m_subaddresses, sources, sd.splitted_dsts, ptx.change_dts.addr, sd.extra, tx, sd.unlock_time, 
       ptx.tx_key, ptx.additional_tx_keys, current_tx_version, rct_config, &msout, false);
     THROW_WALLET_EXCEPTION_IF(!r, error::tx_not_constructed, sd.sources, sd.splitted_dsts, sd.unlock_time, m_nettype);
@@ -7368,7 +7434,7 @@ void wallet2::light_wallet_get_outs(std::vector<std::vector<tools::wallet2::get_
   tools::COMMAND_RPC_GET_RANDOM_OUTS::response ores;
   
   size_t light_wallet_requested_outputs_count = (size_t)((fake_outputs_count + 1) * 1.5 + 1);
-  const bool v2 = (rct_config.range_proof_type != rct::RangeProofBorromean && rct_config.is_v2);
+  const bool v2 = (rct_config.range_proof_type != rct::RangeProofBorromean && rct_config.bp_version >= 2);
   
   // Amounts to ask for
   // MyMonero api handle amounts and fees as strings
@@ -7479,7 +7545,7 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
     return;
   }
 
-  const bool v2 = (rct_config.range_proof_type != rct::RangeProofBorromean && rct_config.is_v2);
+  const bool v2 = (rct_config.range_proof_type != rct::RangeProofBorromean && rct_config.bp_version >= 2);
 
   if (fake_outputs_count > 0)
   {
@@ -8205,7 +8271,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     THROW_WALLET_EXCEPTION_IF(it_to_replace == src.outputs.end(), error::wallet_internal_error,
         "real output not found");
 
-    const bool v2 = (rct_config.range_proof_type != rct::RangeProofBorromean && rct_config.is_v2);
+    const bool v2 = (rct_config.range_proof_type != rct::RangeProofBorromean && rct_config.bp_version >= 2);
 
     tx_output_entry real_oe;
     real_oe.first = td.m_global_output_index;
@@ -8352,7 +8418,8 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
   ptx.construction_data.selected_transfers = ptx.selected_transfers;
   ptx.construction_data.extra = tx.extra;
   ptx.construction_data.unlock_time = unlock_time;
-  ptx.construction_data.use_bulletproofs = !tx.rct_signatures.p.bulletproofs.empty();
+  ptx.construction_data.use_bulletproofs = !tx.rct_signatures.p.bulletproofs.empty() || !tx.rct_signatures.p.bulletproofs_plus.empty();
+  ptx.construction_data.rct_config = rct_config;
   ptx.construction_data.dests = dsts;
   // record which subaddress indices are being used as inputs
   ptx.construction_data.subaddr_account = subaddr_account;
@@ -9035,9 +9102,12 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
   uint64_t needed_fee, available_for_fee = 0;
   uint64_t upper_transaction_weight_limit = get_upper_transaction_weight_limit();
   const bool bulletproof = use_fork_rules(BULLETPROOF_SIMPLE_FORK_HEIGHT, 0);
+  const bool clsag = use_fork_rules(get_clsag_fork(), 0);
+  const bool bulletproof_plus = use_fork_rules(get_bulletproof_plus_fork(), 0);
+  check_hf14_construction_allowed(bulletproof_plus);
   const rct::RCTConfig rct_config {
     bulletproof ? rct::RangeProofPaddedBulletproof : rct::RangeProofBorromean,
-    bulletproof && use_fork_rules(BULLETPROOF_FULL_FORK_HEIGHT, 0)
+    bulletproof_plus ? 4 : bulletproof && use_fork_rules(BULLETPROOF_FULL_FORK_HEIGHT, 0) ? 2 : 1
   };
 
   const uint64_t fee_per_kb  = get_per_kb_fee();
@@ -9174,7 +9244,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
 
   // this is used to build a tx that's 1 or 2 inputs, and 2 outputs, which
   // will get us a known fee.
-  uint64_t estimated_fee = calculate_fee(fee_per_kb, estimate_rct_tx_size(2, fake_outs_count, 2, extra.size(), bulletproof), fee_multiplier);
+  uint64_t estimated_fee = calculate_fee(fee_per_kb, estimate_rct_tx_size(2, fake_outs_count, 2, extra.size(), bulletproof, clsag, bulletproof_plus), fee_multiplier);
   preferred_inputs = pick_preferred_rct_inputs(needed_money + estimated_fee, subaddr_account, subaddr_indices);
   if (!preferred_inputs.empty())
   {
@@ -9286,7 +9356,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
     }
     else
     {
-      while (!dsts.empty() && dsts[0].amount <= available_amount && estimate_tx_weight(tx.selected_transfers.size(), fake_outs_count, tx.dsts.size()+1, extra.size(), bulletproof) < TX_WEIGHT_TARGET(upper_transaction_weight_limit))
+      while (!dsts.empty() && dsts[0].amount <= available_amount && estimate_tx_weight(tx.selected_transfers.size(), fake_outs_count, tx.dsts.size()+1, extra.size(), bulletproof, clsag, bulletproof_plus) < TX_WEIGHT_TARGET(upper_transaction_weight_limit))
       {
         // we can fully pay that destination
         LOG_PRINT_L2("We can fully pay " << get_account_address_as_str(m_nettype, dsts[0].is_subaddress, dsts[0].addr) <<
@@ -9298,7 +9368,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
         ++original_output_index;
       }
 
-      if (available_amount > 0 && !dsts.empty() && estimate_tx_weight(tx.selected_transfers.size(), fake_outs_count, tx.dsts.size()+1, extra.size(), bulletproof) < TX_WEIGHT_TARGET(upper_transaction_weight_limit)) {
+      if (available_amount > 0 && !dsts.empty() && estimate_tx_weight(tx.selected_transfers.size(), fake_outs_count, tx.dsts.size()+1, extra.size(), bulletproof, clsag, bulletproof_plus) < TX_WEIGHT_TARGET(upper_transaction_weight_limit)) {
         // we can partially fill that destination
         LOG_PRINT_L2("We can partially pay " << get_account_address_as_str(m_nettype, dsts[0].is_subaddress, dsts[0].addr) <<
           " for " << print_money(available_amount) << "/" << print_money(dsts[0].amount));
@@ -9322,7 +9392,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
       }
       else
       {
-        const size_t estimated_rct_tx_weight = estimate_tx_weight(tx.selected_transfers.size(), fake_outs_count, tx.dsts.size(), extra.size(), bulletproof);
+        const size_t estimated_rct_tx_weight = estimate_tx_weight(tx.selected_transfers.size(), fake_outs_count, tx.dsts.size(), extra.size(), bulletproof, clsag, bulletproof_plus);
         try_tx = dsts.empty() || (estimated_rct_tx_weight >= TX_WEIGHT_TARGET(upper_transaction_weight_limit));
         THROW_WALLET_EXCEPTION_IF(try_tx && tx.dsts.empty(), error::tx_too_big, estimated_rct_tx_weight, upper_transaction_weight_limit);
       }
@@ -9332,7 +9402,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
       cryptonote::transaction test_tx;
       pending_tx test_ptx;
 
-      const size_t estimated_tx_size = estimate_tx_weight(tx.selected_transfers.size(), fake_outs_count, tx.dsts.size(), extra.size(), bulletproof);
+      const size_t estimated_tx_size = estimate_tx_weight(tx.selected_transfers.size(), fake_outs_count, tx.dsts.size(), extra.size(), bulletproof, clsag, bulletproof_plus);
       needed_fee = calculate_fee(fee_per_kb, estimated_tx_size, fee_multiplier);
 
       uint64_t inputs = 0, outputs = needed_fee;
@@ -9353,7 +9423,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
         test_tx, test_ptx, rct_config);
 
       auto txBlob = t_serializable_object_to_blob(test_ptx.tx);
-      needed_fee = calculate_fee(fee_per_kb, txBlob, fee_multiplier);
+      needed_fee = calculate_fee(fee_per_kb, test_ptx.tx, txBlob, fee_multiplier);
       available_for_fee = test_ptx.fee + test_ptx.change_dts.amount + (!test_ptx.dust_added_to_fee ? test_ptx.dust : 0);
       LOG_PRINT_L2("Made a " << get_weight_string(test_ptx.tx, txBlob.size()) << " tx, with " << print_money(available_for_fee) << " available for fee (" <<
         print_money(needed_fee) << " needed)");
@@ -9394,7 +9464,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
             test_tx, test_ptx, rct_config);
 
           txBlob = t_serializable_object_to_blob(test_ptx.tx);
-          needed_fee = calculate_fee(fee_per_kb, txBlob, fee_multiplier);
+          needed_fee = calculate_fee(fee_per_kb, test_ptx.tx, txBlob, fee_multiplier);
           LOG_PRINT_L2("Made an attempt at a  final " << get_weight_string(test_ptx.tx, txBlob.size()) << " tx, with " << print_money(test_ptx.fee) <<
             " fee  and " << print_money(test_ptx.change_dts.amount) << " change");
         }
@@ -9657,10 +9727,13 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const crypton
   const uint64_t fee_multiplier = get_fee_multiplier(priority);
 
   const bool bulletproof = use_fork_rules(BULLETPROOF_SIMPLE_FORK_HEIGHT, 0);
+  const bool clsag = use_fork_rules(get_clsag_fork(), 0);
+  const bool bulletproof_plus = use_fork_rules(get_bulletproof_plus_fork(), 0);
+  check_hf14_construction_allowed(bulletproof_plus);
   const rct::RCTConfig rct_config
   {
     bulletproof ? rct::RangeProofPaddedBulletproof : rct::RangeProofBorromean,
-    bulletproof && use_fork_rules(BULLETPROOF_FULL_FORK_HEIGHT, 0)
+    bulletproof_plus ? 4 : bulletproof && use_fork_rules(BULLETPROOF_FULL_FORK_HEIGHT, 0) ? 2 : 1
   };
 
   LOG_PRINT_L2("Starting with " << unused_transfers_indices.size() << " non-dust outputs and " << unused_dust_indices.size() << " dust outputs");
@@ -9699,14 +9772,14 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const crypton
     // here, check if we need to sent tx and start a new one
     LOG_PRINT_L2("Considering whether to create a tx now, " << tx.selected_transfers.size() << " inputs, tx limit "
       << upper_transaction_weight_limit);
-    const size_t estimated_rct_tx_weight = estimate_tx_weight(tx.selected_transfers.size(), fake_outs_count, tx.dsts.size() + 1, extra.size(), bulletproof);
+    const size_t estimated_rct_tx_weight = estimate_tx_weight(tx.selected_transfers.size(), fake_outs_count, tx.dsts.size() + 1, extra.size(), bulletproof, clsag, bulletproof_plus);
     bool try_tx = (unused_dust_indices.empty() && unused_transfers_indices.empty()) || ( estimated_rct_tx_weight >= TX_WEIGHT_TARGET(upper_transaction_weight_limit));
 
     if (try_tx) {
       cryptonote::transaction test_tx;
       pending_tx test_ptx;
 
-      const size_t estimated_tx_size = estimate_tx_weight(tx.selected_transfers.size(), fake_outs_count, tx.dsts.size(), extra.size(), bulletproof);
+      const size_t estimated_tx_size = estimate_tx_weight(tx.selected_transfers.size(), fake_outs_count, tx.dsts.size(), extra.size(), bulletproof, clsag, bulletproof_plus);
       needed_fee = calculate_fee(fee_per_kb, estimated_tx_size, fee_multiplier);
 
       for (size_t i = 0; i < ((outputs > 1) ? outputs - 1 : outputs); ++i)
@@ -9751,7 +9824,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const crypton
           test_tx, test_ptx, rct_config);
 
         txBlob = t_serializable_object_to_blob(test_ptx.tx);
-        needed_fee = calculate_fee(fee_per_kb, txBlob, fee_multiplier);
+        needed_fee = calculate_fee(fee_per_kb, test_ptx.tx, txBlob, fee_multiplier);
         LOG_PRINT_L2("Made an attempt at a final " << get_weight_string(test_ptx.tx, txBlob.size()) << " tx, with " << print_money(test_ptx.fee) <<
           " fee  and " << print_money(test_ptx.change_dts.amount) << " change");
       } while (needed_fee > test_ptx.fee);
@@ -9922,6 +9995,20 @@ uint8_t wallet2::get_current_tx_version()
   return (hf >= V2_TX_FORK_HEIGHT) ? TRANSACTION_VERSION_V2 : TRANSACTION_VERSION_V1;
 }
 
+void wallet2::check_hf14_construction_allowed(bool needs_clsag) const
+{
+  if (!needs_clsag)
+    return;
+  // HF14 transactions are CLSAG-signed. The Ledger integration still speaks
+  // the pre-CLSAG app protocol and multisig is excluded with CLSAG, so both
+  // must refuse before construction starts rather than produce something the
+  // network rejects.
+  THROW_WALLET_EXCEPTION_IF(key_on_device(), error::wallet_internal_error,
+      "This wallet's keys are on a hardware device whose integration predates CLSAG; it cannot create HF14 transactions");
+  THROW_WALLET_EXCEPTION_IF(m_multisig, error::wallet_internal_error,
+      "Multisig wallets cannot create HF14 (CLSAG) transactions");
+}
+//----------------------------------------------------------------------------------------------------
 bool wallet2::use_fork_rules(uint8_t version, int64_t early_blocks)
 {
   // TODO: How to get fork rule info from light wallet node?
@@ -10519,7 +10606,7 @@ void wallet2::check_tx_key_helper(const cryptonote::transaction &tx, const crypt
         crypto::secret_key scalar1;
         crypto::derivation_to_scalar(found_derivation, n, scalar1);
         rct::ecdhTuple ecdh_info = tx.rct_signatures.ecdhInfo[n];
-        rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar1), tx.rct_signatures.type == rct::RCTTypeBulletproof2);
+        rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar1), tx.rct_signatures.type == rct::RCTTypeBulletproof2 || tx.rct_signatures.type == rct::RCTTypeCLSAG || tx.rct_signatures.type == rct::RCTTypeBulletproofPlus);
         const rct::key C = tx.rct_signatures.outPk[n].mask;
         rct::key Ctmp;
         THROW_WALLET_EXCEPTION_IF(sc_check(ecdh_info.mask.bytes) != 0, error::wallet_internal_error, "Bad ECDH input mask");
@@ -11123,7 +11210,7 @@ bool wallet2::check_reserve_proof(const cryptonote::account_public_address &addr
       crypto::secret_key shared_secret;
       crypto::derivation_to_scalar(derivation, proof.index_in_tx, shared_secret);
       rct::ecdhTuple ecdh_info = tx.rct_signatures.ecdhInfo[proof.index_in_tx];
-      rct::ecdhDecode(ecdh_info, rct::sk2rct(shared_secret), tx.rct_signatures.type == rct::RCTTypeBulletproof2);
+      rct::ecdhDecode(ecdh_info, rct::sk2rct(shared_secret), tx.rct_signatures.type == rct::RCTTypeBulletproof2 || tx.rct_signatures.type == rct::RCTTypeCLSAG || tx.rct_signatures.type == rct::RCTTypeBulletproofPlus);
       amount = rct::h2d(ecdh_info.amount);
     }
     total += amount;

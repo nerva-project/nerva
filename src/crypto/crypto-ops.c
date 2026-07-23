@@ -1280,6 +1280,106 @@ void ge_double_scalarmult_base_vartime_p3(ge_p3 *r3, const unsigned char *a, con
   }
 }
 
+/* CLSAG (HF14) triple scalar multiplications, ported verbatim from Monero. */
+
+void ge_triple_scalarmult_base_vartime(ge_p2 *r, const unsigned char *a, const unsigned char *b, const ge_dsmp Bi, const unsigned char *c, const ge_dsmp Ci) {
+  signed char aslide[256];
+  signed char bslide[256];
+  signed char cslide[256];
+  ge_p1p1 t;
+  ge_p3 u;
+  int i;
+
+  slide(aslide, a);
+  slide(bslide, b);
+  slide(cslide, c);
+
+  ge_p2_0(r);
+
+  for (i = 255; i >= 0; --i) {
+    if (aslide[i] || bslide[i] || cslide[i]) break;
+  }
+
+  for (; i >= 0; --i) {
+    ge_p2_dbl(&t, r);
+
+    if (aslide[i] > 0) {
+      ge_p1p1_to_p3(&u, &t);
+      ge_madd(&t, &u, &ge_Bi[aslide[i]/2]);
+    } else if (aslide[i] < 0) {
+      ge_p1p1_to_p3(&u, &t);
+      ge_msub(&t, &u, &ge_Bi[(-aslide[i])/2]);
+    }
+
+    if (bslide[i] > 0) {
+      ge_p1p1_to_p3(&u, &t);
+      ge_add(&t, &u, &Bi[bslide[i]/2]);
+    } else if (bslide[i] < 0) {
+      ge_p1p1_to_p3(&u, &t);
+      ge_sub(&t, &u, &Bi[(-bslide[i])/2]);
+    }
+
+    if (cslide[i] > 0) {
+      ge_p1p1_to_p3(&u, &t);
+      ge_add(&t, &u, &Ci[cslide[i]/2]);
+    } else if (cslide[i] < 0) {
+      ge_p1p1_to_p3(&u, &t);
+      ge_sub(&t, &u, &Ci[(-cslide[i])/2]);
+    }
+
+    ge_p1p1_to_p2(r, &t);
+  }
+}
+
+void ge_triple_scalarmult_precomp_vartime(ge_p2 *r, const unsigned char *a, const ge_dsmp Ai, const unsigned char *b, const ge_dsmp Bi, const unsigned char *c, const ge_dsmp Ci) {
+  signed char aslide[256];
+  signed char bslide[256];
+  signed char cslide[256];
+  ge_p1p1 t;
+  ge_p3 u;
+  int i;
+
+  slide(aslide, a);
+  slide(bslide, b);
+  slide(cslide, c);
+
+  ge_p2_0(r);
+
+  for (i = 255; i >= 0; --i) {
+    if (aslide[i] || bslide[i] || cslide[i]) break;
+  }
+
+  for (; i >= 0; --i) {
+    ge_p2_dbl(&t, r);
+
+    if (aslide[i] > 0) {
+      ge_p1p1_to_p3(&u, &t);
+      ge_add(&t, &u, &Ai[aslide[i]/2]);
+    } else if (aslide[i] < 0) {
+      ge_p1p1_to_p3(&u, &t);
+      ge_sub(&t, &u, &Ai[(-aslide[i])/2]);
+    }
+
+    if (bslide[i] > 0) {
+      ge_p1p1_to_p3(&u, &t);
+      ge_add(&t, &u, &Bi[bslide[i]/2]);
+    } else if (bslide[i] < 0) {
+      ge_p1p1_to_p3(&u, &t);
+      ge_sub(&t, &u, &Bi[(-bslide[i])/2]);
+    }
+
+    if (cslide[i] > 0) {
+      ge_p1p1_to_p3(&u, &t);
+      ge_add(&t, &u, &Ci[cslide[i]/2]);
+    } else if (cslide[i] < 0) {
+      ge_p1p1_to_p3(&u, &t);
+      ge_sub(&t, &u, &Ci[(-cslide[i])/2]);
+    }
+
+    ge_p1p1_to_p2(r, &t);
+  }
+}
+
 /* From ge_frombytes.c, modified */
 
 int ge_frombytes_vartime(ge_p3 *h, const unsigned char *s) {

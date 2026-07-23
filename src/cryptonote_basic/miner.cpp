@@ -834,8 +834,10 @@ namespace cryptonote
 #else
       const int good_tier = CN_PAGES_THP;
 #endif
-      // the 8 MB pad only matters once CNA v6 (v13) is what we mine, no point
-      // nagging pre-fork miners about it
+      // no point nagging pre-v13 miners, but from v13 on the page tier is
+      // real hashrate: the v13 8 MB pad, and even more the v14 24 MB
+      // per-nonce chase, where every hop on 4 KB pages likely eats a TLB
+      // miss and a page walk on top of the DRAM load
       uint8_t template_version = 0;
       CRITICAL_REGION_BEGIN(m_template_lock);
       template_version = m_template.major_version;

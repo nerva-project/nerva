@@ -687,6 +687,49 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------
+  bool get_block_longhash_v14(crypto::cn_hash_context_t *context, BlockchainDB &db, const blobdata &blob, crypto::hash &res, uint64_t height)
+  {
+    // no fork table puts v14 this low; keep the guard hard because the
+    // assert is compiled out in release and the subtraction would wrap
+    if (height <= 257)
+      return false;
+    const uint64_t stable_height = height - 256;
+
+    // random_values must land inside the 256 KB v14 pad, so fetch them with
+    // the v14 bound on every call and never through context->cached_height.
+    // That cache is shared with the v13 path whose bound is 8 MB, and around
+    // the fork one context can hash both versions at the same height
+    // (competing chains): a stale v13-bounded set served here would index
+    // past the pad and fork the chain. Invalidate the cache too, so a v13
+    // hash following on this context refetches with its own bound. The
+    // fetch is five block-cache lookups, noise next to the hash itself.
+    db.get_cna_v2_data(&context->random_values, stable_height, CN_SCRATCHPAD_MEMORY_V14);
+    context->cached_height = (uint64_t)-1;
+
+    // Per-nonce program seed built exactly as v13: HC128 seeded from the blob
+    // hash fills the chain salt, and the seed is blob_hash XOR salt[0..32).
+    // Unique per (height, nonce) and requires the blockchain DB, so pool
+    // resistance is unchanged.
+    crypto::hash blob_hash;
+    get_blob_hash(blob, blob_hash);
+
+    HC128_State rng_state;
+    HC128_Init(&rng_state, (unsigned char *)blob_hash.data, (unsigned char *)blob_hash.data + 16);
+
+    db.get_cna_v6_data(context->salt, &rng_state, stable_height);
+
+    uint8_t seed[32];
+    const uint8_t *salt_bytes = reinterpret_cast<const uint8_t *>(context->salt);
+    const uint8_t *hash_bytes = reinterpret_cast<const uint8_t *>(blob_hash.data);
+    for (int i = 0; i < 32; i++)
+      seed[i] = hash_bytes[i] ^ salt_bytes[i];
+
+    // No external dataset: cn_slow_hash_v14 fills its own 24 MB per-nonce
+    // buffer from the seed and walks it (mutating as it goes).
+    cn_slow_hash_v14(context, blob.data(), blob.size(), res.data, seed);
+    return true;
+  }
+  //---------------------------------------------------------------
   bool get_block_longhash(crypto::cn_hash_context_t *context, BlockchainDB &db, const uint8_t major_version, const blobdata &blob, crypto::hash &res, const uint64_t height)
   {
     if (major_version < 7)
@@ -710,8 +753,11 @@ namespace cryptonote
       case 11:
       case 12:
         return get_block_longhash_v11(context, db, blob, res, height);
-      default:
+      case 13:
         return get_block_longhash_v13(context, db, blob, res, height);
+      default:
+        // >= 14: CNA v7, per-nonce mutable-buffer chase
+        return get_block_longhash_v14(context, db, blob, res, height);
     }
   }
   //---------------------------------------------------------------
