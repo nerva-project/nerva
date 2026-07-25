@@ -909,11 +909,13 @@ namespace cryptonote
     // try additional tx pubkeys if available
     if (!additional_derivations.empty())
     {
-      CHECK_AND_ASSERT_MES(output_index < additional_derivations.size(), boost::none, "wrong number of additional derivations");
-      hwdev.derive_subaddress_public_key(out_key, additional_derivations[output_index], output_index, subaddress_spendkey);
-      found = subaddresses.find(subaddress_spendkey);
-      if (found != subaddresses.end())
-        return subaddress_receive_info{ found->second, additional_derivations[output_index] };
+      for (auto additional_derivation : additional_derivations)
+      {
+        hwdev.derive_subaddress_public_key(out_key, additional_derivation, output_index, subaddress_spendkey);
+        found = subaddresses.find(subaddress_spendkey);
+        if (found != subaddresses.end())
+          return subaddress_receive_info{ found->second, additional_derivation };
+      }
     }
     return boost::none;
   }

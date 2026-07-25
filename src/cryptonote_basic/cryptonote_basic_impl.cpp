@@ -79,20 +79,29 @@ namespace cryptonote {
   }
   //-----------------------------------------------------------------------------------------------
   bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version) {
-    static_assert(DIFFICULTY_TARGET % 60 == 0,"difficulty targets must be a multiple of 60");
-    const int target_minutes = DIFFICULTY_TARGET / 60;
-    const int emission_speed_factor = EMISSION_SPEED_FACTOR_PER_MINUTE - (target_minutes-1);
-
-    const uint64_t premine = 180000000000000000U;
-     if (median_weight > 0 && already_generated_coins < premine) {
-       reward = premine;
-       return true;
-     }
-
-    uint64_t base_reward = (MONEY_SUPPLY - already_generated_coins) >> emission_speed_factor;
-    if (base_reward < FINAL_SUBSIDY_PER_MINUTE*target_minutes)
+    uint64_t base_reward = 0;
+    if (version < HF_VERSION_SECOR)
     {
-      base_reward = FINAL_SUBSIDY_PER_MINUTE*target_minutes;
+      static_assert(DIFFICULTY_TARGET % 60 == 0,"difficulty targets must be a multiple of 60");
+      const int target_minutes = DIFFICULTY_TARGET / 60;
+      const int emission_speed_factor = EMISSION_SPEED_FACTOR_PER_MINUTE - (target_minutes-1);
+
+      const uint64_t premine = 180000000000000000U;
+      if (median_weight > 0 && already_generated_coins < premine) {
+        reward = premine;
+        return true;
+      }
+
+      base_reward = (MONEY_SUPPLY - already_generated_coins) >> emission_speed_factor;
+      if (base_reward < FINAL_SUBSIDY_PER_MINUTE*target_minutes)
+      {
+        base_reward = FINAL_SUBSIDY_PER_MINUTE*target_minutes;
+      }
+    }
+    else
+    {
+      // assumes that tail emission was already reached before/by HF_VERSION_SECOR
+      base_reward = (FINAL_SUBSIDY_PER_MINUTE / 60) * DIFFICULTY_TARGET_SECOR;
     }
 
     uint64_t full_reward_zone = get_min_block_weight(version);
