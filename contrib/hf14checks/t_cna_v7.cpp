@@ -43,35 +43,40 @@ static uint64_t ref_mix64(uint64_t val, uint32_t key_material)
   return val;
 }
 
-// One v7 pass: CN_V7_SEGMENTS x [serial chase, program slice]. The walk maps
-// the chain value into the buffer via the high word of chain * qwords, writes
-// each cell back XORed with the live chain, and hands the read values to
-// SP_READ in order. wchain folds into regs[0] at the end of the pass.
+// One v7 pass: CN_V7_SEGMENTS x [serial chase, program slice], where the
+// segment lengths come from the program (sum CN_V7_HOPS) so the rhythm is
+// per-nonce. Each hop builds its address from a program operand pair plus the
+// live chain, maps it through the high word of the product with qwords, writes
+// the cell back XORed with that address material, and steps the operand source
+// by a stride taken from the loaded value. SP_READ takes the chased values in
+// order. wchain folds into regs[0] at the end of the pass.
 static void ref_execute_v7(const cn_vm_program_t *prog, uint8_t *buffer, uint64_t buffer_qwords,
                            uint8_t *pad, uint64_t regs[CN_REG_COUNT], uint64_t *chain_state)
 {
   const size_t sp_mask   = (size_t)(CN_SCRATCHPAD_MEMORY_V14 - 1) & ~(size_t)7;
-  const int    seg_hops  = CN_V7_HOPS / CN_V7_SEGMENTS;
   const int    seg_steps = CN_PROGRAM_SIZE / CN_V7_SEGMENTS;
 
   int pc = 0;
-  unsigned consume = 0;
+  unsigned consume = 0, filled = 0, walk_pc = 0;
   uint64_t wchain = 0;
   uint64_t chain = *chain_state;
   std::vector<uint64_t> vals(CN_V7_HOPS);
 
   for (int seg = 0; seg < CN_V7_SEGMENTS; seg++)
   {
-    chain ^= regs[seg & (CN_REG_COUNT - 1)];
-    for (int h = 0; h < seg_hops; h++)
+    const int hops = (int)prog->seg_hops[seg];
+    for (int h = 0; h < hops; h++)
     {
-      const uint64_t idx = (uint64_t)(((unsigned __int128)chain * buffer_qwords) >> 64);
+      const cn_vm_instruction_t *hop = &prog->instructions[walk_pc & (CN_PROGRAM_SIZE - 1)];
+      const uint64_t material = regs[hop->src] + (uint64_t)hop->imm + chain;
+      const uint64_t idx = (uint64_t)(((unsigned __int128)material * buffer_qwords) >> 64);
       uint64_t v;
       memcpy(&v, buffer + idx * sizeof(uint64_t), sizeof(uint64_t));
-      const uint64_t mut = v ^ chain;
+      const uint64_t mut = v ^ material;
       memcpy(buffer + idx * sizeof(uint64_t), &mut, sizeof(uint64_t));
       chain = v + (uint64_t)h;
-      vals[seg * seg_hops + h] = v;
+      walk_pc += 1u + (unsigned)(v & 3u);
+      vals[filled++] = v;
     }
 
     for (int step = 0; step < seg_steps; step++)

@@ -57,8 +57,21 @@
 // program just mutated so the walk cannot advance without executing the
 // per-nonce random program (the GPU/ASIC barrier, same class as v6). All
 // values consensus-critical.
+//
+// The hop itself takes its address operands from the program (regs[src] + imm +
+// chain, as v6 did) and steps through the operand source by a stride derived
+// from the value just loaded, so the sequence of operands is per-nonce and
+// value-dependent rather than a fixed formula. Segment lengths are per-nonce
+// too. Measured against a fixed-loop chase on one GPU: 1.76x a CPU box instead
+// of 3.07x.
 #define CN_V7_HOPS           1024
 #define CN_V7_SEGMENTS       8
+// Per-segment hop counts come from the seed and sum to CN_V7_HOPS, so the
+// access count per pass is fixed while the rhythm differs per nonce. The floor
+// keeps the chased prefix ahead of what the following program slices can
+// consume: slice i consumes at most (CN_PROGRAM_SIZE / CN_V7_SEGMENTS) * (i+1)
+// values, and CN_V7_SEG_MIN * (i+1) is larger.
+#define CN_V7_SEG_MIN        80
 // Per-nonce chase buffer: 24 MB. Big enough to spill any commodity L3 (so the
 // chase is DRAM-latency-bound, not cache/clock-bound) and to starve a GPU of
 // parallel nonces (VRAM / 24 MB), small enough to keep block verify ~0.3-0.5 s.
@@ -94,6 +107,10 @@ typedef struct {
 
 typedef struct {
     cn_vm_instruction_t instructions[CN_PROGRAM_SIZE];
+    // Chase segment lengths for the HF14 pass, from the same seed. They sum to
+    // CN_V7_HOPS, so the access count per pass is identical for every nonce and
+    // no seed yields a cheaper hash; only the rhythm differs.
+    uint16_t seg_hops[CN_V7_SEGMENTS];
 } cn_vm_program_t;
 
 // Generate a deterministic random program from a 32-byte seed.
