@@ -61,7 +61,9 @@
 // The hop itself takes its address operands from the program (regs[src] + imm +
 // chain, as v6 did) and steps through the operand source by a stride derived
 // from the value just loaded, so the sequence of operands is per-nonce and
-// value-dependent rather than a fixed formula. Segment lengths are per-nonce
+// value-dependent rather than a fixed formula. The register index also steps
+// with the hop, so the operand sum cannot be reduced to one precomputed table
+// per segment. Segment lengths are per-nonce
 // too. Measured against a fixed-loop chase on one GPU: 1.76x a CPU box instead
 // of 3.07x.
 #define CN_V7_HOPS           1024

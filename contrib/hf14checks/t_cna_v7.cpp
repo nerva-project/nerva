@@ -68,7 +68,8 @@ static void ref_execute_v7(const cn_vm_program_t *prog, uint8_t *buffer, uint64_
     for (int h = 0; h < hops; h++)
     {
       const cn_vm_instruction_t *hop = &prog->instructions[walk_pc & (CN_PROGRAM_SIZE - 1)];
-      const uint64_t material = regs[hop->src] + (uint64_t)hop->imm + chain;
+      const uint8_t hop_reg = (uint8_t)((hop->src + (unsigned)h) & (CN_REG_COUNT - 1));
+      const uint64_t material = regs[hop_reg] + (uint64_t)hop->imm + chain;
       const uint64_t idx = (uint64_t)(((unsigned __int128)material * buffer_qwords) >> 64);
       uint64_t v;
       memcpy(&v, buffer + idx * sizeof(uint64_t), sizeof(uint64_t));

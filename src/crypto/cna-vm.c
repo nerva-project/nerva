@@ -303,7 +303,13 @@ void cn_vm_execute_v7(cn_vm_program_t *prog, uint8_t *buffer, uint64_t buffer_qw
             // file and a per-nonce, value-dependent walk through the program
             // rather than a fixed formula a hardwired pipeline could bake in.
             const cn_vm_instruction_t *hop = &prog->instructions[walk_pc & pc_mask];
-            const uint64_t addr_material = regs[hop->src] + (uint64_t)hop->imm + chain;
+            // The register index steps with the hop, so regs[..] + imm is not a
+            // fixed 512-entry table for the whole segment: precomputing it needs
+            // one entry per (instruction, hop position) pair instead, and the
+            // register file stays in the address path per hop rather than per
+            // segment. Costs an add and a mask.
+            const uint8_t hop_reg = (uint8_t)((hop->src + (unsigned)h) & (CN_REG_COUNT - 1));
+            const uint64_t addr_material = regs[hop_reg] + (uint64_t)hop->imm + chain;
             // Map into [0, buffer_qwords) as the high 64 bits of
             // addr_material * buffer_qwords: uniform, no divide, any buffer
             // length (no power-of-two requirement).
