@@ -823,7 +823,7 @@ namespace cryptonote
     // allocated on first use, so every *_is_mapped field is still zero at this
     // point and reading one would report the worst tier no matter what the
     // allocation actually got.
-    bool tier_reported = false;
+    uint8_t tier_reported_version = 0;   // 0 = nothing reported yet
     block b;
     ++m_threads_active;
     while(!m_stop)
@@ -875,9 +875,12 @@ namespace cryptonote
       // buffer that actually carries the hashrate for this fork version: from
       // v14 that is the 24 MB chase buffer, at v13 the 8 MB pad, before that
       // the 1 MB one.
-      if (!tier_reported)
+      // re-report when the fork version moves: a miner that started before the
+      // fork reported a different buffer, and the one that carries the hashrate
+      // from v14 on is the 24 MB chase buffer
+      if (tier_reported_version != b.major_version)
       {
-        tier_reported = true;
+        tier_reported_version = b.major_version;
         const int tier = b.major_version >= 14 ? hash_context->cna_v7_buffer_is_mapped
                        : b.major_version == 13 ? hash_context->cna_scratchpad_is_mapped
                                                : hash_context->scratchpad_is_mapped;

@@ -443,10 +443,12 @@ int cn_slow_hash_self_test(void)
         return 1;
 
     /* every case below calls the _hw/_sw entry points directly, so the lazy
-     * allocation in the dispatchers does not run for them */
+     * allocation in the dispatchers does not run for them. A failed allocation
+     * says nothing about HW versus SW agreement, so skip the test the same way
+     * a failed context allocation does above rather than refusing to start. */
     if (!cn_pads_ensure(ctx, 1, 1, 1)) {
         cn_hash_context_free(ctx);
-        return 0;
+        return 1;
     }
 
     static const char input[] = "nerva-cn-slow-hash-hw-vs-sw-self-test";
