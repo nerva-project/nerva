@@ -2764,6 +2764,23 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     }
   }
 
+  return check_tx_rct_type(tx, tvc);
+}
+//------------------------------------------------------------------
+// The range proof and ring signature type rules, split out of
+// check_tx_outputs. These are the only output rules that move at the HF14
+// boundary: the checks above it are either version independent or gated on
+// HF13, which is already behind us. That lets the pool re-check a candidate
+// against them at template time without paying the per-output subgroup
+// multiplication above on every build. A later fork that adds an output rule
+// which can invalidate a transaction already in the pool belongs here too.
+bool Blockchain::check_tx_rct_type(const transaction& tx, tx_verification_context &tvc) const
+{
+  LOG_PRINT_L3("Blockchain::" << __func__);
+  CRITICAL_REGION_LOCAL(m_blockchain_lock);
+
+  const uint8_t hf_version = m_hardfork->get_current_version();
+
   if (hf_version < BULLETPROOF_SIMPLE_FORK_HEIGHT) {
     // pre-v8, disallow bulletproofs
     const bool bulletproof = rct::is_rct_bulletproof(tx.rct_signatures.type);

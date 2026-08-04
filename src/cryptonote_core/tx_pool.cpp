@@ -1094,11 +1094,14 @@ namespace cryptonote
         }
       }
     }
-    // the output rules can flip at the fork boundary while a tx sits in the
+    // the rct type rules flip at the fork boundary while a tx sits in the
     // pool (re-validation can leave one behind on a transient failure);
-    // never hand the miner a tx every other node would reject
+    // never hand the miner a tx every other node would reject. Only the type
+    // gate is re-checked: the rest of check_tx_outputs cannot start failing
+    // for a tx the pool already accepted, and its per-output subgroup
+    // multiplication would land on every candidate of every template build.
     tx_verification_context tvc_out{};
-    if(!m_blockchain.check_tx_outputs(lazy_tx(), tvc_out))
+    if(!m_blockchain.check_tx_rct_type(lazy_tx(), tvc_out))
       return false;
     //if we here, transaction seems valid, but, anyway, check for key_images collisions with blockchain, just to be sure
     if(m_blockchain.have_tx_keyimges_as_spent(lazy_tx()))

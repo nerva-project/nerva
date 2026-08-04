@@ -118,7 +118,8 @@ namespace cryptonote
       ++nlr;
     nlr += 6;
     const size_t bp_size = 32 * ((plus ? 6 : 9) + 2 * nlr);
-    CHECK_AND_ASSERT_THROW_MES_L1(n_outputs <= BULLETPROOF_MAX_OUTPUTS, "maximum number of outputs is " + std::to_string(BULLETPROOF_MAX_OUTPUTS) + " per transaction");
+    const size_t max_outputs = plus ? BULLETPROOF_PLUS_MAX_OUTPUTS : BULLETPROOF_MAX_OUTPUTS;
+    CHECK_AND_ASSERT_THROW_MES_L1(n_outputs <= max_outputs, "maximum number of outputs is " + std::to_string(max_outputs) + " per transaction");
     CHECK_AND_ASSERT_THROW_MES_L1(bp_base * n_padded_outputs >= bp_size, "Invalid bulletproof clawback: bp_base " + std::to_string(bp_base) + ", n_padded_outputs "
         + std::to_string(n_padded_outputs) + ", bp_size " + std::to_string(bp_size));
     const uint64_t bp_clawback = (bp_base * n_padded_outputs - bp_size) * 4 / 5;

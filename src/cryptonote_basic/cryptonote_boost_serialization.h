@@ -385,8 +385,11 @@ namespace boost
     a & x.range_proof_type;
     if (ver < 1)
     {
-      // pre-HF14 archives stored the old bool is_v2; map it onto bp_version
-      bool is_v2 = x.bp_version >= 2;
+      // pre-HF14 archives stored the old bool is_v2; map it onto bp_version.
+      // Only read bp_version when saving: loading an old archive lands here
+      // with the field still uninitialised, and the archive overwrites is_v2
+      // before it is used anyway.
+      bool is_v2 = Archive::is_saving::value && x.bp_version >= 2;
       a & is_v2;
       if (Archive::is_loading::value)
         x.bp_version = is_v2 ? 2 : 1;

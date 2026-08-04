@@ -641,6 +641,19 @@ namespace cryptonote
     bool check_tx_outputs(const transaction& tx, tx_verification_context &tvc) const;
 
     /**
+     * @brief checks only the range proof and ring signature type rules
+     *
+     * The subset of check_tx_outputs that moves at a fork boundary, so a
+     * transaction sitting in the pool can be re-checked cheaply.
+     *
+     * @param tx the transaction to check
+     * @param tvc returned info about tx verification
+     *
+     * @return false if the type is not allowed at the current fork version
+     */
+    bool check_tx_rct_type(const transaction& tx, tx_verification_context &tvc) const;
+
+    /**
      * @brief gets the block weight limit based on recent blocks
      *
      * @return the limit
