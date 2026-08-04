@@ -346,7 +346,7 @@ void cn_slow_hash_v13(cn_hash_context_t *context, const void *data, size_t lengt
 void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, char *hash,
                       const uint8_t *seed)
 {
-    uint8_t * const hp_state = context->cna_scratchpad;
+    uint8_t * const hp_state = context->scratchpad;
     char * const salt = context->salt;
     const uint8_t init_size_blk = INIT_SIZE_BLK;
     const uint32_t init_size_byte = (uint32_t)(init_size_blk * AES_BLOCK_SIZE);
@@ -766,7 +766,7 @@ void cn_slow_hash_v13(cn_hash_context_t *context, const void *data, size_t lengt
 void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, char *hash,
                       const uint8_t *seed)
 {
-    uint8_t * const hp_state = context->cna_scratchpad;
+    uint8_t * const hp_state = context->scratchpad;
     char * const salt = context->salt;
     const uint8_t init_size_blk = INIT_SIZE_BLK;
     const uint32_t init_size_byte = (uint32_t)(init_size_blk * AES_BLOCK_SIZE);

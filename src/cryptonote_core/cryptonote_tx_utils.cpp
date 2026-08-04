@@ -656,7 +656,10 @@ namespace cryptonote
   //---------------------------------------------------------------
   bool get_block_longhash_v13(crypto::cn_hash_context_t *context, BlockchainDB &db, const blobdata &blob, crypto::hash &res, uint64_t height)
   {
-    assert(height > 257);
+    // same hard guard as the v14 path: the assert is compiled out in release
+    // and the subtraction below would wrap
+    if (height <= 257)
+      return false;
     const uint64_t stable_height = height - 256;
 
     if (context->cached_height != height)

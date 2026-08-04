@@ -819,35 +819,11 @@ namespace cryptonote
       MERROR("Unable to allocate hash context, terminating miner thread");
       return false;
     }
-    // Report which pages the v13 scratchpad landed on. The allocation used to
-    // fall back to normal pages silently and mining just looked slow until the
-    // next reboot, with nothing in the log explaining why.
-    {
-      const int tier = hash_context->cna_scratchpad_is_mapped;
-      // one INFO line for the session; per-thread detail stays at debug since
-      // tiers can differ per thread when the reserved pages run out mid-spawn
-      if (th_local_index == 0)
-        MGINFO("Mining scratchpads on " << crypto::cn_page_tier_name(tier));
-      MDEBUG("Miner thread [" << th_local_index << "] scratchpad on " << crypto::cn_page_tier_name(tier));
-#if defined(__APPLE__) || defined(__OpenBSD__) || defined(__DragonFly__) || defined(__NetBSD__)
-      const int good_tier = CN_PAGES_PLAIN_MMAP; // best this platform offers, nothing to warn about
-#else
-      const int good_tier = CN_PAGES_THP;
-#endif
-      // no point nagging pre-v13 miners, but from v13 on the page tier is
-      // real hashrate: the v13 8 MB pad, and even more the v14 24 MB
-      // per-nonce chase, where every hop on 4 KB pages likely eats a TLB
-      // miss and a page walk on top of the DRAM load
-      uint8_t template_version = 0;
-      CRITICAL_REGION_BEGIN(m_template_lock);
-      template_version = m_template.major_version;
-      CRITICAL_REGION_END();
-      if (tier < good_tier && template_version >= 13 && !m_slow_pages_warned.exchange(true))
-        MGUSER_YELLOW("Mining is running on normal memory pages, hashrate will be lower. "
-            "Windows: run 'nervad --setup-large-pages' once as administrator, then log out and back in. "
-            "Linux: set vm.nr_hugepages or leave transparent hugepages enabled. "
-            "Freeing memory or rebooting, then restarting mining, retries the allocation.");
-    }
+    // The page tier is reported after the first hash, not here: the buffers are
+    // allocated on first use, so every *_is_mapped field is still zero at this
+    // point and reading one would report the worst tier no matter what the
+    // allocation actually got.
+    bool tier_reported = false;
     block b;
     ++m_threads_active;
     while(!m_stop)
@@ -892,6 +868,39 @@ namespace cryptonote
       b.nonce = nonce;
       crypto::hash h;
       get_block_longhash(hash_context, m_pbc, b, h, height);
+
+      // Report which pages the mining buffers landed on. The allocation used to
+      // fall back to normal pages silently and mining just looked slow until
+      // the next reboot, with nothing in the log explaining why. Read the
+      // buffer that actually carries the hashrate for this fork version: from
+      // v14 that is the 24 MB chase buffer, at v13 the 8 MB pad, before that
+      // the 1 MB one.
+      if (!tier_reported)
+      {
+        tier_reported = true;
+        const int tier = b.major_version >= 14 ? hash_context->cna_v7_buffer_is_mapped
+                       : b.major_version == 13 ? hash_context->cna_scratchpad_is_mapped
+                                               : hash_context->scratchpad_is_mapped;
+        // one INFO line for the session; per-thread detail stays at debug since
+        // tiers can differ per thread when the reserved pages run out mid-spawn
+        if (th_local_index == 0)
+          MGINFO("Mining scratchpads on " << crypto::cn_page_tier_name(tier));
+        MDEBUG("Miner thread [" << th_local_index << "] scratchpad on " << crypto::cn_page_tier_name(tier));
+#if defined(__APPLE__) || defined(__OpenBSD__) || defined(__DragonFly__) || defined(__NetBSD__)
+        const int good_tier = CN_PAGES_PLAIN_MMAP; // best this platform offers, nothing to warn about
+#else
+        const int good_tier = CN_PAGES_THP;
+#endif
+        // no point nagging pre-v13 miners, but from v13 on the page tier is
+        // real hashrate: the v13 8 MB pad, and even more the v14 24 MB
+        // per-nonce chase, where every hop on 4 KB pages likely eats a TLB
+        // miss and a page walk on top of the DRAM load
+        if (tier < good_tier && b.major_version >= 13 && !m_slow_pages_warned.exchange(true))
+          MGUSER_YELLOW("Mining is running on normal memory pages, hashrate will be lower. "
+              "Windows: run 'nervad --setup-large-pages' once as administrator, then log out and back in. "
+              "Linux: set vm.nr_hugepages or leave transparent hugepages enabled. "
+              "Freeing memory or rebooting, then restarting mining, retries the allocation.");
+      }
 
       if(check_hash(h, local_diff))
       {
