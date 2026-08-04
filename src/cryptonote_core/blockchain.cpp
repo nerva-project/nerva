@@ -2718,6 +2718,47 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
   LOG_PRINT_L3("Blockchain::" << __func__);
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
 
+  if (!check_tx_outputs_except_subgroup(tx, tvc))
+    return false;
+
+  const uint8_t hf_version = m_hardfork->get_current_version();
+
+  // From HF13 only (gated so historical resync is unaffected). Split out from
+  // the rest because the subgroup multiplication costs about 490 us per output,
+  // which is the whole reason the pool re-checks candidates without it.
+  if (hf_version >= HF_VERSION_TX_KEY_VALIDATION) {
+    for (const auto &o: tx.vout) {
+      if (o.target.type() == typeid(txout_to_key)) {
+        const txout_to_key& out_to_key = boost::get<txout_to_key>(o.target);
+        if (!rct::isInMainSubgroup(rct::pk2rct(out_to_key.key)) || out_to_key.key == rct::rct2pk(rct::identity())) {
+          MERROR_VER("Output public key is identity or not in main subgroup");
+          tvc.m_invalid_output = true;
+          return false;
+        }
+      }
+    }
+  }
+
+  return true;
+}
+//------------------------------------------------------------------
+// Everything check_tx_outputs enforces apart from the per-output main-subgroup
+// multiplication. The pool re-checks block-template candidates against this,
+// because output rules can move under a transaction while it sits in the pool
+// and the miner must not be handed one every other node would reject, while the
+// subgroup check at ~490 us an output would cost ~200 ms per template build on
+// a 200 transaction pool, under the blockchain lock.
+//
+// The rules left out of the pool's re-check are therefore only the subgroup and
+// identity tests, which turn on at HF13. A transaction that could newly fail
+// them has to have been accepted before that fork and still be in the pool when
+// it activates, which costs one wasted block at one height on a chain that has
+// yet to cross HF13, and nothing on a chain past it.
+bool Blockchain::check_tx_outputs_except_subgroup(const transaction& tx, tx_verification_context &tvc) const
+{
+  LOG_PRINT_L3("Blockchain::" << __func__);
+  CRITICAL_REGION_LOCAL(m_blockchain_lock);
+
   const uint8_t hf_version = m_hardfork->get_current_version();
 
   // From HF13, require at least two outputs so single-output txs can't leak the
@@ -2752,14 +2793,6 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
       if (!crypto::check_key(out_to_key.key)) {
         tvc.m_invalid_output = true;
         return false;
-      }
-      // From HF13 only (gated so historical resync is unaffected).
-      if (hf_version >= HF_VERSION_TX_KEY_VALIDATION) {
-        if (!rct::isInMainSubgroup(rct::pk2rct(out_to_key.key)) || out_to_key.key == rct::rct2pk(rct::identity())) {
-          MERROR_VER("Output public key is identity or not in main subgroup");
-          tvc.m_invalid_output = true;
-          return false;
-        }
       }
     }
   }

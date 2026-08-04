@@ -643,8 +643,7 @@ namespace cryptonote
     /**
      * @brief checks only the range proof and ring signature type rules
      *
-     * The subset of check_tx_outputs that moves at a fork boundary, so a
-     * transaction sitting in the pool can be re-checked cheaply.
+     * The subset of check_tx_outputs that moves at the HF14 boundary.
      *
      * @param tx the transaction to check
      * @param tvc returned info about tx verification
@@ -652,6 +651,19 @@ namespace cryptonote
      * @return false if the type is not allowed at the current fork version
      */
     bool check_tx_rct_type(const transaction& tx, tx_verification_context &tvc) const;
+
+    /**
+     * @brief check_tx_outputs without the per-output main-subgroup multiplication
+     *
+     * What the pool re-checks block-template candidates against: every output
+     * rule except the one that costs ~490 us an output.
+     *
+     * @param tx the transaction to check
+     * @param tvc returned info about tx verification
+     *
+     * @return false if any of those rules rejects the transaction
+     */
+    bool check_tx_outputs_except_subgroup(const transaction& tx, tx_verification_context &tvc) const;
 
     /**
      * @brief gets the block weight limit based on recent blocks
