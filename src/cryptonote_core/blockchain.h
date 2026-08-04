@@ -643,7 +643,8 @@ namespace cryptonote
     /**
      * @brief checks only the range proof and ring signature type rules
      *
-     * The subset of check_tx_outputs that moves at the HF14 boundary.
+     * The subset of check_tx_outputs that moves at the HF14 boundary. Internal:
+     * callers want check_tx_outputs or check_tx_outputs_except_subgroup.
      *
      * @param tx the transaction to check
      * @param tvc returned info about tx verification
