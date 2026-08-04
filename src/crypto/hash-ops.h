@@ -130,6 +130,10 @@ typedef struct cn_random_values
 /* Human-readable name for a CN_PAGES_* tier (miner logs / status). */
 const char *cn_page_tier_name(int tier);
 
+/* The tier a mapping actually ended up on, which on Linux can be worse than the
+ * one that was asked for. Call it after the pages have been faulted in. */
+int cn_page_tier_actual(const void *p, size_t size, int requested_tier);
+
 typedef struct cn_hash_context
 {
   /* Software-AES path always has its context allocated so the runtime
@@ -146,6 +150,10 @@ typedef struct cn_hash_context
   cn_random_values_t random_values;
   uint64_t cached_height;
 } cn_hash_context_t;
+
+/* The actual tier of the buffer that carries the hashrate at a fork version,
+ * as the kernel backed it rather than as it was requested. */
+int cn_page_tier_for_version(const cn_hash_context_t *ctx, uint8_t major_version);
 
 cn_hash_context_t *cn_hash_context_create(void);
 void cn_hash_context_free(cn_hash_context_t *context);

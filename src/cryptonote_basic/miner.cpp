@@ -881,9 +881,9 @@ namespace cryptonote
       if (tier_reported_version != b.major_version)
       {
         tier_reported_version = b.major_version;
-        const int tier = b.major_version >= 14 ? hash_context->cna_v7_buffer_is_mapped
-                       : b.major_version == 13 ? hash_context->cna_scratchpad_is_mapped
-                                               : hash_context->scratchpad_is_mapped;
+        // the tier recorded at allocation is only what was asked for; on Linux
+        // the kernel may have used base pages anyway, so ask what it actually did
+        const int tier = crypto::cn_page_tier_for_version(hash_context, b.major_version);
         // one INFO line for the session; per-thread detail stays at debug since
         // tiers can differ per thread when the reserved pages run out mid-spawn
         if (th_local_index == 0)

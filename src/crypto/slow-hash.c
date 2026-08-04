@@ -169,6 +169,65 @@ void cn_slow_hash_v14(cn_hash_context_t *ctx, const void *data, size_t length, c
                 cn_slow_hash_v14_sw(ctx, data, length, hash, seed));
 }
 
+/* mmap + MADV_HUGEPAGE on Linux is best effort: the kernel can back the mapping
+ * with base pages anyway, and it decides that as the pages are faulted in, well
+ * after the allocation returns. So the tier allocate_hugepage recorded is what
+ * we asked for, not what we got, and printing it claims huge pages that may not
+ * exist. Ask the kernel what actually happened. Only Linux needs this: Windows
+ * large pages either come back from VirtualAlloc or they do not, and FreeBSD
+ * superpages are transparent with nothing to query. */
+int cn_page_tier_actual(const void *p, size_t size, int requested_tier)
+{
+#if defined(__linux__) && !defined(__ANDROID__)
+    if (requested_tier != CN_PAGES_THP || p == NULL)
+        return requested_tier;
+
+    FILE *f = fopen("/proc/self/smaps", "r");
+    if (f == NULL)
+        return requested_tier;   /* cannot tell, do not invent an answer */
+
+    const unsigned long target = (unsigned long)(uintptr_t)p;
+    char line[512];
+    int in_mapping = 0;
+    long huge_kb = -1;
+    while (fgets(line, sizeof(line), f) != NULL) {
+        unsigned long from, to;
+        if (sscanf(line, "%lx-%lx", &from, &to) == 2)
+            in_mapping = (target >= from && target < to);
+        else if (in_mapping && strncmp(line, "AnonHugePages:", 14) == 0) {
+            sscanf(line + 14, "%ld", &huge_kb);
+            break;
+        }
+    }
+    fclose(f);
+
+    if (huge_kb < 0)
+        return requested_tier;   /* kernel did not report the field */
+    /* most of the mapping has to be huge-page backed to call it that */
+    if ((size_t)huge_kb * 1024u < size / 2u)
+        return CN_PAGES_PLAIN_MMAP;
+    return requested_tier;
+#else
+    (void)p; (void)size;
+    return requested_tier;
+#endif
+}
+
+/* The page tier of whichever buffer carries the hashrate at this fork version,
+ * as the kernel actually backed it: the 24 MB chase buffer from v14, the 8 MB
+ * v6 pad at v13, the 1 MB legacy pad before that. Call it after a hash of that
+ * version has run, or the buffer will not be allocated yet. */
+int cn_page_tier_for_version(const cn_hash_context_t *ctx, uint8_t major_version)
+{
+    if (ctx == NULL)
+        return CN_PAGES_MALLOC;
+    if (major_version >= 14)
+        return cn_page_tier_actual(ctx->cna_v7_buffer, CN_V7_BUFFER, ctx->cna_v7_buffer_is_mapped);
+    if (major_version == 13)
+        return cn_page_tier_actual(ctx->cna_scratchpad, CN_SCRATCHPAD_MEMORY_V13, ctx->cna_scratchpad_is_mapped);
+    return cn_page_tier_actual(ctx->scratchpad, CN_SCRATCHPAD_MEMORY, ctx->scratchpad_is_mapped);
+}
+
 const char *cn_page_tier_name(int tier)
 {
     switch (tier)
