@@ -243,10 +243,11 @@ namespace config
         {10, 341000},
         {11, 500000},
         {12, 930000},
-        {13, 4320000}   // CryptoNight-Adaptive v6: 8 MB scratchpad + random VM program
-        // {14, TBD}    // CLSAG + Bulletproofs+ (type 7 only) and CryptoNight-Adaptive
+        {13, 4320000},  // CryptoNight-Adaptive v6: 8 MB scratchpad + random VM program
+        {14, 4400000}   // CLSAG + Bulletproofs+ (type 7 only) and CryptoNight-Adaptive
                         // v7 (per-nonce mutable-buffer chase, one box ~ one vote).
-                        // Mainnet height is set only after the validation gates pass:
+                        // Placeholder, about six weeks of blocks past the tip it was
+                        // picked against. It moves if the validation gates slip:
                         // reference-pair run, testnet fork, GPU port test.
     };
 
@@ -262,6 +263,8 @@ namespace config
 
         uint64_t const ASSUME_VALID_HEIGHT = 0; // 0 = full PoW verification
 
+        // 12 and 13 sit where stagenet has them, which only holds for a testnet
+        // started fresh from genesis: on the retired chain they were 2000 and 2100.
         static const hard_fork hard_forks[] = {
             { 1,   1},
             { 2,   2},
@@ -274,9 +277,9 @@ namespace config
             { 9, 570},
             {10, 580},
             {11, 590},
-            {12, 2000},
-            {13, 2100}
-            // {14, TBD}  // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v7
+            {12, 700},
+            {13, 800},
+            {14, 1000}  // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v7
         };
     }
 
@@ -300,8 +303,8 @@ namespace config
             {10, 580},
             {11, 590},
             {12, 700},
-            {13, 800}
-            // {14, TBD}  // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v7
+            {13, 800},
+            {14, 1000}  // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v7
         };
     }
 }
