@@ -510,7 +510,10 @@ int cn_slow_hash_self_test(void)
         return 1;
     }
 
-    static const char input[] = "nerva-cn-slow-hash-hw-vs-sw-self-test";
+    /* variant 1 reads a tweak at data+35 as a 64 bit word, so anything
+     * shorter than 43 bytes reads past the end of it. Monero refuses short
+     * input outright; here the fixed test vector just has to be long enough. */
+    static const char input[] = "nerva-cn-slow-hash hardware versus software self test vector";
     char hw[HASH_SIZE];
     char sw[HASH_SIZE];
     int ok = 1;
