@@ -916,6 +916,20 @@ public:
    */
   virtual cryptonote::blobdata get_block_blob_from_height(const uint64_t& height) const = 0;
 
+  /**
+   * @brief bring any in-memory block cache up to the given height
+   *
+   * Hashing blocks ahead of the verifier on worker threads is only safe while
+   * the seed lookups are served from memory: a worker that had to reach the
+   * database would open its own read transaction and could not see blocks the
+   * caller has written but not committed. Callers warm the cache on the thread
+   * that owns the transaction first. A backend with no such cache does nothing
+   * and callers must then keep the work on one thread.
+   *
+   * @param height the height to cache up to
+   */
+  virtual void warm_block_cache(uint64_t height) {}
+
   virtual void get_cna_v2_data(crypto::cn_random_values_t *rv, uint64_t height, uint32_t seed) = 0;
   virtual void get_cna_v3_data(char *out, uint64_t height, uint32_t seed) = 0;
   virtual void get_cna_v4_data(char *out, uint64_t height, uint32_t seed)  = 0;

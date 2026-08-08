@@ -1050,6 +1050,24 @@ namespace cryptonote
 
     crypto::cn_hash_context_t *m_hash_context;
 
+    // Proof of work computed ahead of time for the batch being handled, indexed
+    // by height - m_batch_longhash_base. The id is kept so a result is only used
+    // for the block it was computed for.
+    struct precomputed_pow
+    {
+      crypto::hash id;
+      crypto::hash pow;
+      bool valid;
+    };
+    std::vector<precomputed_pow> m_batch_longhashes;
+    uint64_t m_batch_longhash_base;
+    // Worker hash contexts, made once per batch rather than once per chunk.
+    // Each carries a 24 MB buffer, so building them per chunk meant hundreds of
+    // allocations across a sync, and cn_hash_context_create is not thread safe
+    // (oaes seeds itself through gmtime), so fewer calls is also safer.
+    std::vector<crypto::cn_hash_context_t *> m_longhash_contexts;
+    void free_longhash_contexts();
+
     BlockchainDB* m_db;
 
     tx_memory_pool& m_tx_pool;
@@ -1248,6 +1266,39 @@ namespace cryptonote
      * @return true if the block was added successfully, otherwise false
      */
     bool handle_block_to_main_chain(const block& bl, const crypto::hash& id, block_verification_context& bvc);
+
+    /**
+     * @brief whether the proof of work of a block still has to be computed
+     *
+     * Quicksync and assume-valid let a block through without hashing it. This
+     * is the single place that decides, so the batch precompute never hashes a
+     * block the verifier would have skipped.
+     *
+     * @param blockchain_height the height the block would take
+     * @param id the hash of the block
+     *
+     * @return true if the proof of work has to be computed and checked
+     */
+    bool block_needs_pow(uint64_t blockchain_height, const crypto::hash& id) const;
+
+    /**
+     * @brief hash a chunk of the current batch, one block per thread
+     *
+     * Called when the verifier reaches a block whose proof of work is not in
+     * m_batch_longhashes. The chunk is the thread count, so the extra hashes
+     * ride along with the one that was needed and a rubbish batch cannot buy
+     * more of our cpu than a single block does today.
+     *
+     * @param blockchain_height the height of the block being verified
+     */
+    void ensure_batch_longhashes(uint64_t blockchain_height);
+
+    /**
+     * @brief hashes one slice of the batch, on one thread, with its own context
+     */
+    void longhash_worker(crypto::cn_hash_context_t *ctx, const std::vector<block> *blocks,
+                         size_t block_offset, uint64_t base_height,
+                         const std::vector<size_t> *todo, size_t from, size_t to);
 
     /**
      * @brief validate and add a new block to an alternate blockchain

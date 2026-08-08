@@ -87,7 +87,7 @@ DISABLE_VS_WARNINGS(4267)
 //------------------------------------------------------------------
 Blockchain::Blockchain(tx_memory_pool& tx_pool) :
   m_db(), m_tx_pool(tx_pool), m_hardfork(NULL), m_hash_context(NULL), m_timestamps_and_difficulties_height(0), m_current_block_cumul_weight_limit(0), m_current_block_cumul_weight_median(0),
-  m_enforce_dns_checkpoints(false), m_max_prepare_blocks_threads(4), m_db_sync_on_blocks(true), m_db_sync_threshold(1), m_db_sync_mode(db_async), m_db_default_sync(false), m_fast_sync(true), m_show_time_stats(false), m_sync_counter(0), m_bytes_to_sync(0), m_cancel(false),
+  m_enforce_dns_checkpoints(false), m_max_prepare_blocks_threads(4), m_batch_longhash_base(0), m_prepare_blocks(NULL), m_prepare_nblocks(0), m_db_sync_on_blocks(true), m_db_sync_threshold(1), m_db_sync_mode(db_async), m_db_default_sync(false), m_fast_sync(true), m_show_time_stats(false), m_sync_counter(0), m_bytes_to_sync(0), m_cancel(false),
   m_long_term_block_weights_window(CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE),
   m_long_term_effective_median_block_weight(0),
   m_long_term_block_weights_cache_tip_height(0),
@@ -552,6 +552,8 @@ bool Blockchain::deinit()
 
   crypto::cn_hash_context_free(m_hash_context);
   m_hash_context = NULL;
+  // a batch may have been interrupted, so release any worker contexts too
+  free_longhash_contexts();
 
   return true;
 }
@@ -3524,28 +3526,37 @@ leave:
   crypto::hash proof_of_work;
   memset(proof_of_work.data, 0xff, sizeof(proof_of_work.data));
 
-  // Gated by --fast-block-sync; FAKECHAIN inherits the mainnet config but never
-  // reaches that height.
-  const uint64_t assume_valid_height = cryptonote::get_config(m_nettype).ASSUME_VALID_HEIGHT;
-  const bool assume_valid = m_fast_sync && m_nettype != FAKECHAIN && assume_valid_height != 0 && blockchain_height < assume_valid_height;
-
-  // Quicksync is trusted only up to the checkpoint height it was anchored against
-  // (m_quicksync_max_height, captured at set_quicksync before any DNS/JSON checkpoints);
-  // above that it is unanchored, so PoW is always required.
-  const bool quicksync_active = m_fast_sync && m_nettype != FAKECHAIN && blockchain_height <= m_quicksync_max_height;
-  bool quicksync_has_block = false;
-  const bool quicksync_match = m_quicksync.check_block(blockchain_height, id, quicksync_has_block);
-  const bool quicksync_verified = quicksync_active && quicksync_match;
-
-  // A present-but-mismatching entry could be a forged block or a wrong/corrupt file;
-  // let PoW decide rather than trusting the file or stalling the node on a bad file.
-  const bool quicksync_conflict = quicksync_active && quicksync_has_block && !quicksync_match;
-  if (quicksync_conflict)
-    MWARNING("Block with id: " << id << " at height " << blockchain_height << " does not match the quick sync hash; verifying PoW");
-
-  if ((!quicksync_verified && !assume_valid) || quicksync_conflict)
+  // A present-but-mismatching quicksync entry could be a forged block or a
+  // wrong/corrupt file; block_needs_pow lets PoW decide rather than trusting
+  // the file or stalling the node on a bad file. Warn so it is visible.
   {
-    get_block_longhash(m_hash_context, this, bl, proof_of_work, blockchain_height);
+    bool quicksync_has_block = false;
+    const bool quicksync_match = m_quicksync.check_block(blockchain_height, id, quicksync_has_block);
+    const bool quicksync_active = m_fast_sync && m_nettype != FAKECHAIN && blockchain_height <= m_quicksync_max_height;
+    if (quicksync_active && quicksync_has_block && !quicksync_match)
+      MWARNING("Block with id: " << id << " at height " << blockchain_height << " does not match the quick sync hash; verifying PoW");
+  }
+
+  if (block_needs_pow(blockchain_height, id))
+  {
+    // prepare_handle_incoming_blocks may already have hashed this one on
+    // another thread. The seed depends on the exact height, so the cached
+    // result counts only when the height matches as well as the id.
+    ensure_batch_longhashes(blockchain_height);
+
+    bool precomputed = false;
+    const uint64_t idx = blockchain_height - m_batch_longhash_base;
+    if (blockchain_height >= m_batch_longhash_base && idx < m_batch_longhashes.size())
+    {
+      const precomputed_pow &e = m_batch_longhashes[idx];
+      if (e.valid && e.id == id)
+      {
+        proof_of_work = e.pow;
+        precomputed = true;
+      }
+    }
+    if (!precomputed)
+      get_block_longhash(m_hash_context, this, bl, proof_of_work, blockchain_height);
 
     // validate proof_of_work versus difficulty target
     if(!check_hash(proof_of_work, current_diffic))
@@ -4084,6 +4095,13 @@ bool Blockchain::cleanup_handle_incoming_blocks(bool force_sync)
   CRITICAL_REGION_BEGIN(m_blockchain_lock);
   TIME_MEASURE_START(t1);
 
+  // the precomputed proofs of work and the batch they came from end here;
+  // m_prepare_blocks points at the caller's vector and must not outlive it
+  m_batch_longhashes.clear();
+  m_prepare_blocks = NULL;
+  m_prepare_nblocks = 0;
+  free_longhash_contexts();
+
   try
   {
     if (m_batch_success)
@@ -4303,6 +4321,175 @@ bool Blockchain::has_block_weights(uint64_t height, uint64_t nblocks) const
 //    vs [k_image, output_keys] (m_scan_table). This is faster because it takes advantage of bulk queries
 //    and is threaded if possible. The table (m_scan_table) will be used later when querying output
 //    keys.
+//------------------------------------------------------------------
+bool Blockchain::block_needs_pow(uint64_t blockchain_height, const crypto::hash& id) const
+{
+  const uint64_t assume_valid_height = cryptonote::get_config(m_nettype).ASSUME_VALID_HEIGHT;
+  const bool assume_valid = m_fast_sync && m_nettype != FAKECHAIN && assume_valid_height != 0 && blockchain_height < assume_valid_height;
+
+  // Quicksync is trusted only up to the checkpoint height it was anchored
+  // against; above that it is unanchored, so PoW is always required.
+  const bool quicksync_active = m_fast_sync && m_nettype != FAKECHAIN && blockchain_height <= m_quicksync_max_height;
+  bool quicksync_has_block = false;
+  const bool quicksync_match = m_quicksync.check_block(blockchain_height, id, quicksync_has_block);
+  const bool quicksync_verified = quicksync_active && quicksync_match;
+
+  // A present-but-mismatching entry could be a forged block or a wrong/corrupt
+  // file; let PoW decide rather than trusting the file or stalling the node.
+  const bool quicksync_conflict = quicksync_active && quicksync_has_block && !quicksync_match;
+
+  return (!quicksync_verified && !assume_valid) || quicksync_conflict;
+}
+//------------------------------------------------------------------
+void Blockchain::free_longhash_contexts()
+{
+  for (crypto::cn_hash_context_t *c : m_longhash_contexts)
+    crypto::cn_hash_context_free(c);
+  m_longhash_contexts.clear();
+}
+//------------------------------------------------------------------
+void Blockchain::longhash_worker(crypto::cn_hash_context_t *ctx, const std::vector<block> *blocks,
+                                 size_t block_offset, uint64_t base_height,
+                                 const std::vector<size_t> *todo, size_t from, size_t to)
+{
+  for (size_t k = from; k < to && !m_cancel; k++)
+  {
+    const size_t i = (*todo)[k];
+    crypto::hash pow = crypto::null_hash;
+    try
+    {
+      if (get_block_longhash(ctx, this, (*blocks)[block_offset + i], pow, base_height + i))
+      {
+        m_batch_longhashes[i].pow = pow;
+        m_batch_longhashes[i].valid = true;
+      }
+    }
+    catch (const std::exception &e)
+    {
+      // hashing ahead of the verifier is an optimisation and nothing more, so
+      // a failure here leaves the entry invalid and the verifier hashes the
+      // block itself. It must never take the daemon down.
+      MWARNING("Could not hash block at height " << (base_height + i) << " ahead of time: " << e.what());
+      m_batch_longhashes[i].valid = false;
+    }
+  }
+}
+//------------------------------------------------------------------
+// Verification hashes one block at a time on one core, which is the worst way
+// to run a memory latency bound proof of work: the rest of the machine idles.
+// So when the verifier asks for the proof of work of a block, hash the next
+// few blocks of the same batch alongside it, one per thread.
+//
+// The chunk is deliberately exactly the thread count. That is what keeps a
+// peer from turning this into wasted work: the extra hashes run at the same
+// time as the one that was needed anyway, so a batch of rubbish costs the same
+// wall clock as it does today and only borrows cores that would have idled.
+// A window larger than the thread count would let one cheap message buy
+// arbitrarily much of our cpu.
+//
+// Two more bounds fall out for free:
+//  - the seed of a block reads chain data 256 blocks back and a chunk is never
+//    more than a handful of blocks ahead of the tip, so everything the workers
+//    read is already committed;
+//  - the thread count stays at m_max_prepare_blocks_threads, because sync
+//    speed that scales with core count would widen the gap between a big
+//    machine and a small one. Measured on a 14 core laptop against a 4 core
+//    board: capped the gap is 1.52x, uncapped it is 3.77x.
+void Blockchain::ensure_batch_longhashes(uint64_t blockchain_height)
+{
+  // first version whose seed lookups are served purely from the block cache
+  static const uint8_t CN_CACHE_ONLY_SEED_VERSION = 13;
+
+
+  // already covered by the current chunk
+  if (blockchain_height >= m_batch_longhash_base &&
+      blockchain_height - m_batch_longhash_base < m_batch_longhashes.size())
+    return;
+
+  // only meaningful while a prepared batch is being consumed
+  const std::vector<block> *batch = m_prepare_blocks;
+  if (batch == NULL || batch->empty() || blockchain_height < m_batch_start_height)
+    return;
+
+  const uint64_t offset = blockchain_height - m_batch_start_height;
+  if (offset >= batch->size())
+    return;
+
+  tools::threadpool& tpool = tools::threadpool::getInstance();
+  size_t threads = std::min<size_t>(tpool.get_max_concurrency(), m_max_prepare_blocks_threads);
+  threads = std::min<size_t>(threads, batch->size() - offset);
+  if (threads < 2)
+    return;   // nothing to win, leave it to the caller's serial path
+
+  m_batch_longhashes.clear();
+  m_batch_longhash_base = blockchain_height;
+  m_batch_longhashes.resize(threads);
+
+  std::vector<size_t> todo;
+  todo.reserve(threads);
+  for (size_t i = 0; i < threads; i++)
+  {
+    const block &b = (*batch)[offset + i];
+    m_batch_longhashes[i].id = get_block_hash(b);
+    m_batch_longhashes[i].valid = false;
+    // Only the v13 and v14 seeds are served purely from the in-memory block
+    // cache. The older versions reach for get_cna_v3/v4/v5_data and v7 looks
+    // only one block back rather than 256, so a worker could need chain data
+    // this thread has not committed yet, open its own read transaction and
+    // fail to find it. They stay on the serial path, where the caller's
+    // transaction can see the whole batch. They are also the cheap ones.
+    if (b.major_version < CN_CACHE_ONLY_SEED_VERSION)
+      continue;
+    // never hash a block the verifier would have waved through
+    if (block_needs_pow(blockchain_height + i, m_batch_longhashes[i].id))
+      todo.push_back(i);
+  }
+  if (todo.empty())
+    return;
+
+  // Warm the block cache here, on the thread that owns the batch transaction,
+  // as far as the chain goes. Once it is current every seed lookup a worker
+  // makes is served from memory under a reader lock, so no worker ever opens
+  // an lmdb cursor and the uncommitted batch never comes into it.
+  m_db->warm_block_cache(blockchain_height);
+
+  // The contexts live for the batch, not the chunk. Each carries a 24 MB
+  // buffer, and cn_hash_context_create is not thread safe (oaes seeds itself
+  // through gmtime), so building them once per batch beats hundreds of times.
+  while (m_longhash_contexts.size() < todo.size())
+  {
+    crypto::cn_hash_context_t *c = crypto::cn_hash_context_create();
+    if (c == NULL)
+    {
+      // no memory for another worker buffer: carry on with the ones we have
+      break;
+    }
+    m_longhash_contexts.push_back(c);
+  }
+  if (m_longhash_contexts.empty())
+  {
+    m_batch_longhashes.clear();
+    return;
+  }
+  if (todo.size() > m_longhash_contexts.size())
+    todo.resize(m_longhash_contexts.size());
+
+  TIME_MEASURE_START(longhash_chunk);
+  {
+    tools::threadpool::waiter waiter;
+    for (size_t t = 0; t < todo.size(); t++)
+      tpool.submit(&waiter, boost::bind(&Blockchain::longhash_worker, this, m_longhash_contexts[t],
+                                        batch, offset, m_batch_start_height + offset, &todo, t, t + 1), true);
+    waiter.wait(&tpool);
+  }
+  TIME_MEASURE_FINISH(longhash_chunk);
+
+  // MDEBUG here is invisible in practice: this file sets the log category to
+  // "blockchain", which the console filter drops below warning level.
+  if (m_show_time_stats)
+    MGINFO("Hashed " << todo.size() << " blocks on " << todo.size() << " threads in " << longhash_chunk << " ms");
+}
+//------------------------------------------------------------------
 bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks)
 {
   MTRACE("Blockchain::" << __func__);
