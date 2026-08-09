@@ -11278,8 +11278,19 @@ uint64_t wallet2::get_daemon_blockchain_target_height(string &err)
 
 uint64_t wallet2::get_approximate_blockchain_height() const
 {
-  const time_t init_time = 1504387246;
-  uint64_t approx_blockchain_height = (time(NULL) - init_time) / DIFFICULTY_TARGET;
+  // The test chains are relaunched from scratch, so no date hardcoded here
+  // stays true for them, and guessing high makes a new wallet skip the blocks
+  // it was meant to scan. They are short, so start at the beginning.
+  if (m_nettype != MAINNET)
+    return 0;
+  // Timestamp of the first block of the chain. The constant here used to be
+  // eight months earlier than that, which put the guess a few hundred thousand
+  // blocks past the tip.
+  const time_t chain_start = 1525169251;
+  const time_t now = time(NULL);
+  if (now <= chain_start)
+    return 0;   // clock set before the chain existed, no guess worth making
+  uint64_t approx_blockchain_height = (now - chain_start) / DIFFICULTY_TARGET;
   LOG_PRINT_L2("Calculated blockchain height: " << approx_blockchain_height);
   return approx_blockchain_height;
 }
