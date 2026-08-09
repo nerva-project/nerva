@@ -4387,18 +4387,20 @@ void Blockchain::longhash_worker(crypto::cn_hash_context_t *ctx, const std::vect
 // A window larger than the thread count would let one cheap message buy
 // arbitrarily much of our cpu.
 //
-// Two more bounds fall out for free:
-//  - the seed of a block reads chain data 256 blocks back and a chunk is never
-//    more than a handful of blocks ahead of the tip, so everything the workers
-//    read is already committed;
+// Two more bounds:
+//  - the seed of a block reads chain data 256 blocks back, so the chunk has to
+//    stay inside that depth or a worker would want a block the cache was not
+//    warmed for. The defaults leave a wide margin, but prep-blocks-threads is
+//    settable, so the chunk is clamped below rather than left to them;
 //  - the thread count stays at m_max_prepare_blocks_threads, because sync
 //    speed that scales with core count would widen the gap between a big
-//    machine and a small one. Measured on a 14 core laptop against a 4 core
-//    board: capped the gap is 1.52x, uncapped it is 3.77x.
+//    machine and a small one, which is the thing this fork is closing.
 void Blockchain::ensure_batch_longhashes(uint64_t blockchain_height)
 {
   // first version whose seed lookups are served purely from the block cache
   static const uint8_t CN_CACHE_ONLY_SEED_VERSION = 13;
+  // how far back of the chain those seeds read, see get_block_longhash_v13
+  static const size_t CN_SEED_LOOKBACK_BLOCKS = 256;
 
 
   // already covered by the current chunk
@@ -4418,6 +4420,12 @@ void Blockchain::ensure_batch_longhashes(uint64_t blockchain_height)
   tools::threadpool& tpool = tools::threadpool::getInstance();
   size_t threads = std::min<size_t>(tpool.get_max_concurrency(), m_max_prepare_blocks_threads);
   threads = std::min<size_t>(threads, batch->size() - offset);
+  // A worker at chunk index i hashes the block at blockchain_height + i, whose
+  // seed reads the chain CN_SEED_LOOKBACK_BLOCKS back. The cache below is warmed
+  // only as far as the committed chain, so a chunk that reached past that depth
+  // would send a worker to lmdb on the batch's own write transaction. Nothing
+  // else bounds this once prep-blocks-threads is raised, so bound it here.
+  threads = std::min<size_t>(threads, CN_SEED_LOOKBACK_BLOCKS - 1);
   if (threads < 2)
     return;   // nothing to win, leave it to the caller's serial path
 
