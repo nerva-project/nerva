@@ -1039,6 +1039,8 @@ private:
     uint8_t get_current_hard_fork();
     void get_hard_fork_info(uint8_t version, uint64_t &earliest_height);
     bool use_fork_rules(uint8_t version, int64_t early_blocks = 0);
+    // ring size consensus will accept for a transaction built right now
+    uint64_t adjust_mixin(uint64_t mixin);
     // throws when an HF14 (CLSAG) transaction is requested on a wallet that
     // cannot sign one: hardware-device keys (pre-CLSAG Ledger protocol) or
     // multisig accounts

@@ -73,6 +73,18 @@ namespace cryptonote {
     return CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE;
   }
   //-----------------------------------------------------------------------------------------------
+  size_t get_ring_size(uint8_t version)
+  {
+    return version >= HF_VERSION_RING_SIZE_16 ? DEFAULT_RINGSIZE_V14 : DEFAULT_RINGSIZE;
+  }
+  //-----------------------------------------------------------------------------------------------
+  bool is_valid_ring_size(uint8_t version, size_t ring_size)
+  {
+    if (version >= HF_VERSION_RING_SIZE_16)
+      return ring_size == DEFAULT_RINGSIZE_V14;
+    return ring_size == DEFAULT_RINGSIZE;
+  }
+  //-----------------------------------------------------------------------------------------------
   size_t get_max_tx_size()
   {
     return CRYPTONOTE_MAX_TX_SIZE;
