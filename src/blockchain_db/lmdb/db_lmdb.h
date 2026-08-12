@@ -448,6 +448,8 @@ private:
 
   virtual void build_block_cache(uint64_t height);
 
+  virtual void warm_block_cache(uint64_t height) { build_block_cache(height); }
+
   // Hard fork
   virtual void set_hard_fork_version(uint64_t height, uint8_t version);
   virtual uint8_t get_hard_fork_version(uint64_t height) const;

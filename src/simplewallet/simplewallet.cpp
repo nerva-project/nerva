@@ -987,7 +987,19 @@ bool simple_wallet::prepare_multisig_main(const std::vector<std::string> &args, 
 
   SCOPED_WALLET_UNLOCK_ON_BAD_PASSWORD(return false;);
 
-  std::string multisig_info = m_wallet->get_multisig_info();
+  // get_multisig_info() throws now that enrollment is disabled; without a
+  // catch the exception sails past on_command to epee's console handler and
+  // the user gets a log line instead of an error message
+  std::string multisig_info;
+  try
+  {
+    multisig_info = m_wallet->get_multisig_info();
+  }
+  catch (const std::exception &e)
+  {
+    fail_msg_writer() << tr("Error creating multisig: ") << e.what();
+    return false;
+  }
   success_msg_writer() << multisig_info;
   success_msg_writer() << tr("Send this multisig info to all other participants, then use make_multisig <threshold> <info1> [<info2>...] with others' multisig info");
   success_msg_writer() << tr("This includes the PRIVATE view key, so needs to be disclosed only to that multisig wallet's participants ");
@@ -4647,6 +4659,10 @@ boost::optional<epee::wipeable_string> simple_wallet::open_wallet(const boost::p
       prefix = tr("Opened wallet");
     message_writer(console_color_white, true) <<
       prefix << ": " << m_wallet->get_account().get_public_address_str(m_wallet->nettype());
+    if (m_wallet->multisig())
+    {
+      message_writer(console_color_red, true) << tr("WARNING: multisig is a disabled legacy feature. From fork 14 this wallet cannot spend; move any funds before the fork.");
+    }
     if (m_wallet->get_account().get_device()) {
        message_writer(console_color_white, true) << "Wallet is on device: " << m_wallet->get_account().get_device().get_name();
     }

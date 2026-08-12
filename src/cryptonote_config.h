@@ -53,6 +53,7 @@
 #define CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE                             10
 
 #define BULLETPROOF_MAX_OUTPUTS                                         16
+#define BULLETPROOF_PLUS_MAX_OUTPUTS                                    16
 #define BULLETPROOF_SIMPLE_FORK_HEIGHT                                  8
 #define BULLETPROOF_FULL_FORK_HEIGHT                                    11
 
@@ -172,6 +173,10 @@
 #define HF_VERSION_MIN_2_OUTPUTS                                        13
 #define HF_VERSION_ENFORCE_MIN_AGE                                      13
 #define HF_VERSION_TX_KEY_VALIDATION                                    13
+// Monero forks these separately (v13 and v15); Nerva does both at HF14 and
+// only ever creates type 7 (CLSAG with Bulletproofs+)
+#define HF_VERSION_CLSAG                                                14
+#define HF_VERSION_BULLETPROOF_PLUS                                     14
 #define CRYPTONOTE_SHORT_TERM_BLOCK_WEIGHT_SURGE_FACTOR                 50
 
 #define CRYPTONOTE_NOISE_MIN_EPOCH                                      5
@@ -215,6 +220,16 @@ namespace config
     // Gated by --fast-block-sync; bump both each release. 0 = disable.
     uint64_t const ASSUME_VALID_HEIGHT = 4320000;
 
+    // CLSAG (HF14) hash domain separators. Byte-identical to Monero's so the
+    // signature scheme stays bit-compatible with the battle-tested upstream
+    // implementation; consensus-critical once HF14 activates.
+    const unsigned char HASH_KEY_CLSAG_ROUND[] = "CLSAG_round";
+    const unsigned char HASH_KEY_CLSAG_AGG_0[] = "CLSAG_agg_0";
+    const unsigned char HASH_KEY_CLSAG_AGG_1[] = "CLSAG_agg_1";
+    // Bulletproofs+ (HF14) domain separators, byte-identical to Monero's
+    const char HASH_KEY_BULLETPROOF_PLUS_EXPONENT[] = "bulletproof_plus";
+    const char HASH_KEY_BULLETPROOF_PLUS_TRANSCRIPT[] = "bulletproof_plus_transcript";
+
     static const hard_fork hard_forks[] = {
         { 1,      1},
         { 2,      2},
@@ -228,7 +243,12 @@ namespace config
         {10, 341000},
         {11, 500000},
         {12, 930000},
-        {13, 4320000}   // CryptoNight-Adaptive v6: 8 MB scratchpad + random VM program
+        {13, 4320000},  // CryptoNight-Adaptive v6: 8 MB scratchpad + random VM program
+        {14, 4400000}   // CLSAG + Bulletproofs+ (type 7 only) and CryptoNight-Adaptive
+                        // v7 (per-nonce mutable-buffer chase, one box ~ one vote).
+                        // Placeholder, about six weeks of blocks past the tip it was
+                        // picked against. It moves if the validation gates slip:
+                        // reference-pair run, testnet fork, GPU port test.
     };
 
     namespace testnet
@@ -243,6 +263,8 @@ namespace config
 
         uint64_t const ASSUME_VALID_HEIGHT = 0; // 0 = full PoW verification
 
+        // 12 and 13 sit where stagenet has them, which only holds for a testnet
+        // started fresh from genesis: on the retired chain they were 2000 and 2100.
         static const hard_fork hard_forks[] = {
             { 1,   1},
             { 2,   2},
@@ -255,8 +277,9 @@ namespace config
             { 9, 570},
             {10, 580},
             {11, 590},
-            {12, 2000},
-            {13, 2100}
+            {12, 700},
+            {13, 800},
+            {14, 1000}  // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v7
         };
     }
 
@@ -280,7 +303,8 @@ namespace config
             {10, 580},
             {11, 590},
             {12, 700},
-            {13, 800}
+            {13, 800},
+            {14, 1000}  // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v7
         };
     }
 }

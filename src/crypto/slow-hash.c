@@ -60,6 +60,7 @@ extern void cn_slow_hash_v9_hw(cn_hash_context_t *context, const void *data, siz
 extern void cn_slow_hash_v10_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww);
 extern void cn_slow_hash_v11_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 extern void cn_slow_hash_v13_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
+extern void cn_slow_hash_v14_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
 #endif
 
 extern void cn_slow_hash_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters);
@@ -68,6 +69,7 @@ extern void cn_slow_hash_v9_sw(cn_hash_context_t *context, const void *data, siz
 extern void cn_slow_hash_v10_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww);
 extern void cn_slow_hash_v11_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 extern void cn_slow_hash_v13_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
+extern void cn_slow_hash_v14_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
 
 /* Runtime CPU detection. Cached in a function-static so the per-hash overhead
  * is one branch on a hot variable. Override with NERVA_FORCE_SOFTWARE_AES=1 to
@@ -115,40 +117,115 @@ int cn_hardware_aes_supported(void)
 #define CN_DISPATCH(call_hw, call_sw) do { call_sw; } while (0)
 #endif
 
+/* defined below, next to the allocator it uses */
+static void cn_pads_require(cn_hash_context_t *ctx, int legacy, int v6, int v7);
+
 void cn_slow_hash(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters)
 {
+    cn_pads_require(ctx, 1, 0, 0);
     CN_DISPATCH(cn_slow_hash_hw(ctx, data, length, hash, variant, prehashed, iters),
                 cn_slow_hash_sw(ctx, data, length, hash, variant, prehashed, iters));
 }
 
 void cn_slow_hash_v7_8(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters)
 {
+    cn_pads_require(ctx, 1, 0, 0);
     CN_DISPATCH(cn_slow_hash_v7_8_hw(ctx, data, length, hash, iters),
                 cn_slow_hash_v7_8_sw(ctx, data, length, hash, iters));
 }
 
 void cn_slow_hash_v9(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters)
 {
+    cn_pads_require(ctx, 1, 0, 0);
     CN_DISPATCH(cn_slow_hash_v9_hw(ctx, data, length, hash, iters),
                 cn_slow_hash_v9_sw(ctx, data, length, hash, iters));
 }
 
 void cn_slow_hash_v10(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww)
 {
+    cn_pads_require(ctx, 1, 0, 0);
     CN_DISPATCH(cn_slow_hash_v10_hw(ctx, data, length, hash, iters, init_size_blk, xx, yy, zz, ww),
                 cn_slow_hash_v10_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy, zz, ww));
 }
 
 void cn_slow_hash_v11(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
 {
+    cn_pads_require(ctx, 1, 0, 0);
     CN_DISPATCH(cn_slow_hash_v11_hw(ctx, data, length, hash, iters, init_size_blk, xx, yy),
                 cn_slow_hash_v11_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy));
 }
 
 void cn_slow_hash_v13(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, const uint8_t *seed)
 {
+    cn_pads_require(ctx, 0, 1, 0);
     CN_DISPATCH(cn_slow_hash_v13_hw(ctx, data, length, hash, seed),
                 cn_slow_hash_v13_sw(ctx, data, length, hash, seed));
+}
+
+void cn_slow_hash_v14(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, const uint8_t *seed)
+{
+    cn_pads_require(ctx, 1, 0, 1);   /* 256 KB pad lives in the legacy buffer */
+    CN_DISPATCH(cn_slow_hash_v14_hw(ctx, data, length, hash, seed),
+                cn_slow_hash_v14_sw(ctx, data, length, hash, seed));
+}
+
+/* mmap + MADV_HUGEPAGE on Linux is best effort: the kernel can back the mapping
+ * with base pages anyway, and it decides that as the pages are faulted in, well
+ * after the allocation returns. So the tier allocate_hugepage recorded is what
+ * we asked for, not what we got, and printing it claims huge pages that may not
+ * exist. Ask the kernel what actually happened. Only Linux needs this: Windows
+ * large pages either come back from VirtualAlloc or they do not, and FreeBSD
+ * superpages are transparent with nothing to query. */
+int cn_page_tier_actual(const void *p, size_t size, int requested_tier)
+{
+#if defined(__linux__) && !defined(__ANDROID__)
+    if (requested_tier != CN_PAGES_THP || p == NULL)
+        return requested_tier;
+
+    FILE *f = fopen("/proc/self/smaps", "r");
+    if (f == NULL)
+        return requested_tier;   /* cannot tell, do not invent an answer */
+
+    const unsigned long target = (unsigned long)(uintptr_t)p;
+    char line[512];
+    int in_mapping = 0;
+    long huge_kb = -1;
+    while (fgets(line, sizeof(line), f) != NULL) {
+        unsigned long from, to;
+        if (sscanf(line, "%lx-%lx", &from, &to) == 2)
+            in_mapping = (target >= from && target < to);
+        else if (in_mapping && strncmp(line, "AnonHugePages:", 14) == 0) {
+            sscanf(line + 14, "%ld", &huge_kb);
+            break;
+        }
+    }
+    fclose(f);
+
+    if (huge_kb < 0)
+        return requested_tier;   /* kernel did not report the field */
+    /* most of the mapping has to be huge-page backed to call it that */
+    if ((size_t)huge_kb * 1024u < size / 2u)
+        return CN_PAGES_PLAIN_MMAP;
+    return requested_tier;
+#else
+    (void)p; (void)size;
+    return requested_tier;
+#endif
+}
+
+/* The page tier of whichever buffer carries the hashrate at this fork version,
+ * as the kernel actually backed it: the 24 MB chase buffer from v14, the 8 MB
+ * v6 pad at v13, the 1 MB legacy pad before that. Call it after a hash of that
+ * version has run, or the buffer will not be allocated yet. */
+int cn_page_tier_for_version(const cn_hash_context_t *ctx, uint8_t major_version)
+{
+    if (ctx == NULL)
+        return CN_PAGES_MALLOC;
+    if (major_version >= 14)
+        return cn_page_tier_actual(ctx->cna_v7_buffer, CN_V7_BUFFER, ctx->cna_v7_buffer_is_mapped);
+    if (major_version == 13)
+        return cn_page_tier_actual(ctx->cna_scratchpad, CN_SCRATCHPAD_MEMORY_V13, ctx->cna_scratchpad_is_mapped);
+    return cn_page_tier_actual(ctx->scratchpad, CN_SCRATCHPAD_MEMORY, ctx->scratchpad_is_mapped);
 }
 
 const char *cn_page_tier_name(int tier)
@@ -322,6 +399,39 @@ static void free_hugepage(void *hp, size_t size, int page_tier)
     }
 }
 
+/* Allocate a PoW buffer on first use. Contexts are also created for work that
+ * never hashes a block (the wallet KDF, key encryption) and a node past HF14
+ * never touches the v6 pad, so none of these are worth carrying up front. The
+ * context is per-thread, so there is no race to guard. Failure leaves the
+ * pointer NULL and returns 0; the caller decides how loudly to die. */
+static int cn_buffer_ensure(uint8_t **buf, int *tier, size_t size)
+{
+    if (*buf == NULL)
+        *tier = allocate_hugepage(size, (void **)buf);
+    return *buf != NULL;
+}
+
+static int cn_pads_ensure(cn_hash_context_t *ctx, int legacy, int v6, int v7)
+{
+    if (legacy && !cn_buffer_ensure(&ctx->scratchpad, &ctx->scratchpad_is_mapped, CN_SCRATCHPAD_MEMORY))
+        return 0;
+    if (v6 && !cn_buffer_ensure(&ctx->cna_scratchpad, &ctx->cna_scratchpad_is_mapped, CN_SCRATCHPAD_MEMORY_V13))
+        return 0;
+    if (v7 && !cn_buffer_ensure(&ctx->cna_v7_buffer, &ctx->cna_v7_buffer_is_mapped, CN_V7_BUFFER))
+        return 0;
+    return 1;
+}
+
+static void cn_pads_require(cn_hash_context_t *ctx, int legacy, int v6, int v7)
+{
+    if (!cn_pads_ensure(ctx, legacy, v6, v7)) {
+        /* hashing cannot proceed, and a wrong hash would be worse than a
+         * crash; a failed pad allocation means the process is out of memory */
+        fprintf(stderr, "failed to allocate a CryptoNight scratchpad\n");
+        abort();
+    }
+}
+
 cn_hash_context_t *cn_hash_context_create(void)
 {
     // calloc so pointer fields start NULL; a failed alloc can't leave
@@ -335,16 +445,9 @@ cn_hash_context_t *cn_hash_context_create(void)
         free(ctx);
         return NULL;
     }
-    ctx->scratchpad_is_mapped = allocate_hugepage(CN_SCRATCHPAD_MEMORY, (void **)&(ctx->scratchpad));
-    if (ctx->scratchpad == NULL) {
-        cn_hash_context_free(ctx);
-        return NULL;
-    }
-    ctx->cna_scratchpad_is_mapped = allocate_hugepage(CN_SCRATCHPAD_MEMORY_V13, (void **)&(ctx->cna_scratchpad));
-    if (ctx->cna_scratchpad == NULL) {
-        cn_hash_context_free(ctx);
-        return NULL;
-    }
+    /* the PoW pads are allocated on first use (cn_pads_ensure); calloc above
+     * leaves their pointers NULL. Only the salt is carried up front, because
+     * the block-hash callers fill it before they call in. */
     ctx->salt_is_mapped = allocate_hugepage(CN_SALT_MEMORY, (void **)&(ctx->salt));
     if (ctx->salt == NULL) {
         cn_hash_context_free(ctx);
@@ -373,6 +476,11 @@ void cn_hash_context_free(cn_hash_context_t *context)
         context->cna_scratchpad = NULL;
     }
 
+    if (context->cna_v7_buffer != NULL) {
+        free_hugepage(context->cna_v7_buffer, CN_V7_BUFFER, context->cna_v7_buffer_is_mapped);
+        context->cna_v7_buffer = NULL;
+    }
+
     if (context->salt != NULL) {
         free_hugepage(context->salt, CN_SALT_MEMORY, context->salt_is_mapped);
         context->salt = NULL;
@@ -393,7 +501,19 @@ int cn_slow_hash_self_test(void)
     if (ctx == NULL)
         return 1;
 
-    static const char input[] = "nerva-cn-slow-hash-hw-vs-sw-self-test";
+    /* every case below calls the _hw/_sw entry points directly, so the lazy
+     * allocation in the dispatchers does not run for them. A failed allocation
+     * says nothing about HW versus SW agreement, so skip the test the same way
+     * a failed context allocation does above rather than refusing to start. */
+    if (!cn_pads_ensure(ctx, 1, 1, 1)) {
+        cn_hash_context_free(ctx);
+        return 1;
+    }
+
+    /* variant 1 reads a tweak at data+35 as a 64 bit word, so anything
+     * shorter than 43 bytes reads past the end of it. Monero refuses short
+     * input outright; here the fixed test vector just has to be long enough. */
+    static const char input[] = "nerva-cn-slow-hash hardware versus software self test vector";
     char hw[HASH_SIZE];
     char sw[HASH_SIZE];
     int ok = 1;
@@ -444,6 +564,38 @@ int cn_slow_hash_self_test(void)
         memset(&ctx->random_values, 0, sizeof(ctx->random_values));
         memset(ctx->salt, 0, CN_SALT_MEMORY);
         cn_slow_hash_v13_sw(ctx, input, sizeof(input) - 1, sw, seed);
+        if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
+    }
+
+    /* v14: 256 KB pad + a 24 MB per-nonce buffer the hash fills from the seed
+     * and walks (mutating as it goes). Both paths mutate the pad; resetting
+     * salt/random_values before each call keeps the inputs identical. The
+     * seed must be varied: with an all-zero seed the old fill zeroed the
+     * whole buffer and the chase collapsed onto the low indices, so the test
+     * exercised under 1% of the buffer while this is the only guard against
+     * an AES-NI / software-AES split on the v14 path. */
+    {
+        uint8_t seed[32];
+        uint32_t si;
+        for (si = 0; si < sizeof(seed); si++)
+            seed[si] = (uint8_t)(si * 47u + 11u);
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        memset(ctx->salt, 0, CN_SALT_MEMORY);
+        cn_slow_hash_v14_hw(ctx, input, sizeof(input) - 1, hw, seed);
+        /* the fill must actually populate the buffer, or the comparison
+         * below is vacuous again; OR-sample it across its whole length */
+        {
+            const uint64_t *bw = (const uint64_t *)ctx->cna_v7_buffer;
+            const uint32_t stride = (uint32_t)(CN_V7_BUFFER / sizeof(uint64_t) / 4096);
+            uint64_t acc = 0;
+            uint32_t bi;
+            for (bi = 0; bi < 4096; bi++)
+                acc |= bw[bi * stride];
+            if (acc == 0) ok = 0;
+        }
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        memset(ctx->salt, 0, CN_SALT_MEMORY);
+        cn_slow_hash_v14_sw(ctx, input, sizeof(input) - 1, sw, seed);
         if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
     }
 

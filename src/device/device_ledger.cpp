@@ -1972,6 +1972,25 @@ namespace hw {
         return true;
     }
 
+    // CLSAG (HF14): signing on a Ledger needs the post-CLSAG app protocol
+    // (new INS commands, added in Monero v0.17's ledger integration); this
+    // implementation still speaks the pre-CLSAG protocol. Refuse by throwing
+    // instead of producing something wrong: CLSAG_Gen ignores the bool
+    // returns, so returning false would let it sign with uninitialized keys.
+    // Verification is unaffected since nodes verify in software. Porting the
+    // protocol update needs a device to test against.
+    bool device_ledger::clsag_prepare(const rct::key &p, const rct::key &z, rct::key &I, rct::key &D, const rct::key &H, rct::key &a, rct::key &aG, rct::key &aH) {
+        ASSERT_MES_AND_THROW("CLSAG signing is not supported on this Ledger integration yet");
+    }
+
+    bool device_ledger::clsag_hash(const rct::keyV &data, rct::key &hash) {
+        ASSERT_MES_AND_THROW("CLSAG signing is not supported on this Ledger integration yet");
+    }
+
+    bool device_ledger::clsag_sign(const rct::key &c, const rct::key &a, const rct::key &p, const rct::key &z, const rct::key &mu_P, const rct::key &mu_C, rct::key &s) {
+        ASSERT_MES_AND_THROW("CLSAG signing is not supported on this Ledger integration yet");
+    }
+
     bool device_ledger::close_tx() {
         AUTO_LOCK_CMD();
         send_simple(INS_CLOSE_TX);

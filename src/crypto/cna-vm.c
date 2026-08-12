@@ -29,6 +29,7 @@
 #include "cna-vm.h"
 #include "hc128.h"
 #include "hash-ops.h"
+#include "int-util.h"
 
 #include <string.h>
 #include <stdint.h>
@@ -82,6 +83,31 @@ void cn_vm_generate_program(cn_vm_program_t *prog, const uint8_t seed[32])
         uint32_t lo = HC128_U32(&rng, &key_idx, 0x10000);
         uint32_t hi = HC128_U32(&rng, &key_idx, 0x10000);
         ins->imm = (hi << 16) | lo;
+    }
+
+    // Chase segment lengths, from the same keystream. Start uniform and move
+    // hops between segments: the sum stays exactly CN_V7_HOPS by construction,
+    // so every nonce issues the same number of accesses and none is cheaper to
+    // hash, while the per-nonce rhythm is what a GPU warp and an ASIC sequencer
+    // have to follow. The bounds keep every segment in
+    // [CN_V7_SEG_MIN, CN_V7_HOPS - (CN_V7_SEGMENTS-1)*CN_V7_SEG_MIN].
+    for (int i = 0; i < CN_V7_SEGMENTS; i++)
+        prog->seg_hops[i] = (uint16_t)(CN_V7_HOPS / CN_V7_SEGMENTS);
+
+    const uint16_t seg_cap = (uint16_t)(CN_V7_HOPS - (CN_V7_SEGMENTS - 1) * CN_V7_SEG_MIN);
+    for (int k = 0; k < 24; k++)
+    {
+        const int a = (int)HC128_U32(&rng, &key_idx, CN_V7_SEGMENTS);
+        const int b = (int)HC128_U32(&rng, &key_idx, CN_V7_SEGMENTS);
+        uint16_t amt = (uint16_t)HC128_U32(&rng, &key_idx, 32U);
+        if (a == b)
+            continue;
+        if (prog->seg_hops[a] < (uint16_t)(CN_V7_SEG_MIN + amt))
+            amt = (uint16_t)(prog->seg_hops[a] - CN_V7_SEG_MIN);
+        if ((uint16_t)(prog->seg_hops[b] + amt) > seg_cap)
+            amt = (uint16_t)(seg_cap - prog->seg_hops[b]);
+        prog->seg_hops[a] = (uint16_t)(prog->seg_hops[a] - amt);
+        prog->seg_hops[b] = (uint16_t)(prog->seg_hops[b] + amt);
     }
 }
 
@@ -208,4 +234,175 @@ void cn_vm_execute(cn_vm_program_t *prog, uint8_t *scratchpad, uint64_t regs[CN_
 
         pc = next_pc;
     }
+}
+
+// ---------------------------------------------------------------------------
+// cn_vm_execute_v7 (HF14)
+//
+// Same program, different memory binding: each pass is CN_V7_SEGMENTS
+// repetitions of [tight serial chase over the per-nonce buffer, then a slice
+// of the program]. Every hop's address needs the previous hop's value, so
+// exactly one load is in flight on any hardware; a small in-order core walks
+// the buffer as fast as a big out-of-order one, which is where the per-core
+// parity comes from. Each chase segment is gated on a register the previous
+// program slice just mutated, so the walk cannot be advanced without
+// executing the per-nonce random program between segments.
+//
+// Instruction semantics match cn_vm_execute except the two memory ops:
+// SP_READ consumes the chased values in order instead of reading the pad,
+// and SP_WRITE keeps its v6 behaviour against the small v14 pad.
+// ---------------------------------------------------------------------------
+
+// A program slice runs CN_PROGRAM_SIZE/CN_V7_SEGMENTS steps and each step
+// consumes at most one chased value. Segment lengths now vary per nonce, so the
+// guarantee rests on the floor instead of a uniform split: after segment i the
+// chase has supplied at least CN_V7_SEG_MIN*(i+1) values while the slices can
+// have consumed at most (CN_PROGRAM_SIZE/CN_V7_SEGMENTS)*(i+1), so the floor has
+// to be the larger of the two. A retune that breaks this would make SP_READ read
+// uninitialised stack and fork the chain, so pin it at compile time.
+_Static_assert(CN_V7_SEG_MIN > CN_PROGRAM_SIZE / CN_V7_SEGMENTS,
+               "CN_V7_SEG_MIN must exceed the per-slice step count or SP_READ consumes uninitialised values");
+_Static_assert(CN_V7_SEG_MIN * CN_V7_SEGMENTS <= CN_V7_HOPS,
+               "CN_V7_SEG_MIN * CN_V7_SEGMENTS must fit in CN_V7_HOPS or the segment lengths cannot sum");
+_Static_assert(CN_V7_HOPS >= CN_PROGRAM_SIZE,
+               "CN_V7_HOPS must stay >= CN_PROGRAM_SIZE or SP_READ consumes uninitialised values");
+_Static_assert((CN_PROGRAM_SIZE % CN_V7_SEGMENTS) == 0,
+               "CN_V7_SEGMENTS must divide the program size");
+_Static_assert((CN_V7_HOPS & (CN_V7_HOPS - 1)) == 0,
+               "CN_V7_HOPS must be a power of 2, SP_READ wraps vals[] with a bitmask");
+_Static_assert((CN_PROGRAM_SIZE & (CN_PROGRAM_SIZE - 1)) == 0,
+               "CN_PROGRAM_SIZE must be a power of 2, the hop operand walk wraps with pc_mask");
+
+void cn_vm_execute_v7(cn_vm_program_t *prog, uint8_t *buffer, uint64_t buffer_qwords,
+                      uint8_t *pad, uint64_t regs[CN_REG_COUNT], uint64_t *chain_state)
+{
+    // CN_SCRATCHPAD_MEMORY_V14 is a power of two; the mask keeps pad writes
+    // 8-byte aligned inside it, exactly like cn_vm_execute's sp_mask.
+    const size_t sp_mask   = (size_t)(CN_SCRATCHPAD_MEMORY_V14 - 1) & ~(size_t)7;
+    const int    pc_mask   = CN_PROGRAM_SIZE - 1;
+    const int    seg_steps = CN_PROGRAM_SIZE / CN_V7_SEGMENTS;
+
+    int pc = 0;                       // persists across the pass's segments
+    unsigned consume = 0;
+    unsigned filled = 0;              // chased values available to SP_READ
+    unsigned walk_pc = 0;             // operand source for the hops
+    uint64_t wchain = 0;
+    uint64_t chain = *chain_state;
+    uint64_t vals[CN_V7_HOPS];
+
+    for (int seg = 0; seg < CN_V7_SEGMENTS; seg++)
+    {
+        // Chase segment. Its length comes from the seed, so the rhythm is
+        // per-nonce while the total stays CN_V7_HOPS.
+        const int hops = (int)prog->seg_hops[seg];
+        for (int h = 0; h < hops; h++)
+        {
+            // Address operands come from the program, the way v6's SP_READ
+            // built its address, and walk_pc advances by a stride taken from
+            // the value just loaded. So the address path needs the register
+            // file and a per-nonce, value-dependent walk through the program
+            // rather than a fixed formula a hardwired pipeline could bake in.
+            const cn_vm_instruction_t *hop = &prog->instructions[walk_pc & pc_mask];
+            // The register index steps with the hop, so regs[..] + imm is not a
+            // fixed 512-entry table for the whole segment: precomputing it needs
+            // one entry per (instruction, hop position) pair instead, and the
+            // register file stays in the address path per hop rather than per
+            // segment. Costs an add and a mask.
+            const uint8_t hop_reg = (uint8_t)((hop->src + (unsigned)h) & (CN_REG_COUNT - 1));
+            const uint64_t addr_material = regs[hop_reg] + (uint64_t)hop->imm + chain;
+            // Map into [0, buffer_qwords) as the high 64 bits of
+            // addr_material * buffer_qwords: uniform, no divide, any buffer
+            // length (no power-of-two requirement).
+            uint64_t idx;
+            mul128(addr_material, buffer_qwords, &idx);
+            uint64_t v;
+            memcpy(&v, buffer + idx * sizeof(uint64_t), sizeof(uint64_t));
+            // Write the cell back XORed with the address material. The stored
+            // value now depends on the whole walk history, so a revisit reads
+            // something no fill-checkpoint can reproduce: the buffer must be
+            // kept resident, which is the per-nonce capacity brake.
+            uint64_t mut = v ^ addr_material;
+            memcpy(buffer + idx * sizeof(uint64_t), &mut, sizeof(uint64_t));
+            // +h so a repeated value cannot close a short cycle inside the pass
+            chain = v + (uint64_t)h;
+            walk_pc += 1u + (unsigned)(v & 3u);
+            vals[filled++] = v;
+        }
+
+        for (int step = 0; step < seg_steps; step++)
+        {
+            const cn_vm_instruction_t *ins = &prog->instructions[pc & pc_mask];
+            int next_pc = pc + 1;
+
+            const uint8_t dst = ins->dst;
+            const uint8_t src = ins->src;
+
+            switch ((cn_vm_opcode_t)ins->op)
+            {
+            case CN_OP_IADD_RS:
+                regs[dst] += regs[src] << (ins->shift & 3);
+                break;
+
+            case CN_OP_ISUB:
+                regs[dst] -= regs[src];
+                break;
+
+            case CN_OP_IMUL:
+                regs[dst] *= regs[src];
+                break;
+
+            case CN_OP_IXOR:
+                regs[dst] ^= regs[src];
+                break;
+
+            case CN_OP_IROR:
+                regs[dst] = ror64(regs[dst], (uint32_t)(regs[src] & 63));
+                break;
+
+            case CN_OP_CBRANCH:
+                if (regs[dst] & ((uint64_t)ins->imm | 1))
+                {
+                    int target = (pc + (int)((int8_t)ins->shift) + CN_PROGRAM_SIZE) & pc_mask;
+                    next_pc = target;
+                }
+                break;
+
+            case CN_OP_SP_READ:
+                // Consume the chased values in order; imm keeps each
+                // consuming instruction distinct. Branch loops can revisit
+                // an SP_READ, but a pass executes at most CN_PROGRAM_SIZE
+                // steps while the chase supplies CN_V7_HOPS values, so
+                // consume stays inside the filled prefix (asserts above).
+                regs[dst] ^= vals[consume & (CN_V7_HOPS - 1)] + (uint64_t)ins->imm;
+                consume++;
+                break;
+
+            case CN_OP_SP_WRITE:
+            {
+                // v6 semantics against the small v14 pad: write-hardness.
+                size_t addr = ((size_t)((uint64_t)regs[dst] + (uint64_t)ins->imm + wchain)) & sp_mask;
+                uint64_t tmp;
+                memcpy(&tmp, &pad[addr], sizeof(uint64_t));
+                tmp ^= regs[src];
+                memcpy(&pad[addr], &tmp, sizeof(uint64_t));
+                wchain += tmp;
+                break;
+            }
+
+            case CN_OP_MIX:
+                regs[dst] = mix64(regs[dst] ^ regs[src], ins->imm);
+                break;
+
+            default:
+                // Unknown opcode: treat as NOP to stay deterministic.
+                break;
+            }
+
+            pc = next_pc;
+        }
+    }
+
+    *chain_state = chain;
+    // fold the write chain back so pad writes stay load-bearing too
+    regs[0] ^= wchain;
 }

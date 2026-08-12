@@ -471,16 +471,24 @@ OAES_RET oaes_sprintf(
 	return OAES_RET_SUCCESS;
 }
 
+/* thread safe gmtime: the reentrant form is spelled differently on Windows */
+#if defined(_WIN32) || defined(_MSC_VER)
+#define OAES_GMTIME(t, buf) (gmtime_s((buf), (t)) == 0 ? (buf) : NULL)
+#else
+#define OAES_GMTIME(t, buf) gmtime_r((t), (buf))
+#endif
+
 #ifdef OAES_HAVE_ISAAC
 static void oaes_get_seed( char buf[RANDSIZ + 1] )
 {
         #if !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__NetBSD__)
 	struct timeb timer;
+	struct tm tm_buf;
 	struct tm *gmTimer;
 	char * _test = NULL;
 	
 	ftime (&timer);
-	gmTimer = gmtime( &timer.time );
+	gmTimer = OAES_GMTIME( &timer.time, &tm_buf );
 	_test = (char *) calloc( sizeof( char ), timer.millitm );
 	sprintf( buf, "%04d%02d%02d%02d%02d%02d%03d%p%d",
 		gmTimer->tm_year + 1900, gmTimer->tm_mon + 1, gmTimer->tm_mday,
@@ -488,11 +496,12 @@ static void oaes_get_seed( char buf[RANDSIZ + 1] )
 		_test + timer.millitm, GETPID() );
 	#else
 	struct timeval timer;
+	struct tm tm_buf;
 	struct tm *gmTimer;
 	char * _test = NULL;
 	
 	gettimeofday(&timer, NULL);
-	gmTimer = gmtime( &timer.tv_sec );
+	gmTimer = OAES_GMTIME( &timer.tv_sec, &tm_buf );
 	_test = (char *) calloc( sizeof( char ), timer.tv_usec/1000 );
 	sprintf( buf, "%04d%02d%02d%02d%02d%02d%03d%p%d",
 		gmTimer->tm_year + 1900, gmTimer->tm_mon + 1, gmTimer->tm_mday,
@@ -508,24 +517,29 @@ static uint32_t oaes_get_seed(void)
 {
         #if !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__ANDROID__) && !defined(__NetBSD__)
 	struct timeb timer;
+	struct tm tm_buf;
 	struct tm *gmTimer;
 	char * _test = NULL;
 	uint32_t _ret = 0;
 	
 	ftime (&timer);
-	gmTimer = gmtime( &timer.time );
+	/* gmtime hands back a pointer to one shared static, so two threads seeding
+	 * at once corrupt each other's reading. Every mining thread builds its own
+	 * hash context, so this really does happen. Give each caller its own. */
+	gmTimer = OAES_GMTIME( &timer.time, &tm_buf );
 	_test = (char *) calloc( sizeof( char ), timer.millitm );
 	_ret = gmTimer->tm_year + 1900 + gmTimer->tm_mon + 1 + gmTimer->tm_mday +
 			gmTimer->tm_hour + gmTimer->tm_min + gmTimer->tm_sec + timer.millitm +
 			(uintptr_t) ( _test + timer.millitm ) + GETPID();
 	#else
 	struct timeval timer;
+	struct tm tm_buf;
 	struct tm *gmTimer;
 	char * _test = NULL;
 	uint32_t _ret = 0;
 	
 	gettimeofday(&timer, NULL);
-	gmTimer = gmtime( &timer.tv_sec );
+	gmTimer = OAES_GMTIME( &timer.tv_sec, &tm_buf );
 	_test = (char *) calloc( sizeof( char ), timer.tv_usec/1000 );
 	_ret = gmTimer->tm_year + 1900 + gmTimer->tm_mon + 1 + gmTimer->tm_mday +
 			gmTimer->tm_hour + gmTimer->tm_min + gmTimer->tm_sec + timer.tv_usec/1000 +

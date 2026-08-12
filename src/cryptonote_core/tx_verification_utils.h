@@ -1,5 +1,5 @@
-// Copyright (c) 2018-2024, The Nerva Project
-// Copyright (c) 2014-2024, The Monero Project
+// Copyright (c) 2018-2026, The Nerva Project
+// Copyright (c) 2023-2024, The Monero Project
 //
 // All rights reserved.
 //
@@ -27,19 +27,31 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-/* Hardware-AES path. This translation unit is compiled with -maes (x86) or
- * -march=armv8-a+crypto (aarch64). It defines cn_slow_hash*_hw symbols that
- * the dispatcher in slow-hash.c picks when the running CPU supports AES. */
+#pragma once
 
-#include "hash-ops.h"
+#include "cryptonote_basic/cryptonote_basic.h"
+#include "ringct/rctTypes.h"
 
-#define cn_slow_hash       cn_slow_hash_hw
-#define cn_slow_hash_v7_8  cn_slow_hash_v7_8_hw
-#define cn_slow_hash_v9    cn_slow_hash_v9_hw
-#define cn_slow_hash_v10   cn_slow_hash_v10_hw
-#define cn_slow_hash_v11   cn_slow_hash_v11_hw
-#define cn_slow_hash_v13   cn_slow_hash_v13_hw
-#define cn_slow_hash_v14   cn_slow_hash_v14_hw
+// Standalone transaction verification helpers, Monero master's
+// tx_verification_utils layout. The input-verification cache
+// (make_input_verification_id and the pool_supplement machinery around it)
+// is not adopted; verification here is stateless.
 
-#include "slow-hash.h"
-#include "slow-hash-impl.h"
+namespace cryptonote
+{
+
+// The maximum weight of a single transaction accepted into the pool.
+uint64_t get_transaction_weight_limit(uint8_t hf_version);
+
+// Do RCT expansion, then post-expansion sanity checks, then full
+// non-semantics verification of the ring signatures. The mix ring is the
+// output keys fetched from the chain for each input, in the same layout
+// Blockchain::expand_transaction expects.
+bool ver_input_proofs_rings(transaction& tx, const std::vector<std::vector<rct::ctkey>>& pubkeys);
+
+// Canonical range proof layout for the aggregate proof types: exactly one
+// proof, with a sane number of commitments.
+bool is_canonical_bulletproof_layout(const std::vector<rct::Bulletproof> &proofs);
+bool is_canonical_bulletproof_plus_layout(const std::vector<rct::BulletproofPlus> &proofs);
+
+}

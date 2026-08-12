@@ -44,6 +44,47 @@
 #define CN_REG_COUNT       8
 #define CN_VM_ITERATIONS   2048
 
+// CNA v7 (HF14): the memory-hard work is a strictly serial chase over a
+// per-nonce buffer that the walk writes back to as it goes. The buffer is
+// filled cheaply from the per-nonce seed, and the chase covers ~63% of it and
+// mutates every cell it touches, so touched cells diverge from the fill and
+// the buffer cannot be regenerated on the fly: a miner is forced to keep the
+// whole thing resident. That caps how many nonces a GPU/ASIC can hold at once
+// (one buffer each), the way v6's 8 MB pad did, while the chase itself stays
+// DRAM-latency-bound so a small board keeps pace with a desktop: one box ~ one
+// vote. Per pass, CN_V7_SEGMENTS segments of [CN_V7_HOPS / CN_V7_SEGMENTS
+// serial hops, then a program slice], each segment gated on a register the
+// program just mutated so the walk cannot advance without executing the
+// per-nonce random program (the GPU/ASIC barrier, same class as v6). All
+// values consensus-critical.
+//
+// The hop itself takes its address operands from the program (regs[src] + imm +
+// chain, as v6 did) and steps through the operand source by a stride derived
+// from the value just loaded, so the sequence of operands is per-nonce and
+// value-dependent rather than a fixed formula. The register index also steps
+// with the hop, so the operand sum cannot be reduced to one precomputed table
+// per segment. Segment lengths are per-nonce
+// too. Measured against a fixed-loop chase on one GPU: 1.76x a CPU box instead
+// of 3.07x.
+#define CN_V7_HOPS           1024
+#define CN_V7_SEGMENTS       8
+// Per-segment hop counts come from the seed and sum to CN_V7_HOPS, so the
+// access count per pass is fixed while the rhythm differs per nonce. The floor
+// keeps the chased prefix ahead of what the following program slices can
+// consume: slice i consumes at most (CN_PROGRAM_SIZE / CN_V7_SEGMENTS) * (i+1)
+// values, and CN_V7_SEG_MIN * (i+1) is larger.
+#define CN_V7_SEG_MIN        80
+// Per-nonce chase buffer: 24 MB. Big enough to spill any commodity L3 (so the
+// chase is DRAM-latency-bound, not cache/clock-bound) and to starve a GPU of
+// parallel nonces (VRAM / 24 MB), small enough to keep block verify ~0.3-0.5 s.
+#define CN_V7_BUFFER         (24 * 1024 * 1024)
+// v14 pass count = buffer qwords / hops-per-pass, so the chase touches ~63% of
+// the buffer. That coverage is what forces full residency: below it a
+// checkpoint attacker could store the buffer sparsely and recompute the rest.
+// Verify lands ~0.3-0.5 s/hash, roughly equal on every box since the chase is
+// DRAM-latency-bound. v13 keeps CN_VM_ITERATIONS.
+#define CN_VM_ITERATIONS_V14 (CN_V7_BUFFER / (8 * CN_V7_HOPS))
+
 // Instruction opcodes — kept small so the opcode byte fits in uint8_t.
 typedef enum {
     CN_OP_IADD_RS   = 0,  // r[dst] += r[src] << (shift & 3)
@@ -68,6 +109,10 @@ typedef struct {
 
 typedef struct {
     cn_vm_instruction_t instructions[CN_PROGRAM_SIZE];
+    // Chase segment lengths for the HF14 pass, from the same seed. They sum to
+    // CN_V7_HOPS, so the access count per pass is identical for every nonce and
+    // no seed yields a cheaper hash; only the rhythm differs.
+    uint16_t seg_hops[CN_V7_SEGMENTS];
 } cn_vm_program_t;
 
 // Generate a deterministic random program from a 32-byte seed.
@@ -80,3 +125,16 @@ void cn_vm_generate_program(cn_vm_program_t *prog, const uint8_t seed[32]);
 // loops possible).  Call CN_VM_ITERATIONS times with the same prog and
 // evolving regs to accumulate scratchpad mutations.
 void cn_vm_execute(cn_vm_program_t *prog, uint8_t *scratchpad, uint64_t regs[CN_REG_COUNT]);
+
+// Execute one HF14 pass: CN_V7_SEGMENTS repetitions of [serial chase over
+// the per-nonce buffer, then a slice of prog].  Each hop reads a buffer cell
+// then writes it back (buffer[idx] ^= chain), so touched cells diverge from
+// the fill and the buffer cannot be regenerated on the fly.  buffer_qwords is
+// its length in 64-bit words (>= 1, any length: addressing maps the chain
+// value through a mul128 high word, no power-of-two requirement).  SP_READ
+// consumes the chased values, SP_WRITE mutates the small pad
+// (CN_SCRATCHPAD_MEMORY_V14 bytes, write-hardness only).  *chain_state
+// carries the walk position across passes so the chase stays sequential for
+// the whole hash and cannot be precomputed.  Call CN_VM_ITERATIONS_V14 times.
+void cn_vm_execute_v7(cn_vm_program_t *prog, uint8_t *buffer, uint64_t buffer_qwords,
+                      uint8_t *pad, uint64_t regs[CN_REG_COUNT], uint64_t *chain_state);

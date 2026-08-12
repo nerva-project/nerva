@@ -128,6 +128,7 @@ namespace rct {
 	key scalarmultH_v2(const key & a);
 
 	key scalarmult8(const key & P);
+    void scalarmult8(ge_p3 &res, const key & P);
     bool isInMainSubgroup(const key & a);
 
     //Curve addition / subtractions
@@ -147,6 +148,12 @@ namespace rct {
     //B must be input after applying "precomp"
     void addKeys3(key &aAbB, const key &a, const key &A, const key &b, const ge_dsmp B);
     void addKeys3(key &aAbB, const key &a, const ge_dsmp A, const key &b, const ge_dsmp B);
+    //aGbBcC = aG + bB + cC where a, b, c are scalars, G is the basepoint and
+    //B, C are curve points input after applying "precomp". CLSAG (HF14).
+    void addKeys_aGbBcC(key &aGbBcC, const key &a, const key &b, const ge_dsmp B, const key &c, const ge_dsmp C);
+    //aAbBcC = aA + bB + cC where a, b, c are scalars and A, B, C are curve
+    //points input after applying "precomp". CLSAG (HF14).
+    void addKeys_aAbBcC(key &aAbBcC, const key &a, const ge_dsmp A, const key &b, const ge_dsmp B, const key &c, const ge_dsmp C);
     //AB = A - B where A, B are curve points
     void subKeys(key &AB, const key &A, const  key &B);
     //checks if A, B are equal as curve points
@@ -175,10 +182,12 @@ namespace rct {
     key cn_fast_hash(const key64 keys);
     key hash_to_scalar(const key64 keys);
 
-    //returns hashToPoint as described in https://github.com/ShenNoether/ge_fromfe_writeup 
+    //returns hashToPoint as described in https://github.com/ShenNoether/ge_fromfe_writeup
     key hashToPointSimple(const key &in);
     key hashToPoint(const key &in);
     void hashToPoint(key &out, const key &in);
+    //hash a key to p3 representation, for CLSAG (HF14) key image bases
+    void hash_to_p3(ge_p3 &hash8_p3, const key &k);
 
     //sums a vector of curve points (for scalars use sc_add)
     void sumKeys(key & Csum, const key &Cis);

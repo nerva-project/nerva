@@ -431,6 +431,9 @@ private:
       std::vector<uint8_t> extra;
       uint64_t unlock_time;
       bool use_bulletproofs;
+      // authoritative range proof / signature scheme selection (HF14); the
+      // use_bulletproofs bool stays for old archives and callers
+      rct::RCTConfig rct_config = { rct::RangeProofBorromean, 1 };
       std::vector<cryptonote::tx_destination_entry> dests; // original setup, does not include change
       uint32_t subaddr_account;   // subaddress account of your wallet to be used in this transfer
       std::set<uint32_t> subaddr_indices;  // set of address indices used as inputs in this transfer
@@ -1036,6 +1039,10 @@ private:
     uint8_t get_current_hard_fork();
     void get_hard_fork_info(uint8_t version, uint64_t &earliest_height);
     bool use_fork_rules(uint8_t version, int64_t early_blocks = 0);
+    // throws when an HF14 (CLSAG) transaction is requested on a wallet that
+    // cannot sign one: hardware-device keys (pre-CLSAG Ledger protocol) or
+    // multisig accounts
+    void check_hf14_construction_allowed(bool needs_clsag) const;
     uint8_t get_current_tx_version();
 
     std::string get_wallet_file() const;
@@ -1508,6 +1515,9 @@ private:
   };
 }
 
+// HF14: tx_construction_data carries rct_config from version 1 on
+BOOST_CLASS_VERSION(tools::wallet2::tx_construction_data, 1)
+
 namespace boost
 {
   namespace serialization
@@ -1660,6 +1670,15 @@ namespace boost
       a & x.subaddr_indices;
       a & x.selected_transfers;
       a & x.use_bulletproofs;
+      if (ver < 1)
+      {
+        // pre-HF14 archives carry only the bool; synthesize the config the
+        // old signing code would have used
+        if (Archive::is_loading::value)
+          x.rct_config = { x.use_bulletproofs ? rct::RangeProofPaddedBulletproof : rct::RangeProofBorromean, x.use_bulletproofs ? 2 : 1 };
+        return;
+      }
+      a & x.rct_config;
     }
 
     template <class Archive>

@@ -1,22 +1,21 @@
-// Copyright (c) 2018-2024, The Nerva Project
-// Copyright (c) 2014-2024, The Monero Project
-//
+// Copyright (c) 2017-2024, The Monero Project
+// 
 // All rights reserved.
-//
+// 
 // Redistribution and use in source and binary forms, with or without modification, are
 // permitted provided that the following conditions are met:
-//
+// 
 // 1. Redistributions of source code must retain the above copyright notice, this list of
 //    conditions and the following disclaimer.
-//
+// 
 // 2. Redistributions in binary form must reproduce the above copyright notice, this list
 //    of conditions and the following disclaimer in the documentation and/or other
 //    materials provided with the distribution.
-//
+// 
 // 3. Neither the name of the copyright holder nor the names of its contributors may be
 //    used to endorse or promote products derived from this software without specific
 //    prior written permission.
-//
+// 
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
 // EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
 // MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
@@ -27,19 +26,24 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-/* Hardware-AES path. This translation unit is compiled with -maes (x86) or
- * -march=armv8-a+crypto (aarch64). It defines cn_slow_hash*_hw symbols that
- * the dispatcher in slow-hash.c picks when the running CPU supports AES. */
+#pragma once
 
-#include "hash-ops.h"
+#ifndef BULLETPROOFS_PLUS_H
+#define BULLETPROOFS_PLUS_H
 
-#define cn_slow_hash       cn_slow_hash_hw
-#define cn_slow_hash_v7_8  cn_slow_hash_v7_8_hw
-#define cn_slow_hash_v9    cn_slow_hash_v9_hw
-#define cn_slow_hash_v10   cn_slow_hash_v10_hw
-#define cn_slow_hash_v11   cn_slow_hash_v11_hw
-#define cn_slow_hash_v13   cn_slow_hash_v13_hw
-#define cn_slow_hash_v14   cn_slow_hash_v14_hw
+#include "rctTypes.h"
 
-#include "slow-hash.h"
-#include "slow-hash-impl.h"
+namespace rct
+{
+
+BulletproofPlus bulletproof_plus_PROVE(const rct::key &v, const rct::key &gamma);
+BulletproofPlus bulletproof_plus_PROVE(uint64_t v, const rct::key &gamma);
+BulletproofPlus bulletproof_plus_PROVE(const rct::keyV &v, const rct::keyV &gamma);
+BulletproofPlus bulletproof_plus_PROVE(const std::vector<uint64_t> &v, const rct::keyV &gamma);
+bool bulletproof_plus_VERIFY(const BulletproofPlus &proof);
+bool bulletproof_plus_VERIFY(const std::vector<const BulletproofPlus*> &proofs);
+bool bulletproof_plus_VERIFY(const std::vector<BulletproofPlus> &proofs);
+
+}
+
+#endif
