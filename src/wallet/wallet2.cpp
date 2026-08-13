@@ -10177,12 +10177,6 @@ std::vector<size_t> wallet2::select_available_unmixable_outputs()
   return select_available_outputs_from_histogram(cryptonote::get_ring_size(get_current_hard_fork()), false, true, false);
 }
 //----------------------------------------------------------------------------------------------------
-std::vector<size_t> wallet2::select_available_mixable_outputs()
-{
-  // enough of the amount around to build a ring of the size this fork wants
-  return select_available_outputs_from_histogram(cryptonote::get_ring_size(get_current_hard_fork()), true, true, true);
-}
-//----------------------------------------------------------------------------------------------------
 std::vector<wallet2::pending_tx> wallet2::create_unmixable_sweep_transactions()
 {
   // From hard fork 1, we don't consider small amounts to be dust anymore
@@ -10212,15 +10206,6 @@ std::vector<wallet2::pending_tx> wallet2::create_unmixable_sweep_transactions()
   return create_transactions_from(m_account_public_address, false, 1, unmixable_transfer_outputs, unmixable_dust_outputs, 0 /*fake_outs_count */, 0 /* unlock_time */, 1 /*priority */, std::vector<uint8_t>());
 }
 
-void wallet2::discard_unmixable_outputs()
-{
-  // may throw
-  std::vector<size_t> unmixable_outputs = select_available_unmixable_outputs();
-  for (size_t idx : unmixable_outputs)
-  {
-    freeze(idx);
-  }
-}
 
 bool wallet2::get_tx_key_cached(const crypto::hash &txid, crypto::secret_key &tx_key, std::vector<crypto::secret_key> &additional_tx_keys) const
 {
