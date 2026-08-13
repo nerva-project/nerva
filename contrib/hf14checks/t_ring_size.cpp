@@ -3,12 +3,14 @@
 // Two things are pinned here:
 //  - the fork-gated rule in cryptonote_basic_impl, exhaustively over the fork
 //    versions and ring sizes that matter. The rule has to keep accepting the
-//    old size for historical blocks, accept either size at the fork that
-//    introduces the new one, and accept only the new one after that;
-//  - the size and verification cost a real CLSAG signature gains going from
-//    ring 5 to ring 16, so a regression in either is visible.
+//    old size for historical blocks and accept only the new one from the fork
+//    that introduces it, with no version where both pass;
+//  - the size a real CLSAG signature gains going from ring 5 to ring 16, and a
+//    loose ceiling on what it costs to verify, so a gross regression is visible
+//    without the check turning flaky on a busy machine.
 #include "check.h"
 
+#include <algorithm>
 #include <chrono>
 #include <vector>
 
@@ -23,6 +25,14 @@ using namespace rct;
 
 static void rule_across_fork_versions()
 {
+  // Version 0 is not a fork version, it is what a wallet reads when it has no
+  // daemon to ask. Consensus never sees it, and the wallet refuses to build a
+  // ring off it, but pin what the rule answers so neither side drifts into
+  // treating it as a real pre-fork version.
+  CHECK_TRUE(cryptonote::get_ring_size(0) == (size_t)DEFAULT_RINGSIZE);
+  CHECK_TRUE(cryptonote::is_valid_ring_size(0, DEFAULT_RINGSIZE));
+  CHECK_FALSE(cryptonote::is_valid_ring_size(0, DEFAULT_RINGSIZE_V14));
+
   // Historical blocks: only the old size, on every version below the fork.
   for (uint8_t v = 1; v < HF_VERSION_RING_SIZE_16; ++v)
   {
@@ -42,7 +52,7 @@ static void rule_across_fork_versions()
 
   // Nothing else is ever acceptable, on any version.
   const size_t nonsense[] = {0, 1, 2, 3, 4, 6, 7, 10, 11, 12, 15, 17, 32, 128};
-  for (uint8_t v = 1; v <= HF_VERSION_RING_SIZE_16 + 3; ++v)
+  for (uint8_t v = 0; v <= HF_VERSION_RING_SIZE_16 + 3; ++v)
     for (size_t r : nonsense)
       CHECK_FALSE(cryptonote::is_valid_ring_size(v, r));
 }
@@ -127,6 +137,11 @@ static void cost_of_the_bigger_ring()
   std::printf("   ring %2d: %4zu bytes/input, verify %.3f ms\n", DEFAULT_RINGSIZE, old_bytes, m_old);
   std::printf("   ring %2d: %4zu bytes/input, verify %.3f ms\n", DEFAULT_RINGSIZE_V14, new_bytes, m_new);
   std::printf("   delta  : +%zu bytes/input, verify %.2fx\n", new_bytes - old_bytes, m_new / m_old);
+
+  // Ring 16 verifies about 3.2x a ring of 5, which is roughly the ring ratio.
+  // The bound is deliberately far above that: it is here to catch a change that
+  // makes verification cost pile up, not to measure the machine it runs on.
+  CHECK_TRUE(m_new / m_old < 8.0);
 }
 
 int main()

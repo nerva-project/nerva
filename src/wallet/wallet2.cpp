@@ -10043,10 +10043,18 @@ bool wallet2::use_fork_rules(uint8_t version, int64_t early_blocks)
 // here and the two cannot drift apart.
 uint64_t wallet2::adjust_mixin(uint64_t mixin)
 {
-  const uint64_t ring_size = cryptonote::get_ring_size(get_current_hard_fork());
+  const uint8_t hf_version = get_current_hard_fork();
+  // Offline there is no version to read, and either guess builds a ring the
+  // network refuses: the old size after the fork, the new one before it. Say
+  // that rather than hand back a transaction the daemon drops without a reason.
+  THROW_WALLET_EXCEPTION_IF(hf_version == 0, error::no_connection_to_daemon, "hard_fork_info");
+  const uint64_t ring_size = cryptonote::get_ring_size(hf_version);
   if (mixin + 1 != ring_size)
   {
-    MWARNING("Requested ring size " << (mixin + 1) << ", using " << ring_size);
+    // Only worth a warning when the caller picked the size itself. Every
+    // ordinary send arrives here carrying DEFAULT_MIXIN.
+    if (mixin != DEFAULT_MIXIN)
+      MWARNING("Requested ring size " << (mixin + 1) << ", using " << ring_size);
     mixin = ring_size - 1;
   }
   return mixin;
