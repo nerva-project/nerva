@@ -1478,7 +1478,12 @@ namespace tools
 
     try
     {
-      std::vector<wallet2::pending_tx> ptx_vector = m_wallet->create_unmixable_sweep_transactions();
+      // An unmixable output is one there are too few of its amount around to
+      // build a ring from. check_tx_outputs refuses a non-zero output amount on
+      // every fork version, so this chain has none, and the builder would spend
+      // a get_output_histogram round trip to find that out before returning the
+      // same empty answer.
+      std::vector<wallet2::pending_tx> ptx_vector;
 
       return fill_response(ptx_vector, req.get_tx_keys, res.tx_key_list, res.amount_list, res.fee_list, res.multisig_txset, res.unsigned_txset, req.do_not_relay,
           res.tx_hash_list, req.get_tx_hex, res.tx_blob_list, req.get_tx_metadata, res.tx_metadata_list, er);
