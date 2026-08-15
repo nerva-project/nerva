@@ -63,8 +63,9 @@ using namespace epee;
 #define MAX_RESTRICTED_FAKE_OUTS_COUNT 40
 #define MAX_RESTRICTED_GLOBAL_FAKE_OUTS_COUNT 5000
 #define RESTRICTED_TRANSACTIONS_COUNT 100
+#define RESTRICTED_SPENT_KEY_IMAGES_COUNT 5000
 #define RESTRICTED_BLOCK_COUNT 1000
-#define RESTRICTED_BLOCK_HEADER_COUNT 1000
+#define RESTRICTED_BLOCK_HEADER_RANGE 1000
 
 #define OUTPUT_HISTOGRAM_RECENT_CUTOFF_RESTRICTION (3 * 86400) // 3 days max, the wallet requests 1.8 days
 
@@ -1119,6 +1120,11 @@ namespace cryptonote
       return ok;
 
     const bool restricted = m_restricted && ctx;
+    if (restricted && req.key_images.size() > RESTRICTED_SPENT_KEY_IMAGES_COUNT)
+    {
+      res.status = "Too many key images requested in restricted mode";
+      return true;
+    }
     const bool request_has_rpc_origin = ctx != NULL;
     std::vector<crypto::key_image> key_images;
     for(const auto& ki_hex_str: req.key_images)
@@ -2055,6 +2061,12 @@ namespace cryptonote
     };
 
     const bool restricted = m_restricted && ctx;
+    if (restricted && req.hashes.size() > RESTRICTED_BLOCK_COUNT)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+      error_resp.message = "Too many block headers requested in restricted mode";
+      return false;
+    }
     if (!req.hash.empty())
     {
       if (!get(req.hash, res.block_header, restricted, error_resp))
@@ -2087,7 +2099,7 @@ namespace cryptonote
       return false;
     }
     const bool restricted = m_restricted && ctx;
-    if (restricted && req.end_height - req.start_height + 1 > RESTRICTED_BLOCK_HEADER_COUNT)
+    if (restricted && req.end_height - req.start_height > RESTRICTED_BLOCK_HEADER_RANGE)
     {
       error_resp.code = CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT;
       error_resp.message = "Too many block headers requested in restricted mode";
