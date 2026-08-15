@@ -149,3 +149,6 @@ target_link_libraries(daemon_rpc_server
     ${EXTRA_LIBRARIES})
 target_include_directories(daemon_rpc_server PUBLIC ${ZMQ_INCLUDE_PATH})
 target_include_directories(obj_daemon_rpc_server PUBLIC ${ZMQ_INCLUDE_PATH})
+
+# WebSocket subscription server (optional, disabled by default)
+add_subdirectory(websocket)
