@@ -2520,6 +2520,94 @@ namespace cryptonote
       return r;
 
     res.fee = m_core.get_blockchain_storage().get_dynamic_per_kb_fee_estimate(req.grace_blocks);
+
+    // Calculate fee percentiles (p10, p50, p90) from the last 100 blocks.
+    // This gives wallets a more nuanced view of the fee market.
+    constexpr size_t PERCENTILE_WINDOW = 100;
+    std::vector<uint64_t> fees_per_block;
+    fees_per_block.reserve(PERCENTILE_WINDOW);
+
+    auto& bc = m_core.get_blockchain_storage();
+    uint64_t current_height = bc.get_current_blockchain_height();
+
+    size_t scan_start = current_height > PERCENTILE_WINDOW
+      ? current_height - PERCENTILE_WINDOW
+      : 0;
+
+    for (uint64_t h = scan_start; h < current_height; ++h)
+    {
+      // For each block, compute the median fee per kB from its transactions
+      crypto::hash block_hash = bc.get_block_id_by_height(h);
+      if (block_hash == crypto::null_hash)
+        continue;
+
+      block blk;
+      if (!bc.get_block_by_hash(block_hash, blk))
+        continue;
+
+      // Skip empty blocks (coinbase-only)
+      if (blk.tx_hashes.empty())
+        continue;
+
+      // Batch-fetch all transactions in this block
+      std::vector<transaction> block_txs;
+      std::vector<crypto::hash> missed_txs;
+      bc.get_transactions(blk.tx_hashes, block_txs, missed_txs);
+
+      std::vector<uint64_t> block_fees;
+      for (const auto& tx : block_txs)
+      {
+        uint64_t tx_weight = get_transaction_weight(tx);
+        if (tx_weight == 0)
+          continue;
+        uint64_t fee = tx.rct_signatures.txnFee;
+        if (fee == 0)
+          continue;
+        // Fee per kB (atomic units per 1024 bytes)
+        uint64_t fee_per_kb = fee * 1024 / tx_weight;
+        block_fees.push_back(fee_per_kb);
+      }
+
+      if (!block_fees.empty())
+      {
+        std::sort(block_fees.begin(), block_fees.end());
+        uint64_t median = block_fees[block_fees.size() / 2];
+        fees_per_block.push_back(median);
+        res.fee_history.push_back(median);
+      }
+    }
+
+    res.blocks_scanned = fees_per_block.size();
+
+    // Compute percentiles from the per-block median fees
+    if (!fees_per_block.empty())
+    {
+      std::sort(fees_per_block.begin(), fees_per_block.end());
+      size_t n = fees_per_block.size();
+      res.fee_p10 = fees_per_block[n / 10];
+      res.fee_p50 = fees_per_block[n / 2];
+      res.fee_p90 = fees_per_block[(n * 9) / 10];
+
+      // Convert to XNV for convenience (1 XNV = 10^12 atomic units)
+      constexpr double COIN = 1e12;
+      res.fee_xnv = static_cast<double>(res.fee) / COIN;
+      res.fee_p10_xnv = static_cast<double>(res.fee_p10) / COIN;
+      res.fee_p50_xnv = static_cast<double>(res.fee_p50) / COIN;
+      res.fee_p90_xnv = static_cast<double>(res.fee_p90) / COIN;
+    }
+    else
+    {
+      // No tx data available yet, fall back to the estimate for all percentiles
+      res.fee_p10 = res.fee;
+      res.fee_p50 = res.fee;
+      res.fee_p90 = res.fee;
+      constexpr double COIN = 1e12;
+      res.fee_xnv = static_cast<double>(res.fee) / COIN;
+      res.fee_p10_xnv = res.fee_xnv;
+      res.fee_p50_xnv = res.fee_xnv;
+      res.fee_p90_xnv = res.fee_xnv;
+    }
+
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }

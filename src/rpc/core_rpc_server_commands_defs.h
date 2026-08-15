@@ -122,7 +122,7 @@ namespace cryptonote
 
     struct response_t: public rpc_response_base
     {
-      uint64_t 	 height;
+      uint64_t   height;
       std::string hash;
 
       BEGIN_KV_SERIALIZE_MAP()
@@ -1983,11 +1983,42 @@ namespace cryptonote
 
     struct response_t: public rpc_response_base
     {
-      uint64_t fee;
+      uint64_t fee;           ///< Median fee per kB (backward compatible)
+
+      /// Fee percentiles over the last N blocks (atomic units per kB).
+      /// These give wallets a more nuanced view of the fee market:
+      /// - p10: cheap/slow (90% of recent txs paid more)
+      /// - p50: median
+      /// - p90: fast/urgent (10% of recent txs paid more)
+      uint64_t fee_p10;
+      uint64_t fee_p50;
+      uint64_t fee_p90;
+
+      /// Number of blocks used for the percentile calculation
+      uint64_t blocks_scanned;
+
+      /// Historical fee snapshots (median per block, most recent first)
+      /// Limited to the last 100 blocks for bandwidth efficiency
+      std::vector<uint64_t> fee_history;
+
+      /// Fees in XNV (human-readable) for convenience
+      double fee_xnv;
+      double fee_p10_xnv;
+      double fee_p50_xnv;
+      double fee_p90_xnv;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE_PARENT(rpc_response_base)
         KV_SERIALIZE(fee)
+        KV_SERIALIZE(fee_p10)
+        KV_SERIALIZE(fee_p50)
+        KV_SERIALIZE(fee_p90)
+        KV_SERIALIZE(blocks_scanned)
+        KV_SERIALIZE(fee_history)
+        KV_SERIALIZE(fee_xnv)
+        KV_SERIALIZE(fee_p10_xnv)
+        KV_SERIALIZE(fee_p50_xnv)
+        KV_SERIALIZE(fee_p90_xnv)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;
