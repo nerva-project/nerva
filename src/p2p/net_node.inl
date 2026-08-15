@@ -120,6 +120,9 @@ namespace nodetool
     command_line::add_arg(desc, arg_limit_rate);
     command_line::add_arg(desc, arg_min_ver);
     command_line::add_arg(desc, arg_dandelion_plus_plus);
+    command_line::add_arg(desc, arg_tor_control_host);
+    command_line::add_arg(desc, arg_tor_control_port);
+    command_line::add_arg(desc, arg_tor_cookie_auth);
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>

@@ -40,6 +40,7 @@ set(common_sources
   i18n.cpp
   notify.cpp
   http_notify.cpp
+  tor_autoconfig.cpp
   password.cpp
   perf_timer.cpp
   pruning.cpp
@@ -75,6 +76,7 @@ set(common_private_headers
   http_connection.h
   notify.h
   http_notify.h
+  tor_autoconfig.h
   pod-class.h
   pruning.h
   rpc_client.h

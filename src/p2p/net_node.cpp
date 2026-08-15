@@ -40,6 +40,7 @@
 #include <utility>
 
 #include "common/command_line.h"
+#include "common/tor_autoconfig.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_protocol/cryptonote_protocol_defs.h"
 #include "net_node.h"
@@ -173,6 +174,17 @@ namespace nodetool
         "originating node and the transaction. Recommended for privacy.",
         false
     };
+
+    // Tor control port settings for --anonymous-inbound auto
+    const command_line::arg_descriptor<std::string> arg_tor_control_host = {
+        "tor-control-host", "Tor control port host for --anonymous-inbound auto", "127.0.0.1"
+    };
+    const command_line::arg_descriptor<uint16_t> arg_tor_control_port = {
+        "tor-control-port", "Tor control port for --anonymous-inbound auto", 9051
+    };
+    const command_line::arg_descriptor<std::string> arg_tor_cookie_auth = {
+        "tor-cookie-auth-cookie", "Path to the Tor control auth cookie file (for SAFECOOKIE auth)"
+    };
             boost::optional<std::vector<proxy>> get_proxies(boost::program_options::variables_map const& vm)
     {
         namespace ip = boost::asio::ip;
@@ -261,6 +273,36 @@ namespace nodetool
             CHECK_AND_ASSERT_MES(!next.eof() && !next->empty(), boost::none, "No local ipv4:port given for --" << arg_anonymous_inbound.name);
             const boost::string_ref bind{next->begin(), next->size()};
 
+            // Check for "auto" keyword - request Tor to create a v3 onion service
+            std::string resolved_address;
+            if (tools::TorAutoConfig::is_auto(std::string(address)))
+            {
+                std::string control_host = command_line::get_arg(vm, arg_tor_control_host);
+                uint16_t control_port = command_line::get_arg(vm, arg_tor_control_port);
+                std::string cookie_path = command_line::get_arg(vm, arg_tor_cookie_auth);
+
+                // Extract the local port from the bind address to use as the onion port
+                const std::size_t colon_pos = bind.find_first_of(':');
+                uint16_t local_port_val = colon_pos < bind.size()
+                    ? static_cast<uint16_t>(std::stoi(std::string(bind.substr(colon_pos + 1))))
+                    : cryptonote::get_config(cryptonote::MAINNET).P2P_DEFAULT_PORT;
+
+                MINFO("--anonymous-inbound auto: requesting Tor to create a v3 onion service");
+                resolved_address = tools::TorAutoConfig::create_onion_service(
+                    control_host, control_port, local_port_val, local_port_val, cookie_path);
+
+                if (resolved_address.empty())
+                {
+                    MERROR("Tor auto-config failed. Ensure Tor is running with ControlPort enabled "
+                           "and CookieAuthentication 1 in torrc, or provide --tor-cookie-auth-cookie.");
+                    return boost::none;
+                }
+                MINFO("Tor auto-config: using onion address " << resolved_address);
+            }
+
+            const std::string& effective_address = resolved_address.empty()
+                ? std::string(address) : resolved_address;
+
             const std::size_t colon = bind.find_first_of(':');
             CHECK_AND_ASSERT_MES(colon < bind.size(), boost::none, "No local port given for --" << arg_anonymous_inbound.name);
 
@@ -275,7 +317,7 @@ namespace nodetool
                 }
             }
 
-            expect<epee::net_utils::network_address> our_address = net::get_network_address(address, 0);
+            expect<epee::net_utils::network_address> our_address = net::get_network_address(effective_address, 0);
             switch (our_address ? our_address->get_type_id() : epee::net_utils::address_type::invalid)
             {
             case net::tor_address::get_type_id():

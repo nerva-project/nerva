@@ -534,6 +534,9 @@ namespace nodetool
 
     extern const command_line::arg_descriptor<std::string> arg_min_ver;
     extern const command_line::arg_descriptor<bool> arg_dandelion_plus_plus;
+    extern const command_line::arg_descriptor<std::string> arg_tor_control_host;
+    extern const command_line::arg_descriptor<uint16_t> arg_tor_control_port;
+    extern const command_line::arg_descriptor<std::string> arg_tor_cookie_auth;
 }
 
 POP_WARNINGS
