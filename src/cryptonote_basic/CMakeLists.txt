@@ -52,6 +52,9 @@ set(cryptonote_basic_private_headers
   miner.h
   miner_ipc.h
   tx_extra.h
+  view_tags.h
+  burn.h
+  payment_id_v2.h
   verification_context.h)
 
 monero_private_headers(cryptonote_basic
