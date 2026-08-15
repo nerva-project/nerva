@@ -163,9 +163,19 @@ namespace nodetool
     const command_line::arg_descriptor<int64_t> arg_limit_rate = {"limit-rate", "set limit-rate [kB/s]", -1};
 
     const command_line::arg_descriptor<std::string> arg_min_ver = {"min-version", "Minimum software version to allow connections with"};
-	    boost::optional<std::vector<proxy>> get_proxies(boost::program_options::variables_map const& vm)
+
+    // Dandelion++ stem propagation for transaction privacy
+    const command_line::arg_descriptor<bool> arg_dandelion_plus_plus = {
+        "dandelion++",
+        "Enable Dandelion++ stem propagation for transactions. Instead of flooding "
+        "transactions to all peers, forward each transaction to a single stem peer "
+        "(selected from a rotating connection map), breaking the link between the "
+        "originating node and the transaction. Recommended for privacy.",
+        false
+    };
+            boost::optional<std::vector<proxy>> get_proxies(boost::program_options::variables_map const& vm)
     {
-	namespace ip = boost::asio::ip;
+        namespace ip = boost::asio::ip;
 
         std::vector<proxy> proxies{};
 
@@ -227,7 +237,7 @@ namespace nodetool
                 return boost::none;
             }
             proxies.back().address = ip::tcp::endpoint{ip::address_v4{boost::endian::native_to_big(ip)}, port};
-	}
+        }
 
         return proxies;
     }

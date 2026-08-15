@@ -533,6 +533,7 @@ namespace nodetool
     extern const command_line::arg_descriptor<int64_t> arg_limit_rate;
 
     extern const command_line::arg_descriptor<std::string> arg_min_ver;
+    extern const command_line::arg_descriptor<bool> arg_dandelion_plus_plus;
 }
 
 POP_WARNINGS

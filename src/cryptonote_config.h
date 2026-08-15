@@ -188,6 +188,15 @@
 
 #define CRYPTONOTE_MAX_FRAGMENTS                                        20
 
+// Dandelion++ stem propagation
+// Number of stem connections maintained per node for the Dandelion++ map.
+// The original Dandelion++ paper recommends m=2 for good anonymity set.
+#define CRYPTONOTE_DANDELIONPP_STEMS                                    2
+// Embargo timeout (seconds) - after this, a stem transaction is fluffed
+// (flooded) to prevent it from being stuck indefinitely if the stem peer
+// goes offline. Default: 30 seconds (approx 30x block target).
+#define CRYPTONOTE_DANDELIONPP_EMBARGO_TIMEOUT                           30
+
 #define DONATION_ADDR "NV1aMtARDQjK8j7XeoQ66S7XQe5ZS8CX92XqXmJxSZMpSDf2i11NQyqgHzghmRsDHR1LwYv3bEnE3VoqqbmyRdrR2MMBfdXvY"
 
 struct hard_fork

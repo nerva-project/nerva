@@ -191,7 +191,7 @@ namespace levin
   {
     struct zone
     {
-      explicit zone(boost::asio::io_context& io_context, std::shared_ptr<connections> p2p, epee::byte_slice noise_in, bool is_public)
+      explicit zone(boost::asio::io_context& io_context, std::shared_ptr<connections> p2p, epee::byte_slice noise_in, bool is_public, bool dandelion_enabled = false)
         : p2p(std::move(p2p)),
           noise(std::move(noise_in)),
           next_epoch(io_context),
@@ -199,7 +199,8 @@ namespace levin
           map(),
           channels(),
           connection_count(0),
-          is_public(is_public)
+          is_public(is_public),
+          dandelion_enabled(dandelion_enabled)
       {
         for (std::size_t count = 0; !noise.empty() && count < CRYPTONOTE_NOISE_CHANNELS; ++count)
           channels.emplace_back(io_context);
@@ -213,6 +214,7 @@ namespace levin
       std::deque<noise_channel> channels;  //!< Never touch after init; only update elements on `noise_channel.strand`
       std::atomic<std::size_t> connection_count; //!< Only update in strand, can be read at any time
       const bool is_public;                      //!< Zone is public ipv4/ipv6 connections
+      const bool dandelion_enabled;              //!< Dandelion++ stem propagation enabled for this zone
     };
   } // detail
 
@@ -292,6 +294,64 @@ namespace levin
 
         for (const boost::uuids::uuid& connection : connections)
           zone_->p2p->send(message_.clone(), connection);
+      }
+    };
+
+    //! Sends a message to a single stem connection (Dandelion++ stem phase).
+    /*!
+      Implements the Dandelion++ stem propagation pattern: instead of flooding
+      the transaction to all peers, select a single outgoing connection (the
+      "stem") via the zone's connection_map and forward the transaction only
+      to that peer. The receiving peer repeats the process with its own stem,
+      building a linear propagation path before someone eventually "fluffs"
+      the transaction back to flood mode. This breaks the link between the
+      originating node and the transaction, defeating passive network observers.
+
+      The stem is selected from the zone's connection_map, which is rotated
+      every epoch via change_channels. Each source UUID maps to a deterministic
+      stem within an epoch, preventing an adversary from correlating multiple
+      transactions to the same originator.
+
+      If the selected stem is nil (connection died or map empty), the message
+      falls back to flooding to avoid silently dropping the transaction.
+    */
+    class stem_notify
+    {
+      std::shared_ptr<detail::zone> zone_;
+      epee::byte_slice message_;
+      boost::uuids::uuid source_;
+
+    public:
+      explicit stem_notify(std::shared_ptr<detail::zone> zone, epee::byte_slice message, const boost::uuids::uuid& source)
+        : zone_(std::move(zone)), message_(message.clone()), source_(source)
+      {}
+
+      stem_notify(stem_notify&&) = default;
+      stem_notify(const stem_notify& source)
+        : zone_(source.zone_), message_(source.message_.clone()), source_(source.source_)
+      {}
+
+      void operator()() const
+      {
+        if (!zone_ || !zone_->p2p)
+          return;
+
+        assert(zone_->strand.running_in_this_thread());
+
+        // Select the stem connection for this source via the Dandelion++ map.
+        // If the map is empty or the selected stem is nil (connection died),
+        // fall back to flooding to avoid silently dropping the transaction.
+        const boost::uuids::uuid stem = zone_->map.get_stem(source_);
+
+        if (stem.is_nil())
+        {
+          MDEBUG("Dandelion++ stem: no stem available for this source, fluffing");
+          flood_notify{zone_, message_.clone(), source_}();
+          return;
+        }
+
+        MDEBUG("Dandelion++ stem: forwarding tx to a single stem connection");
+        zone_->p2p->send(message_.clone(), stem);
       }
     };
 
@@ -485,8 +545,8 @@ namespace levin
     };
   } // anonymous
 
-  notify::notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::byte_slice noise, bool is_public)
-    : zone_(std::make_shared<detail::zone>(service, std::move(p2p), std::move(noise), is_public))
+  notify::notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::byte_slice noise, bool is_public, bool dandelion_enabled)
+    : zone_(std::make_shared<detail::zone>(service, std::move(p2p), std::move(noise), is_public, dandelion_enabled))
   {
     if (!zone_->p2p)
       throw std::logic_error{"cryptonote::levin::notify cannot have nullptr p2p argument"};
@@ -497,6 +557,16 @@ namespace levin
       start_epoch{zone_, noise_min_epoch, noise_epoch_range, CRYPTONOTE_NOISE_CHANNELS}();
       for (std::size_t channel = 0; channel < zone_->channels.size(); ++channel)
         send_noise::wait(now, zone_, channel);
+    }
+
+    // Initialize the Dandelion++ connection map with current outgoing connections.
+    // The map is rotated every epoch via change_channels (start_epoch timer).
+    if (zone_->dandelion_enabled && zone_->is_public)
+    {
+      MINFO("Dandelion++ stem propagation enabled for the public zone");
+      boost::asio::dispatch(zone_->strand,
+        change_channels{zone_, net::dandelionpp::connection_map{get_out_connections(*(zone_->p2p)), CRYPTONOTE_DANDELIONPP_STEMS}}
+      );
     }
   }
 
@@ -573,8 +643,19 @@ namespace levin
       epee::byte_slice message =
         epee::levin::make_notify(NOTIFY_NEW_TRANSACTIONS::ID, epee::strspan<std::uint8_t>(payload));
 
-      // traditional monero send technique
-      boost::asio::dispatch(zone_->strand, flood_notify{zone_, std::move(message), source});
+      // Use Dandelion++ stem propagation when enabled for this zone.
+      // The stem path forwards the transaction to a single peer selected
+      // via the connection_map, breaking the link between originator and tx.
+      // Falls back to flood if the stem is nil (handled in stem_notify).
+      if (zone_->dandelion_enabled && zone_->is_public)
+      {
+        boost::asio::dispatch(zone_->strand, stem_notify{zone_, std::move(message), source});
+      }
+      else
+      {
+        // traditional monero send technique
+        boost::asio::dispatch(zone_->strand, flood_notify{zone_, std::move(message), source});
+      }
     }
 
     return true;

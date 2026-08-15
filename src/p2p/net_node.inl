@@ -119,6 +119,7 @@ namespace nodetool
     command_line::add_arg(desc, arg_limit_rate_down);
     command_line::add_arg(desc, arg_limit_rate);
     command_line::add_arg(desc, arg_min_ver);
+    command_line::add_arg(desc, arg_dandelion_plus_plus);
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -423,8 +424,12 @@ namespace nodetool
     m_offline = command_line::get_arg(vm, cryptonote::arg_offline);
     m_use_ipv6 = command_line::get_arg(vm, arg_p2p_use_ipv6);
     m_require_ipv4 = !command_line::get_arg(vm, arg_p2p_ignore_ipv4);
+
+    // Check if Dandelion++ stem propagation is enabled via CLI
+    const bool dandelion_enabled = command_line::get_arg(vm, arg_dandelion_plus_plus);
+
     public_zone.m_notifier = cryptonote::levin::notify{
-      public_zone.m_net_server.get_io_context(), public_zone.m_net_server.get_config_shared(), nullptr, true
+      public_zone.m_net_server.get_io_context(), public_zone.m_net_server.get_config_shared(), nullptr, true, dandelion_enabled
     };
 
     if (command_line::has_arg(vm, arg_p2p_add_peer))
@@ -546,7 +551,7 @@ namespace nodetool
       }
 
       zone.m_notifier = cryptonote::levin::notify{
-        zone.m_net_server.get_io_context(), zone.m_net_server.get_config_shared(), std::move(this_noise), false
+        zone.m_net_server.get_io_context(), zone.m_net_server.get_config_shared(), std::move(this_noise), false, false
       };
     }
 
@@ -2088,7 +2093,7 @@ namespace nodetool
         }
         if (c_id.first <= zone->first)
           break;
-	  
+          
         ++zone;
       }
       if (zone->first == c_id.first)

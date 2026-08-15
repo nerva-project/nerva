@@ -87,7 +87,15 @@ namespace levin
     {}
 
     //! Construct an instance with available notification `zones`.
-    explicit notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::byte_slice noise, bool is_public);
+    /*!
+      \param dandelion_enabled Enable Dandelion++ stem propagation for the
+        public zone. When true, transactions are forwarded to a single stem
+        peer (selected via the connection_map) instead of being flooded to
+        all peers. This breaks the link between the originating node and
+        the transaction. The stem path falls back to flooding if no stem is
+        available. Ignored for Tor/I2P zones (noise channels are used instead).
+    */
+    explicit notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::byte_slice noise, bool is_public, bool dandelion_enabled = false);
 
     notify(const notify&) = delete;
     notify(notify&&) = default;
