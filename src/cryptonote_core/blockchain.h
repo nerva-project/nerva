@@ -65,7 +65,7 @@
 #include "cryptonote_basic/hardfork.h"
 #include "blockchain_db/blockchain_db.h"
 
-namespace tools { class Notify; }
+namespace tools { class Notify; class HTTPNotify; }
 
 namespace cryptonote
 {
@@ -788,11 +788,25 @@ namespace cryptonote
     void set_block_notify(const std::shared_ptr<tools::Notify> &notify) { m_block_notify = notify; }
 
     /**
+     * @brief sets a block HTTP webhook to call for every new block
+     *
+     * @param webhook the HTTPNotify object to call at every new block
+     */
+    void set_block_webhook(const std::shared_ptr<tools::HTTPNotify> &webhook) { m_block_webhook = webhook; }
+
+    /**
      * @brief sets a reorg notify object to call for every reorg
      *
      * @param notify the notify object to call at every reorg
      */
     void set_reorg_notify(const std::shared_ptr<tools::Notify> &notify) { m_reorg_notify = notify; }
+
+    /**
+     * @brief sets a reorg HTTP webhook to call for every reorg
+     *
+     * @param webhook the HTTPNotify object to call at every reorg
+     */
+    void set_reorg_webhook(const std::shared_ptr<tools::HTTPNotify> &webhook) { m_reorg_webhook = webhook; }
 
     /**
      * @brief Put DB in safe sync mode
@@ -1144,6 +1158,10 @@ namespace cryptonote
 
     std::shared_ptr<tools::Notify> m_block_notify;
     std::shared_ptr<tools::Notify> m_reorg_notify;
+
+    // HTTP webhook notifiers (alternative to subprocess-based Notify)
+    std::shared_ptr<tools::HTTPNotify> m_block_webhook;
+    std::shared_ptr<tools::HTTPNotify> m_reorg_webhook;
 
     // for prepare_handle_incoming_blocks
     uint64_t m_prepare_height;

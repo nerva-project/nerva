@@ -56,6 +56,7 @@ using namespace epee;
 #include "blockchain_db/blockchain_db.h"
 #include "ringct/rctSigs.h"
 #include "common/notify.h"
+#include "common/http_notify.h"
 #include "version.h"
 #include "common/xnv_https.h"
 #include "common/dns_config.h"
@@ -214,6 +215,22 @@ namespace cryptonote
     "is acted upon."
   , ""
   };
+  static const command_line::arg_descriptor<std::string> arg_block_webhook = {
+    "block-webhook"
+  , "Send an HTTP POST (JSON) to this URL for each new block. The body is a "
+    "JSON object: {\"event\":\"new_block\",\"data\":\"<block_hash>\","
+    "\"timestamp\":<unix_seconds>}. Use this for webhook-based integrations "
+    "(Slack, Discord, monitoring, custom services). Only http:// is supported; "
+    "for HTTPS put a reverse proxy in front. Alternative to --block-notify."
+  , ""
+  };
+  static const command_line::arg_descriptor<std::string> arg_reorg_webhook = {
+    "reorg-webhook"
+  , "Send an HTTP POST (JSON) to this URL for each reorg. The body includes "
+    "the split height, new chain height, and number of blocks discarded. "
+    "Alternative to --reorg-notify."
+  , ""
+  };
   static const command_line::arg_descriptor<bool> arg_keep_alt_blocks  = {
     "keep-alt-blocks"
   , "Keep alternative blocks on restart"
@@ -333,8 +350,10 @@ namespace cryptonote
     command_line::add_arg(desc, arg_max_txpool_weight);
     command_line::add_arg(desc, arg_pad_transactions);
     command_line::add_arg(desc, arg_block_notify);
+    command_line::add_arg(desc, arg_block_webhook);
     command_line::add_arg(desc, arg_prune_blockchain);
     command_line::add_arg(desc, arg_reorg_notify);
+    command_line::add_arg(desc, arg_reorg_webhook);
     command_line::add_arg(desc, arg_block_rate_notify);
     command_line::add_arg(desc, arg_keep_alt_blocks);
     command_line::add_arg(desc, arg_track_block_recvd_times);
@@ -645,6 +664,11 @@ namespace cryptonote
     {
       if (!command_line::is_arg_defaulted(vm, arg_block_notify))
         m_blockchain_storage.set_block_notify(std::shared_ptr<tools::Notify>(new tools::Notify(command_line::get_arg(vm, arg_block_notify).c_str())));
+
+      // HTTP webhook alternative for environments where running a subprocess
+      // is not desirable (containers, managed nodes, cloud deployments).
+      if (!command_line::is_arg_defaulted(vm, arg_block_webhook))
+        m_blockchain_storage.set_block_webhook(std::shared_ptr<tools::HTTPNotify>(new tools::HTTPNotify(command_line::get_arg(vm, arg_block_webhook))));
     }
     catch (const std::exception &e)
     {
@@ -655,6 +679,9 @@ namespace cryptonote
     {
       if (!command_line::is_arg_defaulted(vm, arg_reorg_notify))
         m_blockchain_storage.set_reorg_notify(std::shared_ptr<tools::Notify>(new tools::Notify(command_line::get_arg(vm, arg_reorg_notify).c_str())));
+
+      if (!command_line::is_arg_defaulted(vm, arg_reorg_webhook))
+        m_blockchain_storage.set_reorg_webhook(std::shared_ptr<tools::HTTPNotify>(new tools::HTTPNotify(command_line::get_arg(vm, arg_reorg_webhook))));
     }
     catch (const std::exception &e)
     {

@@ -1107,6 +1107,13 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
     reorg_notify->notify("%s", std::to_string(split_height).c_str(), "%h", std::to_string(m_db->height()).c_str(),
         "%n", std::to_string(m_db->height() - split_height).c_str(), "%d", std::to_string(discarded_blocks).c_str(), NULL);
 
+  // Fire the HTTP webhook if configured
+  if (m_reorg_webhook)
+    m_reorg_webhook->notify("reorg", std::to_string(split_height).c_str(),
+      {{"new_height", std::to_string(m_db->height())},
+       {"new_blocks", std::to_string(m_db->height() - split_height)},
+       {"discarded_blocks", std::to_string(discarded_blocks)}});
+
   MGINFO_GREEN("REORGANIZE SUCCESS! on height: " << split_height << ", new blockchain size: " << m_db->height());
   return true;
 }
@@ -3824,6 +3831,11 @@ leave:
   std::shared_ptr<tools::Notify> block_notify = m_block_notify;
   if (block_notify)
     block_notify->notify("%s", epee::string_tools::pod_to_hex(id).c_str(), NULL);
+
+  // Fire the HTTP webhook if configured
+  if (m_block_webhook)
+    m_block_webhook->notify("new_block", epee::string_tools::pod_to_hex(id).c_str(),
+      {{"height", std::to_string(height)}});
 
   return true;
 }

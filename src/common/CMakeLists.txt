@@ -39,6 +39,7 @@ set(common_sources
   util.cpp
   i18n.cpp
   notify.cpp
+  http_notify.cpp
   password.cpp
   perf_timer.cpp
   pruning.cpp
@@ -73,6 +74,7 @@ set(common_private_headers
   expect.h
   http_connection.h
   notify.h
+  http_notify.h
   pod-class.h
   pruning.h
   rpc_client.h
