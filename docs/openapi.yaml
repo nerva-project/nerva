@@ -1,0 +1,518 @@
+openapi: 3.0.3
+info:
+  title: Nerva Block Explorer API
+  description: 'REST and JSON-RPC API for the Nerva (XNV) daemon. This API exposes blockchain data, network statistics, transaction
+    submission, and mining functionality.
+
+
+    The Nerva daemon exposes two types of endpoints:
+
+    1. REST-style endpoints (e.g. /get_info, /get_transactions)
+
+    2. JSON-RPC 2.0 methods under /json_rpc
+
+
+    Some endpoints are restricted (require --restricted-rpc to be disabled or --rpc-login authentication).
+
+
+    Base URL: http://localhost:17566 (mainnet RPC port)
+
+    Testnet: http://localhost:18566
+
+    Stagenet: http://localhost:19566'
+  version: 2.0.0
+  contact:
+    name: Nerva Project
+    url: https://nerva.one
+    email: contact@nerva.one
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+- url: http://localhost:17566
+  description: Local mainnet daemon
+- url: http://localhost:18566
+  description: Local testnet daemon
+- url: http://localhost:19566
+  description: Local stagenet daemon
+- url: https://api.nerva.one
+  description: Public Nerva API proxy
+tags:
+- name: Network
+  description: Network info and statistics
+- name: Blocks
+  description: Block queries and submission
+- name: Transactions
+  description: Transaction queries and submission
+- name: Mempool
+  description: Transaction mempool operations
+- name: Mining
+  description: Mining and block templates
+- name: Peers
+  description: Peer list and connection management
+- name: Hardforks
+  description: Hard fork information
+- name: Nerva-specific
+  description: Endpoints specific to Nerva (not in Monero)
+- name: Restricted
+  description: Endpoints requiring authentication or non-restricted RPC
+paths:
+  /get_height:
+    get:
+      tags:
+      - Network
+      summary: Get the current blockchain height
+      operationId: on_get_height
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /getheight:
+    get:
+      tags:
+      - Network
+      summary: Alias for /get_height
+      operationId: on_get_height
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /get_info:
+    get:
+      tags:
+      - Network
+      summary: Get network info (height, difficulty, connections, etc.)
+      operationId: on_get_info
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /getinfo:
+    get:
+      tags:
+      - Network
+      summary: Alias for /get_info
+      operationId: on_get_info
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /get_transactions:
+    post:
+      tags:
+      - Transactions
+      summary: Get transactions by hashes
+      operationId: on_get_transactions
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /gettransactions:
+    post:
+      tags:
+      - Transactions
+      summary: Alias for /get_transactions
+      operationId: on_get_transactions
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /get_transaction_pool:
+    get:
+      tags:
+      - Transactions
+      summary: Get the transaction mempool
+      operationId: on_get_transaction_pool
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /get_transaction_pool_stats:
+    get:
+      tags:
+      - Transactions
+      summary: Get mempool statistics
+      operationId: on_get_transaction_pool_stats
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /send_raw_transaction:
+    post:
+      tags:
+      - Transactions
+      summary: Submit a raw transaction to the network
+      operationId: on_send_raw_tx
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /sendrawtransaction:
+    post:
+      tags:
+      - Transactions
+      summary: Alias for /send_raw_transaction
+      operationId: on_send_raw_tx
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /is_key_image_spent:
+    post:
+      tags:
+      - Network
+      summary: Check if a key image has been spent
+      operationId: on_is_key_image_spent
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /get_alt_blocks_hashes:
+    get:
+      tags:
+      - Blocks
+      summary: Get hashes of alternative blocks
+      operationId: on_get_alt_blocks_hashes
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /get_peer_list:
+    get:
+      tags:
+      - Peers
+      summary: Get the peer list (restricted)
+      operationId: on_get_peer_list
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /get_public_nodes:
+    get:
+      tags:
+      - Network
+      summary: Get list of public nodes
+      operationId: on_get_public_nodes
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /get_limit:
+    get:
+      tags:
+      - Network
+      summary: Get upload/download rate limits
+      operationId: on_get_limit
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /get_net_stats:
+    get:
+      tags:
+      - Network
+      summary: Get network statistics (restricted)
+      operationId: on_get_net_stats
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /get_outs:
+    post:
+      tags:
+      - Network
+      summary: Get output keys by global index
+      operationId: on_get_outs
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /get_output_distribution.bin:
+    get:
+      tags:
+      - Network
+      summary: Get output distribution (binary)
+      operationId: on_get_output_distribution_bin
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+  /json_rpc:
+    post:
+      tags:
+      - JSON-RPC
+      summary: JSON-RPC 2.0 endpoint for all daemon RPC methods
+      description: 'Submit a JSON-RPC 2.0 request. The method field selects the daemon RPC command. Available methods: add_peer,
+        banned, decode_outputs, flush_cache, flush_txpool, get_alternate_chains, get_bans, get_block, get_block_count, get_block_hash,
+        get_block_header_by_hash, get_block_header_by_height, get_block_headers_range, get_block_template, get_coinbase_tx_sum,
+        get_fee_estimate, get_generated_coins, get_info, get_last_block_header, get_min_version, get_output_distribution,
+        get_output_histogram, get_tx_pubkey, get_txpool_backlog, get_version, hard_fork_info, prune_blockchain, relay_tx,
+        set_bans, submit_block, sync_info'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - jsonrpc
+              - method
+              - params
+              - id
+              properties:
+                jsonrpc:
+                  type: string
+                  enum:
+                  - '2.0'
+                method:
+                  type: string
+                  enum:
+                  - get_block_count
+                  - get_block_hash
+                  - get_block_template
+                  - submit_block
+                  - get_last_block_header
+                  - get_block_header_by_hash
+                  - get_block_header_by_height
+                  - get_block_headers_range
+                  - get_block
+                  - get_info
+                  - hard_fork_info
+                  - get_fee_estimate
+                  - get_txpool_backlog
+                  - get_output_histogram
+                  - get_output_distribution
+                  - get_coinbase_tx_sum
+                  - get_version
+                  - get_alternate_chains
+                  - get_bans
+                  - set_bans
+                  - banned
+                  - flush_txpool
+                  - relay_tx
+                  - sync_info
+                  - prune_blockchain
+                  - flush_cache
+                  - get_generated_coins
+                  - get_min_version
+                  - get_tx_pubkey
+                  - decode_outputs
+                  - add_peer
+                  description: The RPC method name
+                params:
+                  type: object
+                id:
+                  type: integer
+      responses:
+        '200':
+          description: JSON-RPC response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jsonrpc:
+                    type: string
+                  result:
+                    type: object
+                  error:
+                    type: object
+                    properties:
+                      code:
+                        type: integer
+                      message:
+                        type: string
+                  id:
+                    type: integer
+components:
+  schemas:
+    Status:
+      type: string
+      description: Response status. 'OK' on success, error message otherwise.
+      example: OK
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/Status'
+        error:
+          type: string
+    NetworkInfo:
+      type: object
+      description: Network information returned by /get_info
+      properties:
+        height:
+          type: integer
+          format: uint64
+          description: Current blockchain height
+        difficulty:
+          type: integer
+          format: uint64
+          description: Current difficulty
+        tx_count:
+          type: integer
+          format: uint64
+          description: Total transaction count
+        tx_pool_size:
+          type: integer
+          format: uint64
+          description: Mempool size
+        target:
+          type: integer
+          format: uint64
+          description: Block target time (60 seconds)
+        top_block_hash:
+          type: string
+          description: Hash of the top block
+        status:
+          $ref: '#/components/schemas/Status'
+        untrusted:
+          type: boolean
+          description: True if response came from a bootstrap daemon
+    BlockHeader:
+      type: object
+      properties:
+        height:
+          type: integer
+          format: uint64
+        hash:
+          type: string
+        prev_hash:
+          type: string
+        timestamp:
+          type: integer
+          format: uint64
+        difficulty:
+          type: integer
+          format: uint64
+        reward:
+          type: integer
+          format: uint64
+        block_size:
+          type: integer
+          format: uint64
+        num_txes:
+          type: integer
+        nonce:
+          type: integer
+          format: uint64
+        major_version:
+          type: integer
+        minor_version:
+          type: integer
+        depth:
+          type: integer
+    Transaction:
+      type: object
+      properties:
+        tx_hash:
+          type: string
+        block_height:
+          type: integer
+          format: uint64
+        block_timestamp:
+          type: integer
+          format: uint64
+        fee:
+          type: integer
+          format: uint64
+        tx_size:
+          type: integer
+    FeeEstimate:
+      type: object
+      description: Enhanced fee estimate with percentiles
+      properties:
+        fee:
+          type: integer
+          format: uint64
+          description: Median fee per kB
+        fee_p10:
+          type: integer
+          format: uint64
+          description: 10th percentile fee
+        fee_p50:
+          type: integer
+          format: uint64
+          description: 50th percentile (median)
+        fee_p90:
+          type: integer
+          format: uint64
+          description: 90th percentile fee
+        blocks_scanned:
+          type: integer
+          description: Blocks used for calculation
+        fee_history:
+          type: array
+          items:
+            type: integer
+            format: uint64
+          description: Per-block median fees (most recent first, max 100)
+        fee_xnv:
+          type: number
+          format: double
+          description: Median fee in XNV
+        fee_p10_xnv:
+          type: number
+          format: double
+        fee_p50_xnv:
+          type: number
+          format: double
+        fee_p90_xnv:
+          type: number
+          format: double
+        status:
+          $ref: '#/components/schemas/Status'
