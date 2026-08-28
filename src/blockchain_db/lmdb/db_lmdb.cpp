@@ -800,6 +800,22 @@ void BlockchainLMDB::remove_block()
 
   if ((result = mdb_cursor_del(m_cur_block_info, 0)))
       throw1(DB_ERROR(lmdb_error("Failed to add removal of block info to db transaction: ", result).c_str()));
+
+  // m_block_cache feeds the proof of work seed by height (get_cna_v2_data,
+  // get_cna_v6_data) and nothing else invalidated it. A popped block left in it
+  // makes later seeds draw on a chain that no longer exists, so the node hashes
+  // differently from the network and rejects every block as bad proof of work.
+  // Seeds read 256 blocks back so the cache normally trails the tip;
+  // ensure_batch_longhashes warms it to the tip during catch-up sync.
+  //
+  // Lower the height, keep the vector: readers resolve a height before taking
+  // the shared lock, so shrinking could walk one off the end.
+  {
+    const uint64_t new_height = m_height - 1;
+    boost::unique_lock<boost::shared_mutex> cache_lock(m_block_cache_lock);
+    if (m_block_cache_height.load(std::memory_order_relaxed) > new_height)
+      m_block_cache_height.store(new_height, std::memory_order_release);
+  }
 }
 
 uint64_t BlockchainLMDB::add_transaction_data(const crypto::hash& blk_hash, const std::pair<transaction, blobdata>& txp, const crypto::hash& tx_hash, const crypto::hash& tx_prunable_hash)
@@ -2395,6 +2411,12 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
 
   boost::unique_lock<boost::shared_mutex> cache_lock(m_block_cache_lock);
 
+  // Re-check under the lock: another thread may have filled the cache while we
+  // waited, and storing our own smaller height below would drop its entries.
+  const uint64_t have = m_block_cache_height.load(std::memory_order_relaxed);
+  if (have >= height)
+    return;
+
   m_block_cache.reserve(height);
 
   // Read block_info via the standard batch-aware cursor pattern. During batch
@@ -2410,7 +2432,9 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
   TXN_PREFIX_RDONLY();
   RCURSOR(block_info);
 
-  for (uint64_t index = m_block_cache.size(); index < height; ++index)
+  // Start from the cached height, not the vector size: remove_block lowers the
+  // height without shrinking, so these slots may hold popped blocks. Overwrite.
+  for (uint64_t index = have; index < height; ++index)
   {
     MDB_val_set(query, index);
     if (auto r = mdb_cursor_get(m_cur_block_info, (MDB_val*)&zerokval, &query, MDB_GET_BOTH))
@@ -2421,7 +2445,10 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
     entry.timestamp = bi->bi_timestamp;
     entry.diff_lo   = bi->bi_diff_lo;
     entry.coins     = bi->bi_coins;
-    m_block_cache.push_back(entry);
+    if (index < m_block_cache.size())
+      m_block_cache[static_cast<size_t>(index)] = entry;
+    else
+      m_block_cache.push_back(entry);
   }
 
   m_block_cache_height.store(height, std::memory_order_release);
