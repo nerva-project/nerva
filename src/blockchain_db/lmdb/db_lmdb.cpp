@@ -802,12 +802,8 @@ void BlockchainLMDB::remove_block()
       throw1(DB_ERROR(lmdb_error("Failed to add removal of block info to db transaction: ", result).c_str()));
 
   // m_block_cache feeds the proof of work seed by height (get_cna_v2_data,
-  // get_cna_v6_data) and nothing else invalidated it. A popped block left in it
-  // makes later seeds draw on a chain that no longer exists, so the node hashes
-  // differently from the network and rejects every block as bad proof of work.
-  // Seeds read 256 blocks back so the cache normally trails the tip;
-  // ensure_batch_longhashes warms it to the tip during catch-up sync.
-  //
+  // get_cna_v6_data). A popped block left in it makes later seeds read a chain
+  // that no longer exists, and every block after that fails as bad PoW.
   // Lower the height, keep the vector: readers resolve a height before taking
   // the shared lock, so shrinking could walk one off the end.
   {
@@ -2411,8 +2407,8 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
 
   boost::unique_lock<boost::shared_mutex> cache_lock(m_block_cache_lock);
 
-  // Re-check under the lock: another thread may have filled the cache while we
-  // waited, and storing our own smaller height below would drop its entries.
+  // Re-check under the lock: another thread may have filled it while we waited,
+  // and storing our own smaller height below would discard its entries.
   const uint64_t have = m_block_cache_height.load(std::memory_order_relaxed);
   if (have >= height)
     return;
@@ -2433,7 +2429,7 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
   RCURSOR(block_info);
 
   // Start from the cached height, not the vector size: remove_block lowers the
-  // height without shrinking, so these slots may hold popped blocks. Overwrite.
+  // height without shrinking, so these slots may hold popped blocks.
   for (uint64_t index = have; index < height; ++index)
   {
     MDB_val_set(query, index);
@@ -4087,6 +4083,18 @@ void BlockchainLMDB::batch_abort()
   m_write_batch_txn = nullptr;
   m_batch_active = false;
   memset(&m_wcursors, 0, sizeof(m_wcursors));
+
+  // build_block_cache reads through the batch write txn, so the cache can cover
+  // blocks this abort just discarded, and remove_block never ran for them. Same
+  // stale seed data a reorg would leave. height() after the abort reflects what
+  // actually committed.
+  {
+    const uint64_t committed = height();
+    boost::unique_lock<boost::shared_mutex> cache_lock(m_block_cache_lock);
+    if (m_block_cache_height.load(std::memory_order_relaxed) > committed)
+      m_block_cache_height.store(committed, std::memory_order_release);
+  }
+
   LOG_PRINT_L3("batch transaction: aborted");
 }
 
