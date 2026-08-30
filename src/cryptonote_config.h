@@ -244,11 +244,12 @@ namespace config
         {11, 500000},
         {12, 930000},
         {13, 4320000},  // CryptoNight-Adaptive v6: 8 MB scratchpad + random VM program
-        {14, 4400000}   // CLSAG + Bulletproofs+ (type 7 only) and CryptoNight-Adaptive
+        {14, 4500000}   // CLSAG + Bulletproofs+ (type 7 only) and CryptoNight-Adaptive
                         // v7 (per-nonce mutable-buffer chase, one box ~ one vote).
-                        // Placeholder, about six weeks of blocks past the tip it was
-                        // picked against. It moves if the validation gates slip:
-                        // reference-pair run, testnet fork, GPU port test.
+                        // Placeholder height, held far enough out that builds from
+                        // master don't fork early. The real one is set once the
+                        // validation gates pass: reference-pair run, testnet fork,
+                        // GPU port test.
     };
 
     namespace testnet
