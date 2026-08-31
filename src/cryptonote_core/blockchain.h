@@ -1100,6 +1100,10 @@ namespace cryptonote
     std::vector<uint64_t> m_timestamps;
     std::vector<difficulty_type_128> m_difficulties;
     uint64_t m_timestamps_and_difficulties_height;
+    // hash of the newest block in m_timestamps/m_difficulties; the height alone
+    // does not identify the window, since a reorg keeps the height and changes
+    // the contents
+    crypto::hash m_timestamps_and_difficulties_top_hash;
     uint64_t m_long_term_block_weights_window;
     uint64_t m_long_term_effective_median_block_weight;
     mutable uint64_t m_long_term_block_weights_cache_tip_height;
