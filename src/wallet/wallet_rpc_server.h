@@ -260,6 +260,7 @@ namespace tools
       void fill_transfer_entry(tools::wallet_rpc::transfer_entry &entry, const crypto::hash &payment_id, const tools::wallet2::pool_payment_details &pd);
       bool not_open(epee::json_rpc::error& er);
       void handle_rpc_exception(const std::exception_ptr& e, epee::json_rpc::error& er, int default_error_code);
+      bool check_daemon_rpc_version(wallet2 &wal, epee::json_rpc::error &er);
 
       template<typename Ts, typename Tu>
       bool fill_response(std::vector<tools::wallet2::pending_tx> &ptx_vector,
@@ -276,6 +277,7 @@ namespace tools
       tools::private_file rpc_login_file;
       std::atomic<bool> m_stop;
       bool m_restricted;
+      bool m_allow_mismatched_daemon_version;
       const boost::program_options::variables_map *m_vm;
       uint32_t m_auto_refresh_period;
       boost::posix_time::ptime m_last_auto_refresh_time;

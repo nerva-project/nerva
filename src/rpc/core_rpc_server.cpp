@@ -1545,7 +1545,7 @@ namespace cryptonote
   {
     RPC_TRACKER(get_transaction_pool_hashes);
     bool r;
-    if (use_bootstrap_daemon_if_necessary<COMMAND_RPC_GET_TRANSACTION_POOL_HASHES_BIN>(invoke_http_mode::JON, "/get_transaction_pool_hashes.bin", req, res, r))
+    if (use_bootstrap_daemon_if_necessary<COMMAND_RPC_GET_TRANSACTION_POOL_HASHES_BIN>(invoke_http_mode::BIN, "/get_transaction_pool_hashes.bin", req, res, r))
       return r;
 
     const bool restricted = m_restricted && ctx;
