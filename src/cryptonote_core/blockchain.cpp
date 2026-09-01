@@ -86,7 +86,7 @@ DISABLE_VS_WARNINGS(4267)
 
 //------------------------------------------------------------------
 Blockchain::Blockchain(tx_memory_pool& tx_pool) :
-  m_db(), m_tx_pool(tx_pool), m_hardfork(NULL), m_hash_context(NULL), m_timestamps_and_difficulties_height(0), m_current_block_cumul_weight_limit(0), m_current_block_cumul_weight_median(0),
+  m_db(), m_tx_pool(tx_pool), m_hardfork(NULL), m_hash_context(NULL), m_timestamps_and_difficulties_height(0), m_timestamps_and_difficulties_top_hash(crypto::null_hash), m_current_block_cumul_weight_limit(0), m_current_block_cumul_weight_median(0),
   m_enforce_dns_checkpoints(false), m_max_prepare_blocks_threads(4), m_batch_longhash_base(0), m_prepare_blocks(NULL), m_prepare_nblocks(0), m_db_sync_on_blocks(true), m_db_sync_threshold(1), m_db_sync_mode(db_async), m_db_default_sync(false), m_fast_sync(true), m_show_time_stats(false), m_sync_counter(0), m_bytes_to_sync(0), m_cancel(false),
   m_long_term_block_weights_window(CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE),
   m_long_term_effective_median_block_weight(0),
@@ -872,6 +872,9 @@ uint64_t Blockchain::get_difficulty_for_next_block()
   }
 
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
+  // one snapshot for the tip and every block read below; without it each read
+  // renews its own txn and a batch committing mid-loop splices two chains
+  db_rtxn_guard rtxn_guard(m_db);
   std::vector<uint64_t> timestamps;
   std::vector<difficulty_type_128> difficulties;
   uint64_t height;
@@ -894,7 +897,12 @@ uint64_t Blockchain::get_difficulty_for_next_block()
   //    then when the next block difficulty is queried, push the latest height data and
   //    pop the oldest one from the list. This only requires 1x read per height instead
   //    of doing 735 (DIFFICULTY_BLOCKS_COUNT).
-  if (m_timestamps_and_difficulties_height != 0 && ((height - m_timestamps_and_difficulties_height) == 1) && m_timestamps.size() >= difficulty_blocks_count)
+  // The cached window is keyed by its newest block, not just by height. A
+  // caller that is not the batch writer reads the last committed state, which
+  // during a reorg is the orphaned chain, and would otherwise hand the writer a
+  // window it then extends as if it were current.
+  if (m_timestamps_and_difficulties_height != 0 && ((height - m_timestamps_and_difficulties_height) == 1) && m_timestamps.size() >= difficulty_blocks_count
+      && m_db->get_block_hash_from_height(height - 2) == m_timestamps_and_difficulties_top_hash)
   {
     uint64_t index = height - 1;
     m_timestamps.push_back(m_db->get_block_timestamp(index));
@@ -906,6 +914,7 @@ uint64_t Blockchain::get_difficulty_for_next_block()
       m_difficulties.erase(m_difficulties.begin());
 
     m_timestamps_and_difficulties_height = height;
+    m_timestamps_and_difficulties_top_hash = top_hash;
     timestamps = m_timestamps;
     difficulties = m_difficulties;
   }
@@ -929,6 +938,7 @@ uint64_t Blockchain::get_difficulty_for_next_block()
     }
 
     m_timestamps_and_difficulties_height = height;
+    m_timestamps_and_difficulties_top_hash = top_hash;
     m_timestamps = timestamps;
     m_difficulties = difficulties;
   }
