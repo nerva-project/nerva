@@ -70,6 +70,26 @@ namespace
   const command_line::arg_descriptor<bool> arg_restricted = {"restricted-rpc", "Restricts to view-only commands", false};
   const command_line::arg_descriptor<std::string> arg_wallet_dir = {"wallet-dir", "Directory for newly created wallets"};
   const command_line::arg_descriptor<bool> arg_prompt_for_password = {"prompt-for-password", "Prompts for password when not provided", false};
+  const command_line::arg_descriptor<bool> arg_allow_mismatched_daemon_version = {"allow-mismatched-daemon-version", "Allow communicating with a daemon that uses a different RPC version", false};
+
+  const uint32_t DAEMON_VERSION_CHECK_TIMEOUT_MS = 10000;
+
+  bool verify_daemon_rpc_version(tools::wallet2 &wal, bool allow_mismatched, std::string &error)
+  {
+    if (allow_mismatched)
+      return true;
+
+    // an unreachable, offline or busy daemon reports no version: not a mismatch
+    uint32_t version = 0;
+    if (!wal.check_connection(&version, NULL, DAEMON_VERSION_CHECK_TIMEOUT_MS) || version == 0)
+      return true;
+
+    if ((version >> 16) == CORE_RPC_VERSION_MAJOR)
+      return true;
+
+    error = (boost::format(tools::wallet_rpc_server::tr("Daemon uses a different RPC major version (%u) than the wallet (%u): %s. Either update one of them, or use --allow-mismatched-daemon-version.")) % (version >> 16) % CORE_RPC_VERSION_MAJOR % wal.get_daemon_address()).str();
+    return false;
+  }
 
   constexpr const char default_rpc_username[] = "nerva";
 
@@ -115,7 +135,7 @@ namespace tools
   }
 
   //------------------------------------------------------------------------------------------------------------------------------
-  wallet_rpc_server::wallet_rpc_server():m_wallet(NULL), rpc_login_file(), m_stop(false), m_restricted(false), m_vm(NULL), m_idle_run(false), m_do_refresh(false)
+  wallet_rpc_server::wallet_rpc_server():m_wallet(NULL), rpc_login_file(), m_stop(false), m_restricted(false), m_allow_mismatched_daemon_version(false), m_vm(NULL), m_idle_run(false), m_do_refresh(false)
   {
   }
   //------------------------------------------------------------------------------------------------------------------------------
@@ -128,6 +148,17 @@ namespace tools
   void wallet_rpc_server::set_wallet(wallet2 *cr)
   {
     m_wallet = cr;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool wallet_rpc_server::check_daemon_rpc_version(wallet2 &wal, epee::json_rpc::error &er)
+  {
+    std::string error;
+    if (verify_daemon_rpc_version(wal, m_allow_mismatched_daemon_version, error))
+      return true;
+
+    er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
+    er.message = error;
+    return false;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool wallet_rpc_server::run()
@@ -220,6 +251,7 @@ namespace tools
     std::string bind_port = command_line::get_arg(*m_vm, arg_rpc_bind_port);
     const bool disable_auth = command_line::get_arg(*m_vm, arg_disable_rpc_login);
     m_restricted = command_line::get_arg(*m_vm, arg_restricted);
+    m_allow_mismatched_daemon_version = command_line::get_arg(*m_vm, arg_allow_mismatched_daemon_version);
     if (!command_line::is_arg_defaulted(*m_vm, arg_wallet_dir))
     {
       if (!command_line::is_arg_defaulted(*m_vm, wallet_args::arg_wallet_file()))
@@ -3278,6 +3310,8 @@ namespace tools
       er.message = "Failed to create wallet";
       return false;
     }
+    if (!check_daemon_rpc_version(*wal, er))
+      return false;
     wal->set_seed_language(req.language);
     cryptonote::COMMAND_RPC_GET_HEIGHT::request hreq;
     cryptonote::COMMAND_RPC_GET_HEIGHT::response hres;
@@ -3385,6 +3419,8 @@ namespace tools
       er.message = "Failed to create wallet";
       return false;
     }
+    if (!check_daemon_rpc_version(*wal, er))
+      return false;
 
     try
     {
@@ -3499,6 +3535,8 @@ namespace tools
       er.message = "Failed to open wallet";
       return false;
     }
+    if (!check_daemon_rpc_version(*wal, er))
+      return false;
     if (m_wallet)
       delete m_wallet;
     m_wallet = wal.release();
@@ -3738,6 +3776,8 @@ namespace tools
       er.message = "Failed to create wallet";
       return false;
     }
+    if (!check_daemon_rpc_version(*wal, er))
+      return false;
 
     epee::wipeable_string password = rc.second.password();
 
@@ -4001,6 +4041,8 @@ namespace tools
       er.message = "Failed to create wallet";
       return false;
     }
+    if (!check_daemon_rpc_version(*wal, er))
+      return false;
 
     epee::wipeable_string password = rc.second.password();
 
@@ -4599,6 +4641,8 @@ namespace tools
       er.message = std::string("Unable to set daemon");
       return false;
     }
+    if (!check_daemon_rpc_version(*m_wallet, er))
+      return false;
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
@@ -4727,6 +4771,13 @@ public:
         wal->stop();
       });
 
+      std::string version_error;
+      if (!verify_daemon_rpc_version(*wal, command_line::get_arg(vm, arg_allow_mismatched_daemon_version), version_error))
+      {
+        LOG_ERROR(version_error);
+        return false;
+      }
+
       wal->refresh(wal->is_trusted_daemon());
       // if we ^C during potentially length load/refresh, there's no server loop yet
       if (quit)
@@ -4831,6 +4882,7 @@ int main(int argc, char** argv) {
   command_line::add_arg(desc_params, arg_from_json);
   command_line::add_arg(desc_params, arg_wallet_dir);
   command_line::add_arg(desc_params, arg_prompt_for_password);
+  command_line::add_arg(desc_params, arg_allow_mismatched_daemon_version);
 
   daemonizer::init_options(hidden_options, desc_params);
   desc_params.add(hidden_options);
