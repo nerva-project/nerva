@@ -20,7 +20,7 @@ info:
 
     This document is generated from the daemon source by scripts/openapi/generate_openapi.py and is checked
     for drift in CI.'
-  version: 3.1.0
+  version: 4.0.0
   contact:
     name: Nerva Project
     url: https://nerva.one
@@ -438,16 +438,17 @@ paths:
       description: 'Returns the mempool transaction hashes as a binary blob.
 
 
-        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
-        body is the portable form.'
+        The response is a binary epee serialization, not JSON. The request is still a JSON object and
+        may also be sent in the binary epee encoding.'
       operationId: get_transaction_pool_hashes_bin
       responses:
         '200':
           description: Successful response.
           content:
-            application/json:
+            application/octet-stream:
               schema:
-                $ref: '#/components/schemas/GetTransactionPoolHashesBinResponse'
+                type: string
+                format: binary
   /get_transaction_pool_stats:
     post:
       tags:
@@ -2355,21 +2356,6 @@ components:
       required:
       - status
       - backlog
-    GetTransactionPoolHashesBinResponse:
-      type: object
-      properties:
-        status:
-          type: string
-          description: RPC status string, "OK" on success.
-        untrusted:
-          type: boolean
-          description: True when the answer came from a bootstrap daemon.
-        tx_hashes:
-          type: string
-          description: 'Binary blob: std::vector<crypto::hash> serialized as raw bytes.'
-      required:
-      - status
-      - tx_hashes
     GetTransactionPoolHashesResponse:
       type: object
       properties:

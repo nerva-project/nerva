@@ -310,7 +310,7 @@ def extract_top_level_structs(text):
     return structs
 
 
-def parse_kv_entries(struct_body):
+def parse_kv_entries(struct_body, struct_name="<unnamed>"):
     """Parse the KV_SERIALIZE map of one struct body.
 
     Returns a list of entries:
@@ -405,6 +405,21 @@ def parse_kv_entries(struct_body):
         if entry["json_name"] is None and entry["field"]:
             entry["json_name"] = entry["field"].split(".")[-1]
         entries.append(entry)
+
+    # Coverage check, mirroring the routing-table one: KV_MACRO_RE only
+    # matches a fixed alternation of suffixes, so a macro whose suffix is
+    # not listed would not match at all and its field would be silently
+    # dropped from the schema. Counting every KV_SERIALIZE* invocation in
+    # the map (the BEGIN/END markers cannot match: \b requires a word
+    # boundary and they are preceded by an underscore) catches that class
+    # of drift instead of relying on the alternation staying exhaustive.
+    total = len(re.findall(r"\bKV_SERIALIZE\w*\s*\(", region))
+    if total != len(entries):
+        raise ParseError(
+            f"{total} KV_SERIALIZE macros in {struct_name} but only "
+            f"{len(entries)} parsed; the KV_MACRO_RE alternation may be "
+            "missing a macro suffix"
+        )
     return entries
 
 
@@ -766,7 +781,11 @@ HAND_WRITTEN_SCHEMAS = {
 
 def build_struct_schema(struct, role, command_name, scope):
     """Derive one OpenAPI object schema from a request_t/response_t struct."""
-    kv = parse_kv_entries(struct["clean_body"])
+    # Structs are named request_t/response_t, which is ambiguous across
+    # commands; qualify with the owning command for error messages.
+    label = (f"{command_name}::{struct['name']}"
+             if command_name != struct["name"] else struct["name"])
+    kv = parse_kv_entries(struct["clean_body"], label)
     members = parse_members(struct["raw_body"])
     properties = {}
     required = []
