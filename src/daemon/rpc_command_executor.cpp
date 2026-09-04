@@ -1857,11 +1857,19 @@ bool t_rpc_command_executor::print_coinbase_tx_sum(uint64_t height, uint64_t cou
     }
   }
 
+  // Rebuild from the halves rather than parse the wide hex: a daemon that
+  // predates the wide fields leaves them unset, and that parses as 0, a
+  // wrong answer. The halves are right against any daemon, since the low
+  // one is exactly what an old daemon sends and the high one defaults to 0.
+  boost::multiprecision::uint128_t emission_amount = res.emission_amount;
+  emission_amount += boost::multiprecision::uint128_t(res.emission_amount_top64) << 64;
+  boost::multiprecision::uint128_t fee_amount = res.fee_amount;
+  fee_amount += boost::multiprecision::uint128_t(res.fee_amount_top64) << 64;
   tools::msg_writer() << "Sum of coinbase transactions between block heights ["
     << height << ", " << (height + count) << ") is "
-    << cryptonote::print_money(res.emission_amount + res.fee_amount) << " "
-    << "consisting of " << cryptonote::print_money(res.emission_amount) 
-    << " in emissions, and " << cryptonote::print_money(res.fee_amount) << " in fees";
+    << cryptonote::print_money(emission_amount + fee_amount) << " "
+    << "consisting of " << cryptonote::print_money(emission_amount)
+    << " in emissions, and " << cryptonote::print_money(fee_amount) << " in fees";
   return true;
 }
 
