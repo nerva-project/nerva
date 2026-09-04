@@ -122,6 +122,16 @@ namespace
     sdiff = (difficulty & 0xffffffffffffffff).convert_to<uint64_t>();
     stop64 = ((difficulty >> 64) & 0xffffffffffffffff).convert_to<uint64_t>();
   }
+
+  // The low 64 bits stay where they were, so a caller reading that field
+  // alone keeps getting what it always got. The hex string carries the
+  // whole value for anyone who wants it in one piece.
+  void store_128(boost::multiprecision::uint128_t value, uint64_t &slow64, std::string &swide, uint64_t &stop64)
+  {
+    slow64 = (value & 0xffffffffffffffff).convert_to<uint64_t>();
+    swide = cryptonote::hex(value);
+    stop64 = ((value >> 64) & 0xffffffffffffffff).convert_to<uint64_t>();
+  }
 }
 
 namespace cryptonote
@@ -2510,9 +2520,9 @@ namespace cryptonote
       res.status = "height or count is too large";
       return true;
     }
-    std::pair<uint64_t, uint64_t> amounts = m_core.get_coinbase_tx_sum(req.height, req.count);
-    res.emission_amount = amounts.first;
-    res.fee_amount = amounts.second;
+    std::pair<boost::multiprecision::uint128_t, boost::multiprecision::uint128_t> amounts = m_core.get_coinbase_tx_sum(req.height, req.count);
+    store_128(amounts.first, res.emission_amount, res.wide_emission_amount, res.emission_amount_top64);
+    store_128(amounts.second, res.fee_amount, res.wide_fee_amount, res.fee_amount_top64);
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }

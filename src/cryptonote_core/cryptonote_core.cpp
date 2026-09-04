@@ -1189,10 +1189,12 @@ namespace cryptonote
     return m_mempool.check_for_key_images(key_im, spent);
   }
   //-----------------------------------------------------------------------------------------------
-  std::pair<uint64_t, uint64_t> core::get_coinbase_tx_sum(const uint64_t start_offset, const size_t count)
+  std::pair<boost::multiprecision::uint128_t, boost::multiprecision::uint128_t> core::get_coinbase_tx_sum(const uint64_t start_offset, const size_t count)
   {
-    uint64_t emission_amount = 0;
-    uint64_t total_fee_amount = 0;
+    // A sum over the whole chain passed what 64 bits hold, so the running
+    // totals have to be wider than the per block amounts they add up.
+    boost::multiprecision::uint128_t emission_amount = 0;
+    boost::multiprecision::uint128_t total_fee_amount = 0;
     if (count)
     {
       const uint64_t end = start_offset + count - 1;
@@ -1208,13 +1210,17 @@ namespace cryptonote
         tx_fee_amount += get_tx_fee(tx);
       }
       
+      // Still uint64 arithmetic: an underflow here used to cancel out modulo
+      // 2^64 against a wrap of its own, and with a wide accumulator it no
+      // longer would. It cannot happen while validate_miner_transaction
+      // rejects any block whose coinbase does not cover its fees.
       emission_amount += coinbase_amount - tx_fee_amount;
       total_fee_amount += tx_fee_amount;
       return true;
       });
     }
 
-    return std::pair<uint64_t, uint64_t>(emission_amount, total_fee_amount);
+    return std::pair<boost::multiprecision::uint128_t, boost::multiprecision::uint128_t>(emission_amount, total_fee_amount);
   }
 
   uint64_t core::get_generated_coins()
