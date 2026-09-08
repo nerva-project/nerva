@@ -80,6 +80,13 @@ namespace cryptonote {
   /************************************************************************/
   size_t get_min_block_weight(uint8_t version);
   size_t get_max_tx_size();
+  // Ring size a wallet should build at this fork version.
+  size_t get_ring_size(uint8_t version);
+  // Whether consensus accepts a ring of this size at this fork version. The
+  // larger ring is required from the version that introduces it, with no
+  // window where the old size still passes: HF14 already forces a wallet
+  // upgrade for CLSAG, so nothing that can build a valid tx here is old.
+  bool is_valid_ring_size(uint8_t version, size_t ring_size);
   bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version);
   uint8_t get_account_address_checksum(const public_address_outer_blob& bl);
   uint8_t get_account_integrated_address_checksum(const public_integrated_address_outer_blob& bl);

@@ -26,7 +26,6 @@ start_mining
 status
 stop_mining
 sweep_all
-sweep_unmixable
 transfer
 transfer_original
 verify

@@ -77,7 +77,13 @@
 #define CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE                   50000
 
 #define DEFAULT_MIXIN                                                   4
-#define DEFAULT_RINGSIZE                                                DEFAULT_MIXIN + 1
+#define DEFAULT_RINGSIZE                                                (DEFAULT_MIXIN + 1)
+// Ring size from HF14 on. Required at HF14 itself, with no window where the old
+// size still passes: HF14 already forces a wallet upgrade for CLSAG, so nothing
+// that can build a valid transaction there is an old wallet. Monero likewise
+// enforces the exact size from the fork that introduces it.
+#define DEFAULT_MIXIN_V14                                               15
+#define DEFAULT_RINGSIZE_V14                                            (DEFAULT_MIXIN_V14 + 1)
 #define DYNAMIC_FEE_PER_KB_BASE_FEE                                     ((uint64_t)400000000)
 #define DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD                            ((uint64_t)10000000000000)
 
@@ -177,6 +183,7 @@
 // only ever creates type 7 (CLSAG with Bulletproofs+)
 #define HF_VERSION_CLSAG                                                14
 #define HF_VERSION_BULLETPROOF_PLUS                                     14
+#define HF_VERSION_RING_SIZE_16                                         14
 #define CRYPTONOTE_SHORT_TERM_BLOCK_WEIGHT_SURGE_FACTOR                 50
 
 #define CRYPTONOTE_NOISE_MIN_EPOCH                                      5

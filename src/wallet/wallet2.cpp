@@ -9044,8 +9044,12 @@ bool wallet2::light_wallet_key_image_is_ours(const crypto::key_image& key_image,
 // This system allows for sending (almost) the entire balance, since it does
 // not generate spurious change in all txes, thus decreasing the instantaneous
 // usable balance.
-std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryptonote::tx_destination_entry> dsts, const size_t fake_outs_count, const uint64_t unlock_time, uint32_t priority, const std::vector<uint8_t>& extra, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices)
+std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryptonote::tx_destination_entry> dsts, const size_t fake_outs_count_requested, const uint64_t unlock_time, uint32_t priority, const std::vector<uint8_t>& extra, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices)
 {
+  // consensus fixes the ring size, so take the one the current fork wants
+  // rather than building a transaction the daemon would reject
+  const size_t fake_outs_count = adjust_mixin(fake_outs_count_requested);
+
   //ensure device is let in NONE mode in any case
   hw::device &hwdev = m_account.get_device();
   boost::unique_lock<hw::device> hwdev_lock (hwdev);
@@ -9701,8 +9705,12 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_single(const crypt
   return create_transactions_from(address, is_subaddress, outputs, unused_transfers_indices, unused_dust_indices, fake_outs_count, unlock_time, priority, extra);
 }
 
-std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, std::vector<size_t> unused_transfers_indices, std::vector<size_t> unused_dust_indices, const size_t fake_outs_count, const uint64_t unlock_time, uint32_t priority, const std::vector<uint8_t>& extra)
+std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, std::vector<size_t> unused_transfers_indices, std::vector<size_t> unused_dust_indices, const size_t fake_outs_count_requested, const uint64_t unlock_time, uint32_t priority, const std::vector<uint8_t>& extra)
 {
+  // sweeps land here (create_transactions_all and _single both call through),
+  // so the same ring size the fork wants applies to them too
+  const size_t fake_outs_count = adjust_mixin(fake_outs_count_requested);
+
   //ensure device is let in NONE mode in any case
   hw::device &hwdev = m_account.get_device();
   boost::unique_lock<hw::device> hwdev_lock (hwdev);
@@ -10030,6 +10038,30 @@ bool wallet2::use_fork_rules(uint8_t version, int64_t early_blocks)
   return close_enough;
 }
 //----------------------------------------------------------------------------------------------------
+// The fork version comes from the daemon the same way the rest of the HF14
+// wallet code gets it. use_fork_rules would answer true on any version for a
+// light wallet, which would build the larger ring before consensus takes it.
+// One size is valid per version, so the same helper consensus uses decides it
+// here and the two cannot drift apart.
+uint64_t wallet2::adjust_mixin(uint64_t mixin)
+{
+  const uint8_t hf_version = get_current_hard_fork();
+  // Offline there is no version to read, and either guess builds a ring the
+  // network refuses: the old size after the fork, the new one before it. Say
+  // that rather than hand back a transaction the daemon drops without a reason.
+  THROW_WALLET_EXCEPTION_IF(hf_version == 0, error::no_connection_to_daemon, "hard_fork_info");
+  const uint64_t ring_size = cryptonote::get_ring_size(hf_version);
+  if (mixin + 1 != ring_size)
+  {
+    // Only worth a warning when the caller picked the size itself. Every
+    // ordinary send arrives here carrying DEFAULT_MIXIN.
+    if (mixin != DEFAULT_MIXIN)
+      MWARNING("Requested ring size " << (mixin + 1) << ", using " << ring_size);
+    mixin = ring_size - 1;
+  }
+  return mixin;
+}
+//----------------------------------------------------------------------------------------------------
 uint64_t wallet2::get_upper_transaction_weight_limit()
 {
   if (m_upper_transaction_weight_limit > 0)
@@ -10143,14 +10175,8 @@ const wallet2::transfer_details &wallet2::get_transfer_details(size_t idx) const
 //----------------------------------------------------------------------------------------------------
 std::vector<size_t> wallet2::select_available_unmixable_outputs()
 {
-  // request all outputs with less than 3 instances
-  return select_available_outputs_from_histogram(DEFAULT_MIXIN + 1, false, true, false);
-}
-//----------------------------------------------------------------------------------------------------
-std::vector<size_t> wallet2::select_available_mixable_outputs()
-{
-  // request all outputs with at least 3 instances, so we can use mixin 2 with
-  return select_available_outputs_from_histogram(DEFAULT_MIXIN + 1, true, true, true);
+  // too few of the amount around to build a ring of the size this fork wants
+  return select_available_outputs_from_histogram(cryptonote::get_ring_size(get_current_hard_fork()), false, true, false);
 }
 //----------------------------------------------------------------------------------------------------
 std::vector<wallet2::pending_tx> wallet2::create_unmixable_sweep_transactions()
@@ -10181,17 +10207,7 @@ std::vector<wallet2::pending_tx> wallet2::create_unmixable_sweep_transactions()
 
   return create_transactions_from(m_account_public_address, false, 1, unmixable_transfer_outputs, unmixable_dust_outputs, 0 /*fake_outs_count */, 0 /* unlock_time */, 1 /*priority */, std::vector<uint8_t>());
 }
-
-void wallet2::discard_unmixable_outputs()
-{
-  // may throw
-  std::vector<size_t> unmixable_outputs = select_available_unmixable_outputs();
-  for (size_t idx : unmixable_outputs)
-  {
-    freeze(idx);
-  }
-}
-
+//----------------------------------------------------------------------------------------------------
 bool wallet2::get_tx_key_cached(const crypto::hash &txid, crypto::secret_key &tx_key, std::vector<crypto::secret_key> &additional_tx_keys) const
 {
   additional_tx_keys.clear();

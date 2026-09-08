@@ -1543,7 +1543,6 @@ PendingTransaction *WalletImpl::createTransactionMultDest(const std::vector<stri
             for (const std::pair<uint64_t, uint64_t> outs_for_amount : e.scanty_outs()) {
                 writer << "\n" << tr("output amount") << " = " << print_money(outs_for_amount.first) << ", " << tr("found outputs to use") << " = " << outs_for_amount.second;
             }
-            writer << "\n" << tr("Please sweep unmixable outputs.");
             setStatusError(writer.str());
         } catch (const tools::error::tx_not_constructed&) {
             setStatusError(tr("transaction was not constructed"));
