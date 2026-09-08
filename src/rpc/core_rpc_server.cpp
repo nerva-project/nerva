@@ -117,10 +117,12 @@ namespace
     return (value + quantum - 1) / quantum * quantum;
   }
 
-  void store_difficulty(cryptonote::difficulty_type_128 difficulty, uint64_t &sdiff, uint64_t &stop64)
+  // The low half keeps the field an older caller already parses; reading it
+  // alone is only correct while the value fits in 64 bits.
+  void store_128(boost::multiprecision::uint128_t value, uint64_t &slow64, uint64_t &stop64)
   {
-    sdiff = (difficulty & 0xffffffffffffffff).convert_to<uint64_t>();
-    stop64 = ((difficulty >> 64) & 0xffffffffffffffff).convert_to<uint64_t>();
+    slow64 = (value & 0xffffffffffffffff).convert_to<uint64_t>();
+    stop64 = ((value >> 64) & 0xffffffffffffffff).convert_to<uint64_t>();
   }
 }
 
@@ -342,7 +344,7 @@ namespace cryptonote
     res.testnet = net_type == TESTNET;
     res.stagenet = net_type == STAGENET;
     res.nettype = net_type == MAINNET ? "mainnet" : net_type == TESTNET ? "testnet" : net_type == STAGENET ? "stagenet" : "fakechain";
-    store_difficulty(m_core.get_blockchain_storage().get_db().get_block_cumulative_difficulty(res.height - 1),
+    store_128(m_core.get_blockchain_storage().get_db().get_block_cumulative_difficulty(res.height - 1),
         res.cumulative_difficulty, res.cumulative_difficulty_top64);
     res.block_size_limit = res.block_weight_limit = m_core.get_blockchain_storage().get_current_cumulative_block_weight_limit();
     res.block_size_median = res.block_weight_median = m_core.get_blockchain_storage().get_current_cumulative_block_weight_median();
@@ -1901,7 +1903,7 @@ namespace cryptonote
     response.depth = m_core.get_current_blockchain_height() - height - 1;
     response.hash = string_tools::pod_to_hex(hash);
     response.difficulty = m_core.get_blockchain_storage().block_difficulty(height);
-    store_difficulty(m_core.get_blockchain_storage().get_db().get_block_cumulative_difficulty(height),
+    store_128(m_core.get_blockchain_storage().get_db().get_block_cumulative_difficulty(height),
         response.cumulative_difficulty, response.cumulative_difficulty_top64);
     response.reward = get_block_reward(blk);
     response.block_size = response.block_weight = m_core.get_blockchain_storage().get_db().get_block_weight(height);
@@ -2510,9 +2512,9 @@ namespace cryptonote
       res.status = "height or count is too large";
       return true;
     }
-    std::pair<uint64_t, uint64_t> amounts = m_core.get_coinbase_tx_sum(req.height, req.count);
-    res.emission_amount = amounts.first;
-    res.fee_amount = amounts.second;
+    std::pair<boost::multiprecision::uint128_t, boost::multiprecision::uint128_t> amounts = m_core.get_coinbase_tx_sum(req.height, req.count);
+    store_128(amounts.first, res.emission_amount, res.emission_amount_top64);
+    store_128(amounts.second, res.fee_amount, res.fee_amount_top64);
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
@@ -2585,7 +2587,7 @@ namespace cryptonote
       for (const auto &i: chains)
       {
         res.chains.push_back(COMMAND_RPC_GET_ALTERNATE_CHAINS::chain_info{epee::string_tools::pod_to_hex(get_block_hash(i.first.bl)), i.first.height, i.second.size(), 0, 0, {}, std::string()});
-        store_difficulty(i.first.cumulative_difficulty, res.chains.back().cumulative_difficulty, res.chains.back().cumulative_difficulty_top64);
+        store_128(i.first.cumulative_difficulty, res.chains.back().cumulative_difficulty, res.chains.back().cumulative_difficulty_top64);
         res.chains.back().block_hashes.reserve(i.second.size());
         for (const crypto::hash &block_id: i.second)
           res.chains.back().block_hashes.push_back(epee::string_tools::pod_to_hex(block_id));

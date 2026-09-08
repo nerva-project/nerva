@@ -33,6 +33,7 @@
 
 #include <ctime>
 
+#include <boost/multiprecision/cpp_int.hpp>
 #include <boost/program_options/options_description.hpp>
 #include <boost/program_options/variables_map.hpp>
 
@@ -746,9 +747,9 @@ namespace cryptonote
      /**
       * @brief get the sum of coinbase tx amounts between blocks
       *
-      * @return the number of blocks to sync in one go
+      * @return the emission total and the fee total over the range
       */
-     std::pair<uint64_t, uint64_t> get_coinbase_tx_sum(const uint64_t start_offset, const size_t count);
+     std::pair<boost::multiprecision::uint128_t, boost::multiprecision::uint128_t> get_coinbase_tx_sum(const uint64_t start_offset, const size_t count);
 
       /**
       * @brief get the sum of coinbase tx amounts for the entire chain

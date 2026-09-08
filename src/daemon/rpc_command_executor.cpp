@@ -40,6 +40,7 @@
 #include "cryptonote_basic/difficulty.h"
 #include "cryptonote_basic/hardfork.h"
 #include <boost/format.hpp>
+#include <boost/multiprecision/cpp_int.hpp>
 #include <ctime>
 #include <string>
 
@@ -1857,11 +1858,16 @@ bool t_rpc_command_executor::print_coinbase_tx_sum(uint64_t height, uint64_t cou
     }
   }
 
+  // A daemon from before the sum was widened leaves the top halves at 0, which
+  // reassembles to exactly the value it sent.
+  const boost::multiprecision::uint128_t emission = (boost::multiprecision::uint128_t(res.emission_amount_top64) << 64) | res.emission_amount;
+  const boost::multiprecision::uint128_t fees = (boost::multiprecision::uint128_t(res.fee_amount_top64) << 64) | res.fee_amount;
+
   tools::msg_writer() << "Sum of coinbase transactions between block heights ["
     << height << ", " << (height + count) << ") is "
-    << cryptonote::print_money(res.emission_amount + res.fee_amount) << " "
-    << "consisting of " << cryptonote::print_money(res.emission_amount) 
-    << " in emissions, and " << cryptonote::print_money(res.fee_amount) << " in fees";
+    << cryptonote::print_money(emission + fees) << " "
+    << "consisting of " << cryptonote::print_money(emission)
+    << " in emissions, and " << cryptonote::print_money(fees) << " in fees";
   return true;
 }
 

@@ -30,6 +30,7 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 #pragma once
+#include <boost/multiprecision/cpp_int.hpp>
 #include "blobdatatype.h"
 #include "cryptonote_basic_impl.h"
 #include "tx_extra.h"
@@ -142,6 +143,7 @@ namespace cryptonote
   unsigned int get_default_decimal_point();
   std::string get_unit(unsigned int decimal_point = -1);
   std::string print_money(uint64_t amount, unsigned int decimal_point = -1);
+  std::string print_money(const boost::multiprecision::uint128_t &amount, unsigned int decimal_point = -1);
   //---------------------------------------------------------------
   template<class t_object>
   bool t_serializable_object_from_blob(t_object& to, const blobdata& b_blob)
