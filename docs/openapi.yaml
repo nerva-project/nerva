@@ -20,7 +20,7 @@ info:
 
     This document is generated from the daemon source by scripts/openapi/generate_openapi.py and is checked
     for drift in CI.'
-  version: 4.0.0
+  version: 4.1.0
   contact:
     name: Nerva Project
     url: https://nerva.one
@@ -1797,13 +1797,21 @@ components:
         emission_amount:
           type: integer
           format: int64
+        emission_amount_top64:
+          type: integer
+          format: int64
         fee_amount:
+          type: integer
+          format: int64
+        fee_amount_top64:
           type: integer
           format: int64
       required:
       - status
       - emission_amount
+      - emission_amount_top64
       - fee_amount
+      - fee_amount_top64
     GetConnectionsResponse:
       type: object
       properties:
