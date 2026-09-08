@@ -1,0 +1,77 @@
+# Copyright (c) 2018-2026, The Nerva Project
+# Copyright (c) 2014-2026, The Monero Project
+#
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without modification, are
+# permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this list of
+#    conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice, this list of
+#    conditions and the following disclaimer in the documentation and/or other
+#    materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its contributors may be
+#    used to endorse or promote products derived from this software without specific
+#    prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
+# EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
+# THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+# STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+# THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+name: ci/gh-actions/openapi
+
+on:
+    push:
+        branches:
+            - master
+        paths:
+            - 'src/rpc/**'
+            - 'src/cryptonote_protocol/cryptonote_protocol_defs.h'
+            - 'scripts/openapi/**'
+            - 'docs/openapi.yaml'
+            - '.github/workflows/openapi.yml'
+    pull_request:
+        paths:
+            - 'src/rpc/**'
+            - 'src/cryptonote_protocol/cryptonote_protocol_defs.h'
+            - 'scripts/openapi/**'
+            - 'docs/openapi.yaml'
+            - '.github/workflows/openapi.yml'
+
+jobs:
+    openapi:
+        runs-on: ubuntu-latest
+        steps:
+            -   name: Checkout
+                uses: actions/checkout@v4
+
+            -   name: Set up Python
+                uses: actions/setup-python@v5
+                with:
+                    python-version: '3.11'
+
+            -   name: Install generator dependencies
+                run: pip install -r scripts/openapi/requirements.txt openapi-spec-validator
+
+            -   name: Generate the specification
+                run: python3 scripts/openapi/generate_openapi.py
+
+            -   name: Fail on drift against the committed specification
+                run: |
+                    if ! git diff --exit-code docs/openapi.yaml; then
+                      echo "docs/openapi.yaml is out of sync with the RPC sources." >&2
+                      echo "Run python3 scripts/openapi/generate_openapi.py and commit the result." >&2
+                      exit 1
+                    fi
+
+            -   name: Validate the specification
+                run: openapi-spec-validator docs/openapi.yaml

@@ -1,0 +1,3718 @@
+openapi: 3.0.3
+info:
+  title: Nerva Daemon RPC API
+  description: 'REST and JSON-RPC API of the Nerva (XNV) daemon.
+
+
+    The daemon serves two kinds of endpoints: REST style paths such as /get_info, and JSON-RPC 2.0 methods
+    called by POSTing to /json_rpc. Paths ending in .bin answer with a binary epee serialization instead
+    of JSON.
+
+
+    Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+    and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not re-enable
+    restricted methods.
+
+
+    Default RPC ports: mainnet 17566, testnet 18566, stagenet 19566. The security scheme below applies
+    when the daemon is started with --rpc-login.
+
+
+    This document is generated from the daemon source by scripts/openapi/generate_openapi.py and is checked
+    for drift in CI.'
+  version: 4.0.0
+  contact:
+    name: Nerva Project
+    url: https://nerva.one
+  license:
+    name: BSD-3-Clause
+    url: https://opensource.org/licenses/BSD-3-Clause
+servers:
+- url: http://127.0.0.1:17566
+  description: Local mainnet daemon.
+- url: http://127.0.0.1:18566
+  description: Local testnet daemon.
+- url: http://127.0.0.1:19566
+  description: Local stagenet daemon.
+security:
+- rpcLogin: []
+tags:
+- name: Network
+  description: Network wide information and statistics.
+- name: Blocks
+  description: Block queries, headers and submission.
+- name: Transactions
+  description: Transaction queries and submission.
+- name: Mempool
+  description: Transaction mempool contents and management.
+- name: Mining
+  description: Mining, block templates and emission.
+- name: Peers
+  description: Peer lists, connections and bans.
+- name: Outputs
+  description: Output keys, indexes and distributions.
+- name: Logging
+  description: Log level and category management.
+- name: Daemon
+  description: Daemon control and maintenance.
+- name: Nerva-specific
+  description: Commands specific to Nerva, absent from Monero.
+- name: JSON-RPC
+  description: The JSON-RPC 2.0 transport endpoint.
+- name: Restricted
+  description: Only registered on a non-restricted daemon. Restricted endpoints and methods are only registered
+    when the daemon runs without --restricted-rpc and without --rpc-restricted-bind-port. --rpc-login
+    adds HTTP digest authentication but does not re-enable restricted methods.
+paths:
+  /get_alt_blocks_hashes:
+    post:
+      tags:
+      - Blocks
+      summary: Returns the hashes of the alternative (non-mainchain) blocks known to the daemon..
+      description: 'Returns the hashes of the alternative (non-mainchain) blocks known to the daemon.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: get_alt_blocks_hashes
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetAltBlocksHashesResponse'
+  /get_blocks.bin:
+    post:
+      tags:
+      - Blocks
+      summary: Retrieves block blobs for sync.
+      description: 'Retrieves block blobs for sync. The request lists the first ten block ids sequentially,
+        then ids at exponentially growing offsets up to the genesis block, and the daemon answers with
+        the blocks needed to advance the chain.
+
+
+        The response is a binary epee serialization, not JSON. The request is still a JSON object and
+        may also be sent in the binary epee encoding.'
+      operationId: get_blocks_bin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetBlocksFastRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+  /get_blocks_by_height.bin:
+    post:
+      tags:
+      - Blocks
+      summary: Retrieves raw block blobs for an explicit list of heights..
+      description: 'Retrieves raw block blobs for an explicit list of heights.
+
+
+        The response is a binary epee serialization, not JSON. The request is still a JSON object and
+        may also be sent in the binary epee encoding.'
+      operationId: get_blocks_by_height_bin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetBlocksByHeightRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+  /get_hashes.bin:
+    post:
+      tags:
+      - Blocks
+      summary: Retrieves block hashes for a height range, used during chain sync..
+      description: 'Retrieves block hashes for a height range, used during chain sync.
+
+
+        The response is a binary epee serialization, not JSON. The request is still a JSON object and
+        may also be sent in the binary epee encoding.'
+      operationId: get_hashes_bin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetHashesFastRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+  /get_height:
+    post:
+      tags:
+      - Network
+      summary: Returns the current chain height and the hash of the top block..
+      description: 'Returns the current chain height and the hash of the top block.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: get_height
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetHeightResponse'
+  /get_info:
+    post:
+      tags:
+      - Network
+      summary: 'Returns the network status summary: height, difficulty, connection counts, version, and
+        related statistics..'
+      description: 'Returns the network status summary: height, difficulty, connection counts, version,
+        and related statistics.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: get_info
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetInfoResponse'
+  /get_limit:
+    post:
+      tags:
+      - Daemon
+      summary: Returns the current download and upload rate limits..
+      description: 'Returns the current download and upload rate limits.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: get_limit
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetLimitResponse'
+  /get_net_stats:
+    post:
+      tags:
+      - Daemon
+      - Restricted
+      summary: Returns cumulative network traffic counters since daemon start..
+      description: 'Returns cumulative network traffic counters since daemon start.
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: get_net_stats
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetNetStatsResponse'
+  /get_o_indexes.bin:
+    post:
+      tags:
+      - Outputs
+      summary: Retrieves the global output indexes of every output of a transaction..
+      description: 'Retrieves the global output indexes of every output of a transaction.
+
+
+        The response is a binary epee serialization, not JSON. The request is still a JSON object and
+        may also be sent in the binary epee encoding.'
+      operationId: get_o_indexes_bin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetTxGlobalOutputsIndexesRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+  /get_output_distribution.bin:
+    post:
+      tags:
+      - Outputs
+      summary: Retrieves the output amount distribution histogram, in binary form..
+      description: 'Retrieves the output amount distribution histogram, in binary form.
+
+
+        The response is a binary epee serialization, not JSON. The request is still a JSON object and
+        may also be sent in the binary epee encoding.'
+      operationId: get_output_distribution_bin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetOutputDistributionRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+  /get_outs:
+    post:
+      tags:
+      - Outputs
+      summary: Retrieves output keys and commitments for a set of global output indexes, in JSON..
+      description: 'Retrieves output keys and commitments for a set of global output indexes, in JSON.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: get_outs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetOutputsRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetOutputsResponse'
+  /get_outs.bin:
+    post:
+      tags:
+      - Outputs
+      summary: Retrieves output keys and commitments for a set of global output indexes, in binary form..
+      description: 'Retrieves output keys and commitments for a set of global output indexes, in binary
+        form.
+
+
+        The response is a binary epee serialization, not JSON. The request is still a JSON object and
+        may also be sent in the binary epee encoding.'
+      operationId: get_outs_bin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetOutputsBinRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+  /get_peer_list:
+    post:
+      tags:
+      - Peers
+      - Restricted
+      summary: Returns the white and grey peer lists with per-peer state and statistics..
+      description: 'Returns the white and grey peer lists with per-peer state and statistics.
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: get_peer_list
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetPeerListRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetPeerListResponse'
+  /get_public_nodes:
+    post:
+      tags:
+      - Peers
+      summary: Returns the nodes that announced themselves as public RPC peers, usable as remote nodes..
+      description: 'Returns the nodes that announced themselves as public RPC peers, usable as remote
+        nodes.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: get_public_nodes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetPublicNodesRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetPublicNodesResponse'
+  /get_transaction_pool:
+    post:
+      tags:
+      - Mempool
+      summary: Returns the full contents of the transaction mempool..
+      description: 'Returns the full contents of the transaction mempool.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: get_transaction_pool
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetTransactionPoolResponse'
+  /get_transaction_pool_hashes:
+    post:
+      tags:
+      - Mempool
+      summary: Returns the mempool transaction hashes as hex strings..
+      description: 'Returns the mempool transaction hashes as hex strings.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: get_transaction_pool_hashes
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetTransactionPoolHashesResponse'
+  /get_transaction_pool_hashes.bin:
+    post:
+      tags:
+      - Mempool
+      summary: Returns the mempool transaction hashes as a binary blob..
+      description: 'Returns the mempool transaction hashes as a binary blob.
+
+
+        The response is a binary epee serialization, not JSON. The request is still a JSON object and
+        may also be sent in the binary epee encoding.'
+      operationId: get_transaction_pool_hashes_bin
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+  /get_transaction_pool_stats:
+    post:
+      tags:
+      - Mempool
+      summary: 'Returns aggregate statistics about the mempool: counts, bytes, fee totals and a time histogram..'
+      description: 'Returns aggregate statistics about the mempool: counts, bytes, fee totals and a time
+        histogram.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: get_transaction_pool_stats
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetTransactionPoolStatsResponse'
+  /get_transactions:
+    post:
+      tags:
+      - Transactions
+      summary: Fetches one or more transactions by hash, as hex blobs and, on request, decoded JSON..
+      description: 'Fetches one or more transactions by hash, as hex blobs and, on request, decoded JSON.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: get_transactions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetTransactionsRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetTransactionsResponse'
+  /getblocks.bin:
+    post:
+      tags:
+      - Blocks
+      summary: Legacy alias of /get_blocks.bin.
+      description: 'Retrieves block blobs for sync. The request lists the first ten block ids sequentially,
+        then ids at exponentially growing offsets up to the genesis block, and the daemon answers with
+        the blocks needed to advance the chain.
+
+
+        This path is a legacy alias of /get_blocks.bin and behaves identically.
+
+
+        The response is a binary epee serialization, not JSON. The request is still a JSON object and
+        may also be sent in the binary epee encoding.'
+      operationId: getblocks_bin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetBlocksFastRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+  /getblocks_by_height.bin:
+    post:
+      tags:
+      - Blocks
+      summary: Legacy alias of /get_blocks_by_height.bin.
+      description: 'Retrieves raw block blobs for an explicit list of heights.
+
+
+        This path is a legacy alias of /get_blocks_by_height.bin and behaves identically.
+
+
+        The response is a binary epee serialization, not JSON. The request is still a JSON object and
+        may also be sent in the binary epee encoding.'
+      operationId: getblocks_by_height_bin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetBlocksByHeightRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+  /gethashes.bin:
+    post:
+      tags:
+      - Blocks
+      summary: Legacy alias of /get_hashes.bin.
+      description: 'Retrieves block hashes for a height range, used during chain sync.
+
+
+        This path is a legacy alias of /get_hashes.bin and behaves identically.
+
+
+        The response is a binary epee serialization, not JSON. The request is still a JSON object and
+        may also be sent in the binary epee encoding.'
+      operationId: gethashes_bin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetHashesFastRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+  /getheight:
+    post:
+      tags:
+      - Network
+      summary: Legacy alias of /get_height.
+      description: 'Returns the current chain height and the hash of the top block.
+
+
+        This path is a legacy alias of /get_height and behaves identically.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: getheight
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetHeightResponse'
+  /getinfo:
+    post:
+      tags:
+      - Network
+      summary: Legacy alias of /get_info.
+      description: 'Returns the network status summary: height, difficulty, connection counts, version,
+        and related statistics.
+
+
+        This path is a legacy alias of /get_info and behaves identically.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: getinfo
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetInfoResponse'
+  /gettransactions:
+    post:
+      tags:
+      - Transactions
+      summary: Legacy alias of /get_transactions.
+      description: 'Fetches one or more transactions by hash, as hex blobs and, on request, decoded JSON.
+
+
+        This path is a legacy alias of /get_transactions and behaves identically.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: gettransactions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetTransactionsRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetTransactionsResponse'
+  /in_peers:
+    post:
+      tags:
+      - Peers
+      - Restricted
+      summary: Sets the target number of incoming peer connections..
+      description: 'Sets the target number of incoming peer connections.
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: in_peers
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InPeersRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InPeersResponse'
+  /is_key_image_spent:
+    post:
+      tags:
+      - Transactions
+      summary: Checks whether each given key image is spent on the chain or in the mempool..
+      description: 'Checks whether each given key image is spent on the chain or in the mempool.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: is_key_image_spent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IsKeyImageSpentRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IsKeyImageSpentResponse'
+  /json_rpc:
+    post:
+      tags:
+      - JSON-RPC
+      summary: JSON-RPC 2.0 endpoint.
+      description: 'Submits a JSON-RPC 2.0 request. The `method` field selects the command and `params`
+        carries its parameters; the request schema of every method is a component named after it and `params`
+        accepts any of them.
+
+
+        Public methods (29) are safe to expose on a public node. Restricted methods (12) are only registered
+        when the daemon runs without --restricted-rpc and without --rpc-restricted-bind-port. --rpc-login
+        adds HTTP digest authentication but does not re-enable restricted methods.
+
+
+        Method lists, grouped by category:
+
+        `decode_outputs` (Nerva-specific)
+
+        `get_block` (Blocks)
+
+        `get_block_count` (Blocks)
+
+        `get_block_header_by_hash` (Blocks)
+
+        `get_block_header_by_height` (Blocks)
+
+        `get_block_headers_range` (Blocks)
+
+        `get_block_template` (Blocks)
+
+        `get_fee_estimate` (Fees)
+
+        `get_generated_coins` (Nerva-specific)
+
+        `get_info` (Network)
+
+        `get_last_block_header` (Blocks)
+
+        `get_min_version` (Nerva-specific)
+
+        `get_output_distribution` (Outputs)
+
+        `get_output_histogram` (Outputs)
+
+        `get_tx_pubkey` (Nerva-specific)
+
+        `get_txpool_backlog` (Mempool)
+
+        `get_version` (Version)
+
+        `getblock` (Blocks)
+
+        `getblockcount` (Blocks)
+
+        `getblockheaderbyhash` (Blocks)
+
+        `getblockheaderbyheight` (Blocks)
+
+        `getblockheadersrange` (Blocks)
+
+        `getblocktemplate` (Mining)
+
+        `getlastblockheader` (Blocks)
+
+        `hard_fork_info` (Hard Forks)
+
+        `on_get_block_hash` (Blocks)
+
+        `on_getblockhash` (Blocks)
+
+        `submit_block` (Blocks)
+
+        `submitblock` (Mining)
+
+
+        Restricted (grouped by category):
+
+        `add_peer` (Nerva-specific)
+
+        `banned` (Peers)
+
+        `flush_cache` (Daemon)
+
+        `flush_txpool` (Mempool)
+
+        `get_alternate_chains` (Blocks)
+
+        `get_bans` (Peers)
+
+        `get_coinbase_tx_sum` (Mining)
+
+        `get_connections` (Peers)
+
+        `prune_blockchain` (Blocks)
+
+        `relay_tx` (Transactions)
+
+        `set_bans` (Peers)
+
+        `sync_info` (Daemon)'
+      operationId: json_rpc
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JsonRpcRequest'
+      responses:
+        '200':
+          description: JSON-RPC response envelope; carries either result or error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonRpcResponse'
+  /mining_status:
+    post:
+      tags:
+      - Mining
+      - Restricted
+      summary: Reports whether the internal miner is running, with its thread count, hashrate and address..
+      description: 'Reports whether the internal miner is running, with its thread count, hashrate and
+        address.
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: mining_status
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MiningStatusResponse'
+  /out_peers:
+    post:
+      tags:
+      - Peers
+      - Restricted
+      summary: Sets the target number of outgoing peer connections..
+      description: 'Sets the target number of outgoing peer connections.
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: out_peers
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OutPeersRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutPeersResponse'
+  /pop_blocks:
+    post:
+      tags:
+      - Blocks
+      - Restricted
+      summary: Pops a number of blocks from the chain tip.
+      description: 'Pops a number of blocks from the chain tip. Intended for testing, not production use.
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: pop_blocks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PopBlocksRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PopBlocksResponse'
+  /save_bc:
+    post:
+      tags:
+      - Daemon
+      - Restricted
+      summary: Flushes the blockchain database to disk..
+      description: 'Flushes the blockchain database to disk.
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: save_bc
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaveBcResponse'
+  /send_raw_transaction:
+    post:
+      tags:
+      - Transactions
+      summary: Submits a signed raw transaction to the network and reports whether it was accepted, relayed,
+        or rejected with reasons..
+      description: 'Submits a signed raw transaction to the network and reports whether it was accepted,
+        relayed, or rejected with reasons.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: send_raw_transaction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendRawTxRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendRawTxResponse'
+  /sendrawtransaction:
+    post:
+      tags:
+      - Transactions
+      summary: Legacy alias of /send_raw_transaction.
+      description: 'Submits a signed raw transaction to the network and reports whether it was accepted,
+        relayed, or rejected with reasons.
+
+
+        This path is a legacy alias of /send_raw_transaction and behaves identically.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: sendrawtransaction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendRawTxRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendRawTxResponse'
+  /set_bootstrap_daemon:
+    post:
+      tags:
+      - Daemon
+      - Restricted
+      summary: Sets, replaces or clears the bootstrap daemon used for delegated sync..
+      description: 'Sets, replaces or clears the bootstrap daemon used for delegated sync.
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: set_bootstrap_daemon
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetBootstrapDaemonRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetBootstrapDaemonResponse'
+  /set_donate_level:
+    post:
+      tags:
+      - Nerva-specific
+      - Restricted
+      summary: Sets the developer donation percentage used by the internal miner.
+      description: 'Sets the developer donation percentage used by the internal miner. Nerva-specific.
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: set_donate_level
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DonateMiningRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DonateMiningResponse'
+  /set_limit:
+    post:
+      tags:
+      - Daemon
+      - Restricted
+      summary: Sets the download and upload rate limits in kB/s..
+      description: 'Sets the download and upload rate limits in kB/s.
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: set_limit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetLimitRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetLimitResponse'
+  /set_log_categories:
+    post:
+      tags:
+      - Logging
+      - Restricted
+      summary: Sets the active log categories, a comma-separated list of names with optional regex filters..
+      description: 'Sets the active log categories, a comma-separated list of names with optional regex
+        filters.
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: set_log_categories
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetLogCategoriesRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetLogCategoriesResponse'
+  /set_log_hash_rate:
+    post:
+      tags:
+      - Logging
+      - Restricted
+      summary: Toggles periodic logging of the miner hashrate.
+      description: 'Toggles periodic logging of the miner hashrate. Only meaningful while mining.
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: set_log_hash_rate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetLogHashRateRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetLogHashRateResponse'
+  /set_log_level:
+    post:
+      tags:
+      - Logging
+      - Restricted
+      summary: Sets the daemon log verbosity, from 0 (errors only) to 4 (trace)..
+      description: 'Sets the daemon log verbosity, from 0 (errors only) to 4 (trace).
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: set_log_level
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetLogLevelRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetLogLevelResponse'
+  /start_mining:
+    post:
+      tags:
+      - Mining
+      - Restricted
+      summary: Starts the internal CPU miner for a given address and thread count..
+      description: 'Starts the internal CPU miner for a given address and thread count.
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: start_mining
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartMiningRequest'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartMiningResponse'
+  /stop_daemon:
+    post:
+      tags:
+      - Daemon
+      - Restricted
+      summary: Requests a clean daemon shutdown..
+      description: 'Requests a clean daemon shutdown.
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: stop_daemon
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StopDaemonResponse'
+  /stop_mining:
+    post:
+      tags:
+      - Mining
+      - Restricted
+      summary: Stops the internal miner..
+      description: 'Stops the internal miner.
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: stop_mining
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StopMiningResponse'
+  /update:
+    post:
+      tags:
+      - Daemon
+      - Restricted
+      summary: Checks whether a daemon update is available and can download and verify one..
+      description: 'Checks whether a daemon update is available and can download and verify one.
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
+
+
+        The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON
+        body is the portable form.'
+      operationId: update
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateResponse'
+components:
+  securitySchemes:
+    rpcLogin:
+      type: http
+      scheme: digest
+      description: HTTP digest authentication, enabled by --rpc-login user:pass.
+  schemas:
+    AddPeerRequest:
+      type: object
+      properties:
+        host:
+          type: string
+    AddPeerResponse:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+      - status
+    BannedRequest:
+      type: object
+      properties:
+        address:
+          type: string
+    BannedResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        banned:
+          type: boolean
+        seconds:
+          type: integer
+          format: int32
+      required:
+      - status
+      - banned
+      - seconds
+    BlockHeaderResponse:
+      type: object
+      properties:
+        major_version:
+          type: integer
+          format: int32
+        minor_version:
+          type: integer
+          format: int32
+        timestamp:
+          type: integer
+          format: int64
+        prev_hash:
+          type: string
+          description: Hex-encoded binary data.
+        nonce:
+          type: integer
+          format: int32
+        orphan_status:
+          type: boolean
+        height:
+          type: integer
+          format: int64
+          description: Block height.
+        depth:
+          type: integer
+          format: int64
+        hash:
+          type: string
+          description: Hex-encoded binary data.
+        difficulty:
+          type: integer
+          format: int64
+          description: Current difficulty. Serialized as a JSON number; on very long chains it can exceed
+            the JavaScript safe integer range.
+        cumulative_difficulty:
+          type: integer
+          format: int64
+          description: Low 64 bits of the 128-bit cumulative difficulty. Serialized as a JSON number,
+            which exceeds the JavaScript safe integer range on long chains; parse it losslessly (the high
+            64 bits are in cumulative_difficulty_top64).
+        cumulative_difficulty_top64:
+          type: integer
+          format: int64
+          description: High 64 bits of the 128-bit cumulative difficulty (see cumulative_difficulty for
+            the low bits).
+        reward:
+          type: integer
+          format: int64
+        block_size:
+          type: integer
+          format: int64
+        block_weight:
+          type: integer
+          format: int64
+        num_txes:
+          type: integer
+          format: int64
+        long_term_weight:
+          type: integer
+          format: int64
+        miner_tx_hash:
+          type: string
+          description: Hex-encoded binary data.
+      required:
+      - major_version
+      - minor_version
+      - timestamp
+      - prev_hash
+      - nonce
+      - orphan_status
+      - height
+      - depth
+      - hash
+      - difficulty
+      - cumulative_difficulty
+      - cumulative_difficulty_top64
+      - reward
+      - block_size
+      - num_txes
+      - miner_tx_hash
+    ConnectionInfo:
+      type: object
+      properties:
+        incoming:
+          type: boolean
+        localhost:
+          type: boolean
+        local_ip:
+          type: boolean
+        address:
+          type: string
+        host:
+          type: string
+        ip:
+          type: string
+        port:
+          type: string
+        rpc_port:
+          type: integer
+          format: int32
+        peer_id:
+          type: string
+        recv_count:
+          type: integer
+          format: int64
+        recv_idle_time:
+          type: integer
+          format: int64
+        send_count:
+          type: integer
+          format: int64
+        send_idle_time:
+          type: integer
+          format: int64
+        state:
+          type: string
+        live_time:
+          type: integer
+          format: int64
+        avg_download:
+          type: integer
+          format: int64
+        current_download:
+          type: integer
+          format: int64
+        avg_upload:
+          type: integer
+          format: int64
+        current_upload:
+          type: integer
+          format: int64
+        support_flags:
+          type: integer
+          format: int32
+        connection_id:
+          type: string
+        height:
+          type: integer
+          format: int64
+          description: Block height.
+        pruning_seed:
+          type: integer
+          format: int32
+        address_type:
+          type: integer
+          format: int32
+      required:
+      - incoming
+      - localhost
+      - local_ip
+      - address
+      - host
+      - ip
+      - port
+      - rpc_port
+      - peer_id
+      - recv_count
+      - recv_idle_time
+      - send_count
+      - send_idle_time
+      - state
+      - live_time
+      - avg_download
+      - current_download
+      - avg_upload
+      - current_upload
+      - support_flags
+      - connection_id
+      - height
+      - pruning_seed
+      - address_type
+    DecodeOutputsDecodedOut:
+      type: object
+      properties:
+        tx_hash:
+          type: string
+          description: Hex-encoded binary data.
+        payment_id:
+          type: string
+        amount:
+          type: integer
+          format: int64
+      required:
+      - tx_hash
+      - payment_id
+      - amount
+    DecodeOutputsRequest:
+      type: object
+      properties:
+        tx_hashes:
+          type: array
+          items:
+            type: string
+            description: Hex-encoded binary data.
+        sec_view_key:
+          type: string
+          description: Hex-encoded binary data.
+        address:
+          type: string
+    DecodeOutputsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        decoded_outs:
+          type: array
+          items:
+            $ref: '#/components/schemas/DecodeOutputsDecodedOut'
+      required:
+      - status
+      - decoded_outs
+    DonateMiningRequest:
+      type: object
+      properties:
+        blocks:
+          type: integer
+          format: int32
+    DonateMiningResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        blocks:
+          type: integer
+          format: int32
+      required:
+      - status
+      - blocks
+    FlushCacheRequest:
+      type: object
+      properties:
+        bad_txs:
+          type: boolean
+    FlushCacheResponse:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+      - status
+    FlushTransactionPoolRequest:
+      type: object
+      properties:
+        txids:
+          type: array
+          items:
+            type: string
+    FlushTransactionPoolResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+      required:
+      - status
+    GetAltBlocksHashesResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        blks_hashes:
+          type: array
+          items:
+            type: string
+            description: Hex-encoded binary data.
+      required:
+      - status
+      - blks_hashes
+    GetAlternateChainsChainInfo:
+      type: object
+      properties:
+        block_hash:
+          type: string
+          description: Hex-encoded binary data.
+        height:
+          type: integer
+          format: int64
+          description: Block height.
+        length:
+          type: integer
+          format: int64
+        cumulative_difficulty:
+          type: integer
+          format: int64
+          description: Low 64 bits of the 128-bit cumulative difficulty. Serialized as a JSON number,
+            which exceeds the JavaScript safe integer range on long chains; parse it losslessly (the high
+            64 bits are in cumulative_difficulty_top64).
+        cumulative_difficulty_top64:
+          type: integer
+          format: int64
+          description: High 64 bits of the 128-bit cumulative difficulty (see cumulative_difficulty for
+            the low bits).
+        block_hashes:
+          type: array
+          items:
+            type: string
+            description: Hex-encoded binary data.
+        main_chain_parent_block:
+          type: string
+      required:
+      - block_hash
+      - height
+      - length
+      - cumulative_difficulty
+      - cumulative_difficulty_top64
+      - block_hashes
+      - main_chain_parent_block
+    GetAlternateChainsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        chains:
+          type: array
+          items:
+            $ref: '#/components/schemas/GetAlternateChainsChainInfo'
+      required:
+      - status
+      - chains
+    GetBlockHeaderByHashRequest:
+      type: object
+      properties:
+        hash:
+          type: string
+          description: Hex-encoded binary data.
+        hashes:
+          type: array
+          items:
+            type: string
+    GetBlockHeaderByHashResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        block_header:
+          $ref: '#/components/schemas/BlockHeaderResponse'
+        block_headers:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlockHeaderResponse'
+      required:
+      - status
+      - block_header
+      - block_headers
+    GetBlockHeaderByHeightRequest:
+      type: object
+      properties:
+        height:
+          type: integer
+          format: int64
+          description: Block height.
+    GetBlockHeaderByHeightResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        block_header:
+          $ref: '#/components/schemas/BlockHeaderResponse'
+      required:
+      - status
+      - block_header
+    GetBlockHeadersRangeRequest:
+      type: object
+      properties:
+        start_height:
+          type: integer
+          format: int64
+          description: Starting height of the range.
+        end_height:
+          type: integer
+          format: int64
+    GetBlockHeadersRangeResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        headers:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlockHeaderResponse'
+      required:
+      - status
+      - headers
+    GetBlockRequest:
+      type: object
+      properties:
+        hash:
+          type: string
+          description: Hex-encoded binary data.
+        height:
+          type: integer
+          format: int64
+          description: Block height.
+    GetBlockResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        block_header:
+          $ref: '#/components/schemas/BlockHeaderResponse'
+        miner_tx_hash:
+          type: string
+          description: Hex-encoded binary data.
+        tx_hashes:
+          type: array
+          items:
+            type: string
+            description: Hex-encoded binary data.
+        blob:
+          type: string
+          description: Hex-encoded binary data.
+        json:
+          type: string
+      required:
+      - status
+      - block_header
+      - miner_tx_hash
+      - tx_hashes
+      - blob
+      - json
+    GetBlocksByHeightRequest:
+      type: object
+      properties:
+        heights:
+          type: array
+          items:
+            type: integer
+            format: int64
+    GetBlocksFastRequest:
+      type: object
+      properties:
+        block_ids:
+          type: string
+          description: 'Binary blob: std::list<crypto::hash> serialized as raw bytes.'
+        start_height:
+          type: integer
+          format: int64
+          description: Starting height of the range.
+        prune:
+          type: boolean
+        no_miner_tx:
+          type: boolean
+        max_count:
+          type: integer
+          format: int64
+          description: 0 = server default (COMMAND_RPC_GET_BLOCKS_FAST_MAX_COUNT)
+    GetCoinbaseTxSumRequest:
+      type: object
+      properties:
+        height:
+          type: integer
+          format: int64
+          description: Block height.
+        count:
+          type: integer
+          format: int64
+    GetCoinbaseTxSumResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        emission_amount:
+          type: integer
+          format: int64
+        fee_amount:
+          type: integer
+          format: int64
+      required:
+      - status
+      - emission_amount
+      - fee_amount
+    GetConnectionsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        connections:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConnectionInfo'
+      required:
+      - status
+      - connections
+    GetGeneratedCoinsRequest:
+      type: object
+      properties:
+        height:
+          type: integer
+          format: int64
+          description: Block height.
+    GetGeneratedCoinsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        coins:
+          type: integer
+          format: int64
+      required:
+      - status
+      - coins
+    GetHashesFastRequest:
+      type: object
+      properties:
+        block_ids:
+          type: string
+          description: 'Binary blob: std::list<crypto::hash> serialized as raw bytes.'
+        start_height:
+          type: integer
+          format: int64
+          description: Starting height of the range.
+    GetHeightResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        height:
+          type: integer
+          format: int64
+          description: Block height.
+        hash:
+          type: string
+          description: Hex-encoded binary data.
+      required:
+      - status
+      - height
+      - hash
+    GetInfoResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        height:
+          type: integer
+          format: int64
+          description: Block height.
+        target_height:
+          type: integer
+          format: int64
+        difficulty:
+          type: integer
+          format: int64
+          description: Current difficulty. Serialized as a JSON number; on very long chains it can exceed
+            the JavaScript safe integer range.
+        target:
+          type: integer
+          format: int64
+        tx_count:
+          type: integer
+          format: int64
+        tx_pool_size:
+          type: integer
+          format: int64
+        alt_blocks_count:
+          type: integer
+          format: int64
+        outgoing_connections_count:
+          type: integer
+          format: int64
+        incoming_connections_count:
+          type: integer
+          format: int64
+        rpc_connections_count:
+          type: integer
+          format: int64
+        white_peerlist_size:
+          type: integer
+          format: int64
+        grey_peerlist_size:
+          type: integer
+          format: int64
+        mainnet:
+          type: boolean
+        testnet:
+          type: boolean
+        stagenet:
+          type: boolean
+        nettype:
+          type: string
+        top_block_hash:
+          type: string
+          description: Hex-encoded binary data.
+        cumulative_difficulty:
+          type: integer
+          format: int64
+          description: Low 64 bits of the 128-bit cumulative difficulty. Serialized as a JSON number,
+            which exceeds the JavaScript safe integer range on long chains; parse it losslessly (the high
+            64 bits are in cumulative_difficulty_top64).
+        cumulative_difficulty_top64:
+          type: integer
+          format: int64
+          description: High 64 bits of the 128-bit cumulative difficulty (see cumulative_difficulty for
+            the low bits).
+        block_size_limit:
+          type: integer
+          format: int64
+        block_weight_limit:
+          type: integer
+          format: int64
+        block_size_median:
+          type: integer
+          format: int64
+        block_weight_median:
+          type: integer
+          format: int64
+        start_time:
+          type: integer
+          format: int64
+        free_space:
+          type: integer
+          format: int64
+        offline:
+          type: boolean
+        bootstrap_daemon_address:
+          type: string
+        height_without_bootstrap:
+          type: integer
+          format: int64
+        was_bootstrap_ever_used:
+          type: boolean
+        database_size:
+          type: integer
+          format: int64
+        update_available:
+          type: boolean
+        version:
+          type: string
+      required:
+      - status
+      - height
+      - target_height
+      - difficulty
+      - target
+      - tx_count
+      - tx_pool_size
+      - alt_blocks_count
+      - outgoing_connections_count
+      - incoming_connections_count
+      - rpc_connections_count
+      - white_peerlist_size
+      - grey_peerlist_size
+      - mainnet
+      - testnet
+      - stagenet
+      - nettype
+      - top_block_hash
+      - cumulative_difficulty
+      - cumulative_difficulty_top64
+      - block_size_limit
+      - block_size_median
+      - start_time
+      - free_space
+      - offline
+      - bootstrap_daemon_address
+      - height_without_bootstrap
+      - was_bootstrap_ever_used
+      - database_size
+      - update_available
+      - version
+    GetLastBlockHeaderResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        block_header:
+          $ref: '#/components/schemas/BlockHeaderResponse'
+      required:
+      - status
+      - block_header
+    GetLimitResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        limit_up:
+          type: integer
+          format: int64
+        limit_down:
+          type: integer
+          format: int64
+      required:
+      - status
+      - limit_up
+      - limit_down
+    GetNetStatsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        start_time:
+          type: integer
+          format: int64
+        total_packets_in:
+          type: integer
+          format: int64
+        total_bytes_in:
+          type: integer
+          format: int64
+        total_packets_out:
+          type: integer
+          format: int64
+        total_bytes_out:
+          type: integer
+          format: int64
+      required:
+      - status
+      - start_time
+      - total_packets_in
+      - total_bytes_in
+      - total_packets_out
+      - total_bytes_out
+    GetOutputDistributionDistribution:
+      type: object
+      required:
+      - amount
+      - start_height
+      properties:
+        amount:
+          type: integer
+          format: int64
+          description: Amount whose distribution follows.
+        start_height:
+          type: integer
+          format: int64
+          description: Height the distribution starts at.
+        binary:
+          type: boolean
+          description: True when the distribution is serialized as a binary blob.
+        compress:
+          type: boolean
+          description: True when the distribution is compressed.
+        distribution:
+          description: Output counts per height. A plain array of integers when binary is false; a binary
+            blob string when binary is true and compress false; and the compressed form is carried by
+            compressed_data when compress is true.
+          oneOf:
+          - type: array
+            items:
+              type: integer
+              format: int64
+          - type: string
+            description: Binary blob of uint64 values.
+        compressed_data:
+          type: string
+          description: Compressed distribution, present when compress is true.
+        base:
+          type: integer
+          format: int64
+          description: Population base of the distribution.
+    GetOutputDistributionRequest:
+      type: object
+      properties:
+        amounts:
+          type: array
+          items:
+            type: integer
+            format: int64
+        from_height:
+          type: integer
+          format: int64
+        to_height:
+          type: integer
+          format: int64
+        cumulative:
+          type: boolean
+        binary:
+          type: boolean
+        compress:
+          type: boolean
+    GetOutputDistributionResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        distributions:
+          type: array
+          items:
+            $ref: '#/components/schemas/GetOutputDistributionDistribution'
+      required:
+      - status
+      - distributions
+    GetOutputHistogramEntry:
+      type: object
+      properties:
+        amount:
+          type: integer
+          format: int64
+        total_instances:
+          type: integer
+          format: int64
+        unlocked_instances:
+          type: integer
+          format: int64
+        recent_instances:
+          type: integer
+          format: int64
+      required:
+      - amount
+      - total_instances
+      - unlocked_instances
+      - recent_instances
+    GetOutputHistogramRequest:
+      type: object
+      properties:
+        amounts:
+          type: array
+          items:
+            type: integer
+            format: int64
+        min_count:
+          type: integer
+          format: int64
+        max_count:
+          type: integer
+          format: int64
+        unlocked:
+          type: boolean
+        recent_cutoff:
+          type: integer
+          format: int64
+    GetOutputHistogramResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        histogram:
+          type: array
+          items:
+            $ref: '#/components/schemas/GetOutputHistogramEntry'
+      required:
+      - status
+      - histogram
+    GetOutputsBinRequest:
+      type: object
+      properties:
+        outputs:
+          type: array
+          items:
+            $ref: '#/components/schemas/GetOutputsOut'
+        get_txid:
+          type: boolean
+    GetOutputsOut:
+      type: object
+      properties:
+        amount:
+          type: integer
+          format: int64
+        index:
+          type: integer
+          format: int64
+      required:
+      - amount
+      - index
+    GetOutputsOutkey:
+      type: object
+      properties:
+        key:
+          type: string
+          description: Hex-encoded binary data.
+        mask:
+          type: string
+          description: Hex-encoded binary data.
+        unlocked:
+          type: boolean
+        height:
+          type: integer
+          format: int64
+          description: Block height.
+        txid:
+          type: string
+      required:
+      - key
+      - mask
+      - unlocked
+      - height
+      - txid
+    GetOutputsRequest:
+      type: object
+      properties:
+        outputs:
+          type: array
+          items:
+            $ref: '#/components/schemas/GetOutputsOut'
+        get_txid:
+          type: boolean
+    GetOutputsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        outs:
+          type: array
+          items:
+            $ref: '#/components/schemas/GetOutputsOutkey'
+      required:
+      - status
+      - outs
+    GetPeerListRequest:
+      type: object
+      properties:
+        public_only:
+          type: boolean
+    GetPeerListResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        white_list:
+          type: array
+          items:
+            $ref: '#/components/schemas/Peer'
+        gray_list:
+          type: array
+          items:
+            $ref: '#/components/schemas/Peer'
+      required:
+      - status
+      - white_list
+      - gray_list
+    GetPerKbFeeEstimateRequest:
+      type: object
+      properties:
+        grace_blocks:
+          type: integer
+          format: int64
+    GetPerKbFeeEstimateResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        fee:
+          type: integer
+          format: int64
+      required:
+      - status
+      - fee
+    GetPublicNodesRequest:
+      type: object
+      properties:
+        gray:
+          type: boolean
+        white:
+          type: boolean
+    GetPublicNodesResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        gray:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicNode'
+        white:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicNode'
+      required:
+      - status
+      - gray
+      - white
+    GetTransactionPoolBacklogResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        backlog:
+          type: string
+          description: 'Binary blob: std::vector<tx_backlog_entry> serialized as raw bytes.'
+      required:
+      - status
+      - backlog
+    GetTransactionPoolHashesResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        tx_hashes:
+          type: array
+          items:
+            type: string
+            description: Hex-encoded binary data.
+      required:
+      - status
+      - tx_hashes
+    GetTransactionPoolResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        transactions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TxInfo'
+        spent_key_images:
+          type: array
+          items:
+            $ref: '#/components/schemas/SpentKeyImageInfo'
+      required:
+      - status
+      - transactions
+      - spent_key_images
+    GetTransactionPoolStatsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        pool_stats:
+          $ref: '#/components/schemas/TxpoolStats'
+      required:
+      - status
+      - pool_stats
+    GetTransactionsEntry:
+      type: object
+      properties:
+        tx_hash:
+          type: string
+          description: Hex-encoded binary data.
+        as_hex:
+          type: string
+          description: Hex-encoded binary data.
+        pruned_as_hex:
+          type: string
+          description: Hex-encoded binary data.
+        prunable_as_hex:
+          type: string
+          description: Hex-encoded binary data.
+        prunable_hash:
+          type: string
+          description: Hex-encoded binary data.
+        as_json:
+          type: string
+        in_pool:
+          type: boolean
+        double_spend_seen:
+          type: boolean
+        block_height:
+          type: integer
+          format: int64
+          description: 'Conditional: presence on the wire depends on the sibling fields.'
+        block_timestamp:
+          type: integer
+          format: int64
+          description: 'Conditional: presence on the wire depends on the sibling fields.'
+        output_indices:
+          type: array
+          items:
+            type: integer
+            format: int64
+          description: 'Conditional: presence on the wire depends on the sibling fields.'
+        relayed:
+          type: boolean
+          description: 'Conditional: presence on the wire depends on the sibling fields.'
+      required:
+      - tx_hash
+      - as_hex
+      - pruned_as_hex
+      - prunable_as_hex
+      - prunable_hash
+      - as_json
+      - in_pool
+      - double_spend_seen
+    GetTransactionsRequest:
+      type: object
+      properties:
+        txs_hashes:
+          type: array
+          items:
+            type: string
+            description: Hex-encoded binary data.
+        decode_as_json:
+          type: boolean
+        prune:
+          type: boolean
+        split:
+          type: boolean
+    GetTransactionsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        txs_as_hex:
+          type: array
+          items:
+            type: string
+            description: Hex-encoded binary data.
+          description: transactions blobs as hex (old compat)
+        txs_as_json:
+          type: array
+          items:
+            type: string
+          description: transactions decoded as json (old compat)
+        txs:
+          type: array
+          items:
+            $ref: '#/components/schemas/GetTransactionsEntry'
+        missed_tx:
+          type: array
+          items:
+            type: string
+          description: not found transactions
+      required:
+      - status
+      - txs_as_hex
+      - txs_as_json
+      - txs
+      - missed_tx
+    GetTxGlobalOutputsIndexesRequest:
+      type: object
+      properties:
+        txid:
+          type: string
+          description: 32-byte hash, serialized as a blob
+    GetTxPubkeyRequest:
+      type: object
+      properties:
+        extra:
+          type: string
+    GetTxPubkeyResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        pubkey:
+          type: string
+          description: Hex-encoded binary data.
+        additional:
+          type: array
+          items:
+            type: string
+      required:
+      - status
+      - pubkey
+      - additional
+    GetVersionResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        version:
+          type: integer
+          format: int32
+        release:
+          type: boolean
+      required:
+      - status
+      - version
+      - release
+    GetbansBan:
+      type: object
+      properties:
+        host:
+          type: string
+        ip:
+          type: integer
+          format: int32
+        seconds:
+          type: integer
+          format: int32
+        reason:
+          type: string
+      required:
+      - host
+      - ip
+      - seconds
+      - reason
+    GetbansResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        bans:
+          type: array
+          items:
+            $ref: '#/components/schemas/GetbansBan'
+      required:
+      - status
+      - bans
+    GetblockcountRequest:
+      type: array
+      items:
+        type: string
+      description: Legacy positional parameter list.
+    GetblockcountResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        count:
+          type: integer
+          format: int64
+      required:
+      - status
+      - count
+    GetblockhashRequest:
+      type: array
+      items:
+        type: integer
+        format: int64
+      description: Legacy positional parameter list.
+    GetblockhashResponse:
+      type: string
+      description: The requested value, returned directly as the JSON-RPC result.
+    GetblocktemplateRequest:
+      type: object
+      properties:
+        reserve_size:
+          type: integer
+          format: int64
+          description: max 255 bytes
+        wallet_address:
+          type: string
+        prev_block:
+          type: string
+        extra_nonce:
+          type: string
+    GetblocktemplateResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        difficulty:
+          type: integer
+          format: int64
+          description: Current difficulty. Serialized as a JSON number; on very long chains it can exceed
+            the JavaScript safe integer range.
+        height:
+          type: integer
+          format: int64
+          description: Block height.
+        reserved_offset:
+          type: integer
+          format: int64
+        expected_reward:
+          type: integer
+          format: int64
+        prev_hash:
+          type: string
+          description: Hex-encoded binary data.
+        blocktemplate_blob:
+          type: string
+          description: Hex-encoded binary data.
+        blockhashing_blob:
+          type: string
+          description: Hex-encoded binary data.
+      required:
+      - status
+      - difficulty
+      - height
+      - reserved_offset
+      - expected_reward
+      - prev_hash
+      - blocktemplate_blob
+      - blockhashing_blob
+    HardForkInfoRequest:
+      type: object
+      properties:
+        version:
+          type: integer
+          format: int32
+    HardForkInfoResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        version:
+          type: integer
+          format: int32
+        enabled:
+          type: boolean
+        window:
+          type: integer
+          format: int32
+        votes:
+          type: integer
+          format: int32
+        threshold:
+          type: integer
+          format: int32
+        voting:
+          type: integer
+          format: int32
+        earliest_height:
+          type: integer
+          format: int64
+      required:
+      - status
+      - version
+      - enabled
+      - window
+      - votes
+      - threshold
+      - voting
+      - earliest_height
+    InPeersRequest:
+      type: object
+      properties:
+        set:
+          type: boolean
+        in_peers:
+          type: integer
+          format: int32
+    InPeersResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        in_peers:
+          type: integer
+          format: int32
+      required:
+      - status
+      - in_peers
+    IsKeyImageSpentRequest:
+      type: object
+      properties:
+        key_images:
+          type: array
+          items:
+            type: string
+    IsKeyImageSpentResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        spent_status:
+          type: array
+          items:
+            type: integer
+            format: int32
+            description: 0 = unspent, 1 = spent in the blockchain, 2 = spent in the mempool.
+          description: 0 = unspent, 1 = spent in the blockchain, 2 = spent in the mempool.
+      required:
+      - status
+      - spent_status
+    JsonRpcRequest:
+      type: object
+      required:
+      - jsonrpc
+      - method
+      properties:
+        jsonrpc:
+          type: string
+          enum:
+          - '2.0'
+          example: '2.0'
+        method:
+          type: string
+          enum:
+          - add_peer
+          - banned
+          - decode_outputs
+          - flush_cache
+          - flush_txpool
+          - get_alternate_chains
+          - get_bans
+          - get_block
+          - get_block_count
+          - get_block_header_by_hash
+          - get_block_header_by_height
+          - get_block_headers_range
+          - get_block_template
+          - get_coinbase_tx_sum
+          - get_connections
+          - get_fee_estimate
+          - get_generated_coins
+          - get_info
+          - get_last_block_header
+          - get_min_version
+          - get_output_distribution
+          - get_output_histogram
+          - get_tx_pubkey
+          - get_txpool_backlog
+          - get_version
+          - getblock
+          - getblockcount
+          - getblockheaderbyhash
+          - getblockheaderbyheight
+          - getblockheadersrange
+          - getblocktemplate
+          - getlastblockheader
+          - hard_fork_info
+          - on_get_block_hash
+          - on_getblockhash
+          - prune_blockchain
+          - relay_tx
+          - set_bans
+          - submit_block
+          - submitblock
+          - sync_info
+          description: 'RPC method name. Public methods (29), safe to expose on a public node:
+
+            `decode_outputs` (Nerva-specific)
+
+            `get_block` (Blocks)
+
+            `get_block_count` (Blocks)
+
+            `get_block_header_by_hash` (Blocks)
+
+            `get_block_header_by_height` (Blocks)
+
+            `get_block_headers_range` (Blocks)
+
+            `get_block_template` (Blocks)
+
+            `get_fee_estimate` (Fees)
+
+            `get_generated_coins` (Nerva-specific)
+
+            `get_info` (Network)
+
+            `get_last_block_header` (Blocks)
+
+            `get_min_version` (Nerva-specific)
+
+            `get_output_distribution` (Outputs)
+
+            `get_output_histogram` (Outputs)
+
+            `get_tx_pubkey` (Nerva-specific)
+
+            `get_txpool_backlog` (Mempool)
+
+            `get_version` (Version)
+
+            `getblock` (Blocks)
+
+            `getblockcount` (Blocks)
+
+            `getblockheaderbyhash` (Blocks)
+
+            `getblockheaderbyheight` (Blocks)
+
+            `getblockheadersrange` (Blocks)
+
+            `getblocktemplate` (Mining)
+
+            `getlastblockheader` (Blocks)
+
+            `hard_fork_info` (Hard Forks)
+
+            `on_get_block_hash` (Blocks)
+
+            `on_getblockhash` (Blocks)
+
+            `submit_block` (Blocks)
+
+            `submitblock` (Mining)
+
+
+            Restricted methods (12), only registered on a non-restricted daemon:
+
+            `add_peer` (Nerva-specific)
+
+            `banned` (Peers)
+
+            `flush_cache` (Daemon)
+
+            `flush_txpool` (Mempool)
+
+            `get_alternate_chains` (Blocks)
+
+            `get_bans` (Peers)
+
+            `get_coinbase_tx_sum` (Mining)
+
+            `get_connections` (Peers)
+
+            `prune_blockchain` (Blocks)
+
+            `relay_tx` (Transactions)
+
+            `set_bans` (Peers)
+
+            `sync_info` (Daemon)'
+        params:
+          description: Method-specific parameters. The schema for each method is the matching *Request
+            component.
+          anyOf:
+          - $ref: '#/components/schemas/AddPeerRequest'
+          - $ref: '#/components/schemas/BannedRequest'
+          - $ref: '#/components/schemas/DecodeOutputsRequest'
+          - $ref: '#/components/schemas/FlushCacheRequest'
+          - $ref: '#/components/schemas/FlushTransactionPoolRequest'
+          - $ref: '#/components/schemas/RpcEmptyRequest'
+          - $ref: '#/components/schemas/GetBlockRequest'
+          - $ref: '#/components/schemas/GetblockcountRequest'
+          - $ref: '#/components/schemas/GetBlockHeaderByHashRequest'
+          - $ref: '#/components/schemas/GetBlockHeaderByHeightRequest'
+          - $ref: '#/components/schemas/GetBlockHeadersRangeRequest'
+          - $ref: '#/components/schemas/GetblocktemplateRequest'
+          - $ref: '#/components/schemas/GetCoinbaseTxSumRequest'
+          - $ref: '#/components/schemas/GetPerKbFeeEstimateRequest'
+          - $ref: '#/components/schemas/GetGeneratedCoinsRequest'
+          - $ref: '#/components/schemas/GetOutputDistributionRequest'
+          - $ref: '#/components/schemas/GetOutputHistogramRequest'
+          - $ref: '#/components/schemas/GetTxPubkeyRequest'
+          - $ref: '#/components/schemas/HardForkInfoRequest'
+          - $ref: '#/components/schemas/GetblockhashRequest'
+          - $ref: '#/components/schemas/PruneBlockchainRequest'
+          - $ref: '#/components/schemas/RelayTxRequest'
+          - $ref: '#/components/schemas/SetbansRequest'
+          - $ref: '#/components/schemas/SubmitblockRequest'
+        id:
+          description: Client request id, echoed back in the response.
+          oneOf:
+          - type: integer
+          - type: string
+    JsonRpcResponse:
+      type: object
+      properties:
+        jsonrpc:
+          type: string
+          example: '2.0'
+        id:
+          oneOf:
+          - type: integer
+          - type: string
+        result:
+          description: Method-specific result. The schema for each method is the matching *Response component.
+          anyOf:
+          - $ref: '#/components/schemas/AddPeerResponse'
+          - $ref: '#/components/schemas/BannedResponse'
+          - $ref: '#/components/schemas/DecodeOutputsResponse'
+          - $ref: '#/components/schemas/FlushCacheResponse'
+          - $ref: '#/components/schemas/FlushTransactionPoolResponse'
+          - $ref: '#/components/schemas/GetAlternateChainsResponse'
+          - $ref: '#/components/schemas/GetbansResponse'
+          - $ref: '#/components/schemas/GetBlockResponse'
+          - $ref: '#/components/schemas/GetblockcountResponse'
+          - $ref: '#/components/schemas/GetBlockHeaderByHashResponse'
+          - $ref: '#/components/schemas/GetBlockHeaderByHeightResponse'
+          - $ref: '#/components/schemas/GetBlockHeadersRangeResponse'
+          - $ref: '#/components/schemas/GetblocktemplateResponse'
+          - $ref: '#/components/schemas/GetCoinbaseTxSumResponse'
+          - $ref: '#/components/schemas/GetConnectionsResponse'
+          - $ref: '#/components/schemas/GetPerKbFeeEstimateResponse'
+          - $ref: '#/components/schemas/GetGeneratedCoinsResponse'
+          - $ref: '#/components/schemas/GetInfoResponse'
+          - $ref: '#/components/schemas/GetLastBlockHeaderResponse'
+          - $ref: '#/components/schemas/MinVersionResponse'
+          - $ref: '#/components/schemas/GetOutputDistributionResponse'
+          - $ref: '#/components/schemas/GetOutputHistogramResponse'
+          - $ref: '#/components/schemas/GetTxPubkeyResponse'
+          - $ref: '#/components/schemas/GetTransactionPoolBacklogResponse'
+          - $ref: '#/components/schemas/GetVersionResponse'
+          - $ref: '#/components/schemas/GetBlockResponse'
+          - $ref: '#/components/schemas/GetblockcountResponse'
+          - $ref: '#/components/schemas/GetBlockHeaderByHashResponse'
+          - $ref: '#/components/schemas/GetBlockHeaderByHeightResponse'
+          - $ref: '#/components/schemas/GetBlockHeadersRangeResponse'
+          - $ref: '#/components/schemas/GetblocktemplateResponse'
+          - $ref: '#/components/schemas/GetLastBlockHeaderResponse'
+          - $ref: '#/components/schemas/HardForkInfoResponse'
+          - $ref: '#/components/schemas/GetblockhashResponse'
+          - $ref: '#/components/schemas/GetblockhashResponse'
+          - $ref: '#/components/schemas/PruneBlockchainResponse'
+          - $ref: '#/components/schemas/RelayTxResponse'
+          - $ref: '#/components/schemas/SetbansResponse'
+          - $ref: '#/components/schemas/SubmitblockResponse'
+          - $ref: '#/components/schemas/SubmitblockResponse'
+          - $ref: '#/components/schemas/SyncInfoResponse'
+        error:
+          type: object
+          nullable: true
+          properties:
+            code:
+              type: integer
+              description: JSON-RPC error code.
+            message:
+              type: string
+              description: Human readable error.
+    MinVersionResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        version_string:
+          type: string
+        version_int:
+          type: integer
+          format: int32
+      required:
+      - status
+      - version_string
+      - version_int
+    MiningStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        active:
+          type: boolean
+        speed:
+          type: integer
+          format: int64
+        threads_count:
+          type: integer
+          format: int32
+        address:
+          type: string
+        is_background_mining_enabled:
+          type: boolean
+        bg_idle_threshold:
+          type: integer
+          format: int32
+        bg_min_idle_seconds:
+          type: integer
+          format: int32
+        bg_ignore_battery:
+          type: boolean
+        bg_target:
+          type: integer
+          format: int32
+        block_target:
+          type: integer
+          format: int32
+        block_reward:
+          type: integer
+          format: int64
+        difficulty:
+          type: integer
+          format: int64
+          description: Current difficulty. Serialized as a JSON number; on very long chains it can exceed
+            the JavaScript safe integer range.
+      required:
+      - status
+      - active
+      - speed
+      - threads_count
+      - address
+      - is_background_mining_enabled
+      - bg_idle_threshold
+      - bg_min_idle_seconds
+      - bg_ignore_battery
+      - bg_target
+      - block_target
+      - block_reward
+      - difficulty
+    OutPeersRequest:
+      type: object
+      properties:
+        set:
+          type: boolean
+        out_peers:
+          type: integer
+          format: int32
+    OutPeersResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        out_peers:
+          type: integer
+          format: int32
+      required:
+      - status
+      - out_peers
+    Peer:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        host:
+          type: string
+        ip:
+          type: integer
+          format: int32
+        port:
+          type: integer
+          format: int32
+        rpc_port:
+          type: integer
+          format: int32
+        last_seen:
+          type: integer
+          format: int64
+        pruning_seed:
+          type: integer
+          format: int32
+      required:
+      - id
+      - host
+      - ip
+      - port
+      - last_seen
+    PopBlocksRequest:
+      type: object
+      properties:
+        nblocks:
+          type: integer
+          format: int64
+    PopBlocksResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        height:
+          type: integer
+          format: int64
+          description: Block height.
+      required:
+      - status
+      - height
+    PruneBlockchainRequest:
+      type: object
+      properties:
+        check:
+          type: boolean
+    PruneBlockchainResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        pruned:
+          type: boolean
+        pruning_seed:
+          type: integer
+          format: int32
+      required:
+      - status
+      - pruned
+      - pruning_seed
+    PublicNode:
+      type: object
+      properties:
+        host:
+          type: string
+        last_seen:
+          type: integer
+          format: int64
+        rpc_port:
+          type: integer
+          format: int32
+      required:
+      - host
+      - last_seen
+      - rpc_port
+    RelayTxRequest:
+      type: object
+      properties:
+        txids:
+          type: array
+          items:
+            type: string
+    RelayTxResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+      required:
+      - status
+    RpcEmptyRequest:
+      type: object
+      description: This command takes no parameters; params may be omitted or sent as an empty object.
+    SaveBcResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+      required:
+      - status
+    SendRawTxRequest:
+      type: object
+      properties:
+        tx_as_hex:
+          type: string
+          description: Hex-encoded binary data.
+        do_not_relay:
+          type: boolean
+        do_sanity_checks:
+          type: boolean
+    SendRawTxResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        reason:
+          type: string
+        not_relayed:
+          type: boolean
+        low_mixin:
+          type: boolean
+        double_spend:
+          type: boolean
+        invalid_input:
+          type: boolean
+        invalid_output:
+          type: boolean
+        too_big:
+          type: boolean
+        overspend:
+          type: boolean
+        fee_too_low:
+          type: boolean
+        not_rct:
+          type: boolean
+        too_few_outputs:
+          type: boolean
+        sanity_check_failed:
+          type: boolean
+        tx_extra_too_big:
+          type: boolean
+      required:
+      - status
+      - reason
+      - not_relayed
+      - low_mixin
+      - double_spend
+      - invalid_input
+      - invalid_output
+      - too_big
+      - overspend
+      - fee_too_low
+      - not_rct
+      - too_few_outputs
+      - sanity_check_failed
+      - tx_extra_too_big
+    SetBootstrapDaemonRequest:
+      type: object
+      properties:
+        address:
+          type: string
+        username:
+          type: string
+        password:
+          type: string
+    SetBootstrapDaemonResponse:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+      - status
+    SetLimitRequest:
+      type: object
+      properties:
+        limit_down:
+          type: integer
+          format: int64
+        limit_up:
+          type: integer
+          format: int64
+    SetLimitResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        limit_up:
+          type: integer
+          format: int64
+        limit_down:
+          type: integer
+          format: int64
+      required:
+      - status
+      - limit_up
+      - limit_down
+    SetLogCategoriesRequest:
+      type: object
+      properties:
+        categories:
+          type: string
+    SetLogCategoriesResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        categories:
+          type: string
+      required:
+      - status
+      - categories
+    SetLogHashRateRequest:
+      type: object
+      properties:
+        visible:
+          type: boolean
+    SetLogHashRateResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+      required:
+      - status
+    SetLogLevelRequest:
+      type: object
+      properties:
+        level:
+          type: integer
+          format: int32
+    SetLogLevelResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+      required:
+      - status
+    SetbansBan:
+      type: object
+      properties:
+        host:
+          type: string
+        ip:
+          type: integer
+          format: int32
+        ban:
+          type: boolean
+        seconds:
+          type: integer
+          format: int32
+      required:
+      - host
+      - ip
+      - ban
+      - seconds
+    SetbansRequest:
+      type: object
+      properties:
+        bans:
+          type: array
+          items:
+            $ref: '#/components/schemas/SetbansBan'
+    SetbansResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+      required:
+      - status
+    SpentKeyImageInfo:
+      type: object
+      properties:
+        id_hash:
+          type: string
+          description: Hex-encoded binary data.
+        txs_hashes:
+          type: array
+          items:
+            type: string
+            description: Hex-encoded binary data.
+      required:
+      - id_hash
+      - txs_hashes
+    StartMiningRequest:
+      type: object
+      properties:
+        miner_address:
+          type: string
+        threads_count:
+          type: integer
+          format: int64
+        do_background_mining:
+          type: boolean
+        ignore_battery:
+          type: boolean
+        mining_affinity:
+          type: boolean
+    StartMiningResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+      required:
+      - status
+    StopDaemonResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+      required:
+      - status
+    StopMiningResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+      required:
+      - status
+    SubmitblockRequest:
+      type: array
+      items:
+        type: string
+    SubmitblockResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+      required:
+      - status
+    SyncInfoPeer:
+      type: object
+      properties:
+        info:
+          $ref: '#/components/schemas/ConnectionInfo'
+      required:
+      - info
+    SyncInfoResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        height:
+          type: integer
+          format: int64
+          description: Block height.
+        target_height:
+          type: integer
+          format: int64
+        next_needed_pruning_seed:
+          type: integer
+          format: int32
+        peers:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncInfoPeer'
+        spans:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncInfoSpan'
+        overview:
+          type: string
+      required:
+      - status
+      - height
+      - target_height
+      - next_needed_pruning_seed
+      - peers
+      - spans
+      - overview
+    SyncInfoSpan:
+      type: object
+      properties:
+        start_block_height:
+          type: integer
+          format: int64
+        nblocks:
+          type: integer
+          format: int64
+        connection_id:
+          type: string
+        rate:
+          type: integer
+          format: int32
+        speed:
+          type: integer
+          format: int32
+        size:
+          type: integer
+          format: int64
+        remote_address:
+          type: string
+      required:
+      - start_block_height
+      - nblocks
+      - connection_id
+      - rate
+      - speed
+      - size
+      - remote_address
+    TxInfo:
+      type: object
+      properties:
+        id_hash:
+          type: string
+          description: Hex-encoded binary data.
+        tx_json:
+          type: string
+          description: TODO - expose this data directly
+        blob_size:
+          type: integer
+          format: int64
+        weight:
+          type: integer
+          format: int64
+        fee:
+          type: integer
+          format: int64
+        max_used_block_id_hash:
+          type: string
+          description: Hex-encoded binary data.
+        max_used_block_height:
+          type: integer
+          format: int64
+        kept_by_block:
+          type: boolean
+        last_failed_height:
+          type: integer
+          format: int64
+        last_failed_id_hash:
+          type: string
+          description: Hex-encoded binary data.
+        receive_time:
+          type: integer
+          format: int64
+        relayed:
+          type: boolean
+        last_relayed_time:
+          type: integer
+          format: int64
+        do_not_relay:
+          type: boolean
+        double_spend_seen:
+          type: boolean
+        tx_blob:
+          type: string
+          description: Hex-encoded binary data.
+      required:
+      - id_hash
+      - tx_json
+      - blob_size
+      - fee
+      - max_used_block_id_hash
+      - max_used_block_height
+      - kept_by_block
+      - last_failed_height
+      - last_failed_id_hash
+      - receive_time
+      - relayed
+      - last_relayed_time
+      - do_not_relay
+      - double_spend_seen
+      - tx_blob
+    TxpoolHisto:
+      type: object
+      properties:
+        txs:
+          type: integer
+          format: int32
+        bytes:
+          type: integer
+          format: int64
+      required:
+      - txs
+      - bytes
+    TxpoolStats:
+      type: object
+      properties:
+        bytes_total:
+          type: integer
+          format: int64
+        bytes_min:
+          type: integer
+          format: int32
+        bytes_max:
+          type: integer
+          format: int32
+        bytes_med:
+          type: integer
+          format: int32
+        fee_total:
+          type: integer
+          format: int64
+        oldest:
+          type: integer
+          format: int64
+        txs_total:
+          type: integer
+          format: int32
+        num_failing:
+          type: integer
+          format: int32
+        num_10m:
+          type: integer
+          format: int32
+        num_not_relayed:
+          type: integer
+          format: int32
+        histo_98pc:
+          type: integer
+          format: int64
+        histo:
+          type: array
+          items:
+            $ref: '#/components/schemas/TxpoolHisto'
+        num_double_spends:
+          type: integer
+          format: int32
+      required:
+      - bytes_total
+      - bytes_min
+      - bytes_max
+      - bytes_med
+      - fee_total
+      - oldest
+      - txs_total
+      - num_failing
+      - num_10m
+      - num_not_relayed
+      - histo_98pc
+      - histo
+      - num_double_spends
+    UpdateResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: RPC status string, "OK" on success.
+        untrusted:
+          type: boolean
+          description: True when the answer came from a bootstrap daemon.
+        update:
+          type: boolean
+        version:
+          type: string
+        codename:
+          type: string
+        uri:
+          type: string
+        release_note:
+          type: string
+      required:
+      - status
+      - update
+      - version
+      - codename
+      - uri
+      - release_note
