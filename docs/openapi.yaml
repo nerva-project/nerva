@@ -20,7 +20,7 @@ info:
 
     This document is generated from the daemon source by scripts/openapi/generate_openapi.py and is checked
     for drift in CI.'
-  version: 4.1.0
+  version: 4.2.0
   contact:
     name: Nerva Project
     url: https://nerva.one
