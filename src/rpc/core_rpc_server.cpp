@@ -670,7 +670,8 @@ namespace cryptonote
     const bool restricted = m_restricted && ctx;
     if (restricted && req.tx_hashes.size() > RESTRICTED_TRANSACTIONS_COUNT)
     {
-      res.status = "Too many transactions requested in restricted mode";
+      error_resp.code = CORE_RPC_ERROR_CODE_RESTRICTED;
+      error_resp.message = "Too many transactions requested in restricted mode";
       return false;
     }
 
@@ -680,12 +681,14 @@ namespace cryptonote
       blobdata b;
       if(!string_tools::parse_hexstr_to_binbuff(tx_hex_str, b))
       {
-        res.status = "Failed to parse hex representation of transaction hash";
+        error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+        error_resp.message = "Failed to parse hex representation of transaction hash";
         return false;
       }
       if(b.size() != sizeof(crypto::hash))
       {
-        res.status = "Failed, size of data mismatch";
+        error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+        error_resp.message = "Failed, size of data mismatch";
         return false;
       }
       vh.push_back(*reinterpret_cast<const crypto::hash*>(b.data()));
@@ -698,7 +701,8 @@ namespace cryptonote
 
     if(!m_core.get_transactions(vh, txs, missed_txs))
     {
-      res.status = "Failed. Could not retrieve transactions";
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "Failed. Could not retrieve transactions";
       return false;
     }
 
@@ -722,9 +726,10 @@ namespace cryptonote
       }
     }
 
-    if (!get_account_address_from_str(ai, cryptonote::MAINNET, req.address))
+    if (!get_account_address_from_str(ai, nettype(), req.address))
     {
-      res.status = "Failed. Could not parse address";
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_WALLET_ADDRESS;
+      error_resp.message = "Failed. Could not parse address";
       return false;
     }
 
@@ -736,15 +741,17 @@ namespace cryptonote
 
     if(!epee::string_tools::parse_hexstr_to_binbuff(req.sec_view_key, sec_vk_data) || sec_vk_data.size() != sizeof(crypto::secret_key))
     {
-      res.status = "Failed. Could not parse view key";
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+      error_resp.message = "Failed. Could not parse view key";
       return false;
     }
 
     view_seckey = *reinterpret_cast<const crypto::secret_key*>(sec_vk_data.data());
-    std::vector<crypto::key_derivation> tx_derivations;
-
     for(const auto& tx: txs)
     {
+      // Per transaction: an output can only be matched by its own tx's
+      // derivations, and sharing the vector made the scan quadratic.
+      std::vector<crypto::key_derivation> tx_derivations;
       crypto::public_key tx_pubkey = get_tx_pub_key_from_extra(tx.extra);
       crypto::key_derivation kd;
 
@@ -807,14 +814,16 @@ namespace cryptonote
                   break;
                 default:
                 {
-                  res.status = "Failed. Unknown RCT type";
+                  error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+                  error_resp.message = "Failed. Unknown RCT type";
                   return false;
                 }
               }
             }
             catch (const std::exception &e)
             {
-              res.status = "Failed. Failed to decode input";
+              error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+              error_resp.message = "Failed. Failed to decode input";
               return false;
             }
 
