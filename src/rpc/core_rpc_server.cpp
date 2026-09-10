@@ -1893,6 +1893,15 @@ namespace cryptonote
   bool core_rpc_server::fill_block_header_response(const block& blk, bool orphan_status, uint64_t height, const crypto::hash& hash, block_header_response& response)
   {
     PERF_TIMER(fill_block_header_response);
+    // An alt block carries its own height, so it can sit past the tip: the db
+    // reads below would throw for it and depth would underflow. Checked before
+    // anything is written, so a rejected header leaves response untouched.
+    const uint64_t bc_height = m_core.get_current_blockchain_height();
+    if (height >= bc_height)
+    {
+      MDEBUG("Block header requested for height " << height << ", chain height " << bc_height);
+      return false;
+    }
     response.major_version = blk.major_version;
     response.minor_version = blk.minor_version;
     response.timestamp = blk.timestamp;
@@ -1900,16 +1909,25 @@ namespace cryptonote
     response.nonce = blk.nonce;
     response.orphan_status = orphan_status;
     response.height = height;
-    response.depth = m_core.get_current_blockchain_height() - height - 1;
+    response.depth = bc_height - height - 1;
     response.hash = string_tools::pod_to_hex(hash);
     response.difficulty = m_core.get_blockchain_storage().block_difficulty(height);
-    store_128(m_core.get_blockchain_storage().get_db().get_block_cumulative_difficulty(height),
-        response.cumulative_difficulty, response.cumulative_difficulty_top64);
     response.reward = get_block_reward(blk);
-    response.block_size = response.block_weight = m_core.get_blockchain_storage().get_db().get_block_weight(height);
     response.num_txes = blk.tx_hashes.size();
-    response.long_term_weight = m_core.get_blockchain_storage().get_db().get_block_long_term_weight(height);
     response.miner_tx_hash = string_tools::pod_to_hex(cryptonote::get_transaction_hash(blk.miner_tx));
+    // Bounded above, but a reorg between that read and these still throws.
+    try
+    {
+      store_128(m_core.get_blockchain_storage().get_db().get_block_cumulative_difficulty(height),
+          response.cumulative_difficulty, response.cumulative_difficulty_top64);
+      response.block_size = response.block_weight = m_core.get_blockchain_storage().get_db().get_block_weight(height);
+      response.long_term_weight = m_core.get_blockchain_storage().get_db().get_block_long_term_weight(height);
+    }
+    catch (const std::exception &e)
+    {
+      MERROR("Failed to fill block header at height " << height << ": " << e.what());
+      return false;
+    }
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
@@ -2522,13 +2540,33 @@ namespace cryptonote
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_get_generated_coins(const COMMAND_RPC_GET_GENERATED_COINS::request& req, COMMAND_RPC_GET_GENERATED_COINS::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
   {
-    PERF_TIMER(on_get_generated_coins);
+    RPC_TRACKER(get_generated_coins);
     CHECK_CORE_READY();
+    const uint64_t bc_height = m_core.get_current_blockchain_height();
     uint64_t h = req.height;
     if (h == 0)
-      h = m_core.get_current_blockchain_height() - 1;
-    uint64_t c = m_core.get_blockchain_storage().get_db().get_block_already_generated_coins(h);
-    res.coins = c;
+      h = bc_height - 1;
+    else if (h >= bc_height)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT;
+      error_resp.message = std::string("Requested block height: ") + std::to_string(req.height) + " greater than current top block height: " +  std::to_string(bc_height - 1);
+      return false;
+    }
+    // Bounded above, but a reorg between the height read and the lookup still throws.
+    try
+    {
+      res.coins = m_core.get_blockchain_storage().get_db().get_block_already_generated_coins(h);
+    }
+    catch (const std::exception &e)
+    {
+      // The reason goes to the log, not to a caller who may be unauthenticated.
+      MERROR("Failed to get generated coins at height " << h << ": " << e.what());
+      // The in-process daemon caller reads res.status and never sees error_resp.
+      res.status = "Failed to get generated coins";
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "Internal error: can't get generated coins. Height = " + std::to_string(req.height) + '.';
+      return false;
+    }
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
