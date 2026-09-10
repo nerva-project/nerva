@@ -50,6 +50,11 @@ env:
         echo "Acquire::Retries \"3\";"         | sudo tee -a /etc/apt/apt.conf.d/80-custom
         echo "Acquire::http::Timeout \"120\";" | sudo tee -a /etc/apt/apt.conf.d/80-custom
         echo "Acquire::ftp::Timeout \"120\";"  | sudo tee -a /etc/apt/apt.conf.d/80-custom
+    UPDATE_APT: |
+        # An unused third-party repo on the runner image serving a bad index would
+        # otherwise fail the job before anything is compiled. The install step is the
+        # real gate: a repo this build does need failing shows up there.
+        sudo apt-get update || echo "apt-get update reported errors, continuing"
     CCACHE_SETTINGS: |
         ccache --max-size=500M
         ccache --set-config=compression=true
@@ -76,9 +81,9 @@ jobs:
             -   name: Set APT configuration
                 run: ${{env.SET_APT_CONF}}
             -   name: Update APT
-                run: sudo apt update
+                run: ${{env.UPDATE_APT}}
             -   name: Install dependencies
-                run: sudo apt install -y build-essential cmake ccache pkg-config libboost-all-dev libssl-dev libzmq3-dev libpgm-dev libunbound-dev libsodium-dev git
+                run: sudo apt-get install -y build-essential cmake ccache pkg-config libboost-all-dev libssl-dev libzmq3-dev libpgm-dev libunbound-dev libsodium-dev git
             -   uses: ./.github/actions/set-make-job-count
             -   name: Build
                 run: |
@@ -163,9 +168,9 @@ jobs:
             -   name: Set APT configuration
                 run: ${{env.SET_APT_CONF}}
             -   name: Update APT
-                run: sudo apt update
+                run: ${{env.UPDATE_APT}}
             -   name: Install dependencies
-                run: sudo apt install -y build-essential cmake ccache pkg-config libboost-all-dev libssl-dev libzmq3-dev libpgm-dev libunbound-dev libsodium-dev git
+                run: sudo apt-get install -y build-essential cmake ccache pkg-config libboost-all-dev libssl-dev libzmq3-dev libpgm-dev libunbound-dev libsodium-dev git
             -   uses: ./.github/actions/set-make-job-count
             -   name: Build
                 run: |
