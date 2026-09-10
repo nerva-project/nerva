@@ -654,11 +654,22 @@ namespace cryptonote
     return get_block_longhash(context, db, b.major_version, blob, res, height);
   }
   //---------------------------------------------------------------
+  // get_cna_v2_data indexes the block cache by a XOR of two bytes below the
+  // height it is handed, so that height must be at least CN_SEED_BACKREACH for
+  // the subscript to stay in range. The hashers that read at a fixed depth take
+  // the sum; get_block_longhash_v7_8 takes its own offset instead.
+  //
+  // These are real checks rather than asserts because handle_alternative_block
+  // validates a block's fork version against the height its miner tx claims but
+  // hashes at the height derived from its parent, so a peer chooses the two
+  // independently and can drive any of these paths at any height.
+  static constexpr uint64_t CN_SEED_BACKREACH = 255;
+  static constexpr uint64_t CN_SEED_STABLE_DEPTH = 256;
+  static constexpr uint64_t CN_SEED_MIN_HEIGHT = CN_SEED_STABLE_DEPTH + CN_SEED_BACKREACH;
+  //---------------------------------------------------------------
   bool get_block_longhash_v13(crypto::cn_hash_context_t *context, BlockchainDB &db, const blobdata &blob, crypto::hash &res, uint64_t height)
   {
-    // same hard guard as the v14 path: the assert is compiled out in release
-    // and the subtraction below would wrap
-    if (height <= 257)
+    if (height < CN_SEED_MIN_HEIGHT)
       return false;
     const uint64_t stable_height = height - 256;
 
@@ -692,9 +703,7 @@ namespace cryptonote
   //---------------------------------------------------------------
   bool get_block_longhash_v14(crypto::cn_hash_context_t *context, BlockchainDB &db, const blobdata &blob, crypto::hash &res, uint64_t height)
   {
-    // no fork table puts v14 this low; keep the guard hard because the
-    // assert is compiled out in release and the subtraction would wrap
-    if (height <= 257)
+    if (height < CN_SEED_MIN_HEIGHT)
       return false;
     const uint64_t stable_height = height - 256;
 
@@ -766,7 +775,10 @@ namespace cryptonote
   //---------------------------------------------------------------
   crypto::hash get_block_longhash(crypto::cn_hash_context_t *context, Blockchain *bc, const block& b, const uint64_t height)
   {
-    crypto::hash p = crypto::null_hash;
+    // 0xff rather than null: an all-zero hash passes check_hash at every
+    // difficulty, so a failure here must not read as a satisfied target.
+    crypto::hash p;
+    memset(p.data, 0xff, sizeof(p.data));
     get_block_longhash(context, bc, b, p, height);
     return p;
   }
@@ -774,8 +786,10 @@ namespace cryptonote
   bool get_block_longhash_v11(crypto::cn_hash_context_t *context, BlockchainDB &db, const blobdata &blob, crypto::hash &res, uint64_t height)
   {
     // Guard against chain splits by only taking data from blocks with at least
-    // 256 ancestors.
-    assert(height > 257);
+    // 256 ancestors. A real check, not an assert: handle_alternative_block
+    // hashes at a height derived from the parent, so this is reachable.
+    if (height < CN_SEED_MIN_HEIGHT)
+      return false;
     uint64_t stable_height = height - 256;
 
     if (context->cached_height != height)
@@ -813,6 +827,9 @@ namespace cryptonote
 
   bool get_block_longhash_v10(crypto::cn_hash_context_t *context, BlockchainDB &db, const blobdata &blob, crypto::hash& res, uint64_t height)
   {
+    if (height < CN_SEED_MIN_HEIGHT)
+      return false;
+
     const uint64_t ht = height - 256;
 
     if (context->cached_height != height)
@@ -854,6 +871,9 @@ namespace cryptonote
 
   bool get_block_longhash_v9(crypto::cn_hash_context_t *context, BlockchainDB &db, const blobdata &blob, crypto::hash& res, uint64_t height)
   {
+    if (height < CN_SEED_MIN_HEIGHT)
+      return false;
+
     const uint64_t ht = height - 256;
 
     if (context->cached_height != height)
@@ -877,6 +897,9 @@ namespace cryptonote
 
   bool get_block_longhash_v7_8(crypto::cn_hash_context_t *context, BlockchainDB &db, const blobdata &blob, crypto::hash& res, uint64_t height, uint64_t data_offset)
   {
+    if (height < data_offset + CN_SEED_BACKREACH)
+      return false;
+
     if (context->cached_height != height)
     {
       db.get_cna_v2_data(&context->random_values, height - data_offset, CN_SCRATCHPAD_MEMORY - 1);

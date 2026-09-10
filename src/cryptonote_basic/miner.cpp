@@ -866,8 +866,18 @@ namespace cryptonote
       }
 
       b.nonce = nonce;
+      // 0xff and a checked return: h is only written when the hash succeeds,
+      // and an all-zero hash would pass check_hash at every difficulty.
       crypto::hash h;
-      get_block_longhash(hash_context, m_pbc, b, h, height);
+      memset(h.data, 0xff, sizeof(h.data));
+      if (!get_block_longhash(hash_context, m_pbc, b, h, height))
+      {
+        // Height-dependent, so retrying this template cannot help; wait for
+        // the next one rather than spinning.
+        LOG_PRINT_L2("No long hash available at height " << height);
+        epee::misc_utils::sleep_no_w(1000);
+        continue;
+      }
 
       // Report which pages the mining buffers landed on. The allocation used to
       // fall back to normal pages silently and mining just looked slow until
