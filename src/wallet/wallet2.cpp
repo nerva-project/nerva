@@ -10043,13 +10043,24 @@ bool wallet2::use_fork_rules(uint8_t version, int64_t early_blocks)
 // light wallet, which would build the larger ring before consensus takes it.
 // One size is valid per version, so the same helper consensus uses decides it
 // here and the two cannot drift apart.
+// Either guess builds a ring the network refuses: the old size after the fork,
+// the new one before it. Both callers must fail rather than pick one.
+uint8_t wallet2::get_hard_fork_for_ring_size()
+{
+  // A light wallet server speaks the light wallet api and has no hard_fork_info,
+  // so asking would surface as a connection error against a server that is
+  // answering fine. Say what is actually wrong.
+  THROW_WALLET_EXCEPTION_IF(m_light_wallet, error::wallet_internal_error,
+      "Cannot determine the ring size: the fork version is not available in light wallet mode");
+  const uint8_t hf_version = get_current_hard_fork();
+  // Offline there is no version to read.
+  THROW_WALLET_EXCEPTION_IF(hf_version == 0, error::no_connection_to_daemon, "hard_fork_info");
+  return hf_version;
+}
+//----------------------------------------------------------------------------------------------------
 uint64_t wallet2::adjust_mixin(uint64_t mixin)
 {
-  const uint8_t hf_version = get_current_hard_fork();
-  // Offline there is no version to read, and either guess builds a ring the
-  // network refuses: the old size after the fork, the new one before it. Say
-  // that rather than hand back a transaction the daemon drops without a reason.
-  THROW_WALLET_EXCEPTION_IF(hf_version == 0, error::no_connection_to_daemon, "hard_fork_info");
+  const uint8_t hf_version = get_hard_fork_for_ring_size();
   const uint64_t ring_size = cryptonote::get_ring_size(hf_version);
   if (mixin + 1 != ring_size)
   {
@@ -10175,8 +10186,11 @@ const wallet2::transfer_details &wallet2::get_transfer_details(size_t idx) const
 //----------------------------------------------------------------------------------------------------
 std::vector<size_t> wallet2::select_available_unmixable_outputs()
 {
-  // too few of the amount around to build a ring of the size this fork wants
-  return select_available_outputs_from_histogram(cryptonote::get_ring_size(get_current_hard_fork()), false, true, false);
+  // too few of the amount around to build a ring of the size this fork wants.
+  // Same helper as adjust_mixin: get_current_hard_fork answers 0 when offline,
+  // and get_ring_size(0) is the pre-fork size, which would quietly pick the
+  // wrong threshold instead of saying the version is unknown.
+  return select_available_outputs_from_histogram(cryptonote::get_ring_size(get_hard_fork_for_ring_size()), false, true, false);
 }
 //----------------------------------------------------------------------------------------------------
 std::vector<wallet2::pending_tx> wallet2::create_unmixable_sweep_transactions()

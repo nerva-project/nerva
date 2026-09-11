@@ -1036,6 +1036,7 @@ private:
     const transfer_details &get_transfer_details(size_t idx) const;
 
     uint8_t get_current_hard_fork();
+    uint8_t get_hard_fork_for_ring_size();
     void get_hard_fork_info(uint8_t version, uint64_t &earliest_height);
     bool use_fork_rules(uint8_t version, int64_t early_blocks = 0);
     // ring size consensus will accept for a transaction built right now
