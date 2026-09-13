@@ -7376,13 +7376,13 @@ bool wallet2::is_output_blackballed(const std::pair<uint64_t, uint64_t> &output)
 
 bool wallet2::lock_keys_file()
 {
-  if (m_keys_file_locker)
+  if (m_keys_file_locker && m_keys_file_locker->locked())
   {
     MDEBUG(m_keys_file << " is already locked.");
     return false;
   }
   m_keys_file_locker.reset(new tools::file_locker(m_keys_file));
-  return true;
+  return m_keys_file_locker->locked();
 }
 
 bool wallet2::unlock_keys_file()
@@ -7398,7 +7398,7 @@ bool wallet2::unlock_keys_file()
 
 bool wallet2::is_keys_file_locked() const
 {
-  return m_keys_file_locker->locked();
+  return m_keys_file_locker && m_keys_file_locker->locked();
 }
 
 bool wallet2::tx_add_fake_output(std::vector<std::vector<tools::wallet2::get_outs_entry>> &outs, uint64_t global_index, const crypto::public_key& output_public_key, const rct::key& mask, uint64_t real_index, bool unlocked) const
