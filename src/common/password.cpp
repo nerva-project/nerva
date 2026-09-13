@@ -42,7 +42,9 @@
 #include <unistd.h>
 #endif
 
+#define ETX 0x3
 #define EOT 0x4
+#define DC1 0x11
 
 namespace
 {
@@ -52,13 +54,13 @@ namespace
     return 0 != _isatty(_fileno(stdin));
   }
 
-  bool read_from_tty(epee::wipeable_string& pass, bool hide_input)
+  bool read_from_tty(epee::wipeable_string& pass, bool hide_input, bool& cancelled)
   {
     HANDLE h_cin = ::GetStdHandle(STD_INPUT_HANDLE);
 
     DWORD mode_old;
     ::GetConsoleMode(h_cin, &mode_old);
-    DWORD mode_new = mode_old & ~((hide_input ? ENABLE_ECHO_INPUT : 0) | ENABLE_LINE_INPUT);
+    DWORD mode_new = mode_old & ~((hide_input ? ENABLE_ECHO_INPUT : 0) | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
     ::SetConsoleMode(h_cin, mode_new);
 
     bool r = true;
@@ -79,6 +81,13 @@ namespace
       else if (ucs2_ch == L'\r')
       {
         std::cout << std::endl;
+        break;
+      }
+      else if (ucs2_ch == ETX || ucs2_ch == EOT || ucs2_ch == DC1)
+      {
+        cancelled = true;
+        std::cout << std::endl;
+        r = false;
         break;
       }
       else if (ucs2_ch == L'\b')
@@ -124,7 +133,8 @@ namespace
 
     struct termios tty_new;
     tty_new = tty_old;
-    tty_new.c_lflag &= ~(ICANON | (hide_input ? ECHO : 0));
+    tty_new.c_lflag &= ~(ICANON | ISIG | (hide_input ? ECHO : 0));
+    tty_new.c_iflag &= ~IXON;
     tcsetattr(STDIN_FILENO, TCSANOW, &tty_new);
 
     int ch = getchar();
@@ -134,7 +144,7 @@ namespace
     return ch;
   }
 
-  bool read_from_tty(epee::wipeable_string& aPass, bool hide_input)
+  bool read_from_tty(epee::wipeable_string& aPass, bool hide_input, bool& cancelled)
   {
     static constexpr const char BACKSPACE = 127;
 
@@ -142,8 +152,14 @@ namespace
     while (aPass.size() < tools::password_container::max_password_size)
     {
       int ch = getch(hide_input);
-      if (EOF == ch || ch == EOT)
+      if (EOF == ch)
       {
+        return false;
+      }
+      else if (ch == ETX || ch == EOT || ch == DC1)
+      {
+        cancelled = true;
+        std::cout << std::endl;
         return false;
       }
       else if (ch == '\n' || ch == '\r')
@@ -176,18 +192,18 @@ namespace
 
 #endif // end !WIN32
 
-  bool read_from_tty(const bool verify, const char *message, bool hide_input, epee::wipeable_string& pass1, epee::wipeable_string& pass2)
+  bool read_from_tty(const bool verify, const char *message, bool hide_input, epee::wipeable_string& pass1, epee::wipeable_string& pass2, bool& cancelled)
   {
     while (true)
     {
       if (message)
         std::cout << message <<": " << std::flush;
-      if (!read_from_tty(pass1, hide_input))
+      if (!read_from_tty(pass1, hide_input, cancelled))
         return false;
       if (verify)
       {
         std::cout << "Confirm password: ";
-        if (!read_from_tty(pass2, hide_input))
+        if (!read_from_tty(pass2, hide_input, cancelled))
           return false;
         if(pass1!=pass2)
         {
@@ -250,18 +266,21 @@ namespace tools
 
   std::atomic<bool> password_container::is_prompting(false);
 
-  boost::optional<password_container> password_container::prompt(const bool verify, const char *message, bool hide_input)
+  boost::optional<password_container> password_container::prompt(const bool verify, const char *message, bool hide_input, bool *cancelled)
   {
+    bool aborted = false;
     is_prompting = true;
     password_container pass1{};
     password_container pass2{};
-    if (is_cin_tty() ? read_from_tty(verify, message, hide_input, pass1.m_password, pass2.m_password) : read_from_file(pass1.m_password))
-    {
-      is_prompting = false;
-      return {std::move(pass1)};
-    }
-
+    const bool read = is_cin_tty() ? read_from_tty(verify, message, hide_input, pass1.m_password, pass2.m_password, aborted) : read_from_file(pass1.m_password);
     is_prompting = false;
+
+    if (cancelled)
+      *cancelled = aborted;
+
+    if (read)
+      return {std::move(pass1)};
+
     return boost::none;
   }
 
