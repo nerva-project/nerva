@@ -93,7 +93,7 @@ namespace cryptonote
     void wallet_idle_thread();
 
     //! \return Prompts user for password and verifies against local file. Logs on error and returns `none`
-    boost::optional<tools::password_container> get_and_verify_password(bool *cancelled = nullptr) const;
+    boost::optional<tools::password_container> get_and_verify_password() const;
 
     boost::optional<epee::wipeable_string> new_wallet(const boost::program_options::variables_map& vm, const crypto::secret_key& recovery_key,
         bool recover, bool two_random, const std::string &old_language);
@@ -270,7 +270,7 @@ namespace cryptonote
     bool on_command(bool (simple_wallet::*cmd)(const std::vector<std::string>&), const std::vector<std::string> &args);
     bool on_empty_command();
     bool on_cancelled_command();
-    bool check_for_inactivity_lock(bool user);
+    void check_for_inactivity_lock(bool user);
 
     struct transfer_view
     {

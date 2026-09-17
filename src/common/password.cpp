@@ -38,6 +38,7 @@
 #include <io.h>
 #include <windows.h>
 #else
+#include <cerrno>
 #include <termios.h>
 #include <unistd.h>
 #endif
@@ -133,11 +134,18 @@ namespace
 
     struct termios tty_new;
     tty_new = tty_old;
-    tty_new.c_lflag &= ~(ICANON | ISIG | (hide_input ? ECHO : 0));
+    tty_new.c_lflag &= ~(ICANON | (hide_input ? ECHO : 0));
     tty_new.c_iflag &= ~IXON;
-    tcsetattr(STDIN_FILENO, TCSANOW, &tty_new);
+    tty_new.c_cc[VINTR] = _POSIX_VDISABLE;
 
-    int ch = getchar();
+    int ch;
+    do
+    {
+      tcsetattr(STDIN_FILENO, TCSANOW, &tty_new);
+      clearerr(stdin);
+      errno = 0;
+      ch = getchar();
+    } while (EOF == ch && EINTR == errno);
 
     tcsetattr(STDIN_FILENO, TCSANOW, &tty_old);
 

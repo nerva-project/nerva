@@ -4362,9 +4362,9 @@ std::string simple_wallet::get_mnemonic_language()
   return language_list_self[language_number];
 }
 //----------------------------------------------------------------------------------------------------
-boost::optional<tools::password_container> simple_wallet::get_and_verify_password(bool *cancelled) const
+boost::optional<tools::password_container> simple_wallet::get_and_verify_password() const
 {
-  auto pwd_container = default_password_prompter(m_wallet_file.empty(), cancelled);
+  auto pwd_container = default_password_prompter(m_wallet_file.empty());
   if (!pwd_container)
     return boost::none;
 
@@ -5831,12 +5831,12 @@ bool simple_wallet::prompt_if_old(const std::vector<tools::wallet2::pending_tx> 
   }
   return true;
 }
-bool simple_wallet::check_for_inactivity_lock(bool user)
+void simple_wallet::check_for_inactivity_lock(bool user)
 {
   if (m_locked)
   {
     if (m_quit_requested)
-      return false;
+      return;
 
     bool quit = false;
     {
@@ -5870,13 +5870,15 @@ bool simple_wallet::check_for_inactivity_lock(bool user)
         try
         {
           bool cancelled = false;
-          if (get_and_verify_password(&cancelled))
+          const auto pwd_container = default_password_prompter(m_wallet_file.empty(), &cancelled);
+          if (pwd_container && m_wallet->verify_password(pwd_container->password()))
             break;
-          if (cancelled || std::cin.eof())
+          if (!pwd_container || std::cin.eof())
           {
             quit = true;
             break;
           }
+          fail_msg_writer() << tr("invalid password");
         }
         catch (...) { /* do nothing, just let the loop loop */ }
       }
@@ -5893,10 +5895,8 @@ bool simple_wallet::check_for_inactivity_lock(bool user)
       m_quit_requested = true;
       tools::msg_writer() << tr("Exiting wallet at user request.");
       stop();
-      return false;
     }
   }
-  return true;
 }
 //----------------------------------------------------------------------------------------------------
 bool simple_wallet::on_command(bool (simple_wallet::*cmd)(const std::vector<std::string>&), const std::vector<std::string> &args)
@@ -5911,7 +5911,8 @@ bool simple_wallet::on_command(bool (simple_wallet::*cmd)(const std::vector<std:
     m_in_command = false;
   });
 
-  if (!check_for_inactivity_lock(false))
+  check_for_inactivity_lock(false);
+  if (m_quit_requested)
     return true;
   return (this->*cmd)(args);
 }
