@@ -287,20 +287,25 @@ namespace
     return buf;
   }
 
-  boost::optional<tools::password_container> password_prompter(const char *prompt, bool verify)
+  boost::optional<tools::password_container> prompt_for_password(const char *prompt, bool verify, bool *cancelled)
   {
     PAUSE_READLINE();
-    auto pwd_container = tools::password_container::prompt(verify, prompt);
-    if (!pwd_container)
+    auto pwd_container = tools::password_container::prompt(verify, prompt, true, cancelled);
+    if (!pwd_container && !(cancelled && *cancelled))
     {
       tools::fail_msg_writer() << sw::tr("failed to read wallet password");
     }
     return pwd_container;
   }
 
-  boost::optional<tools::password_container> default_password_prompter(bool verify)
+  boost::optional<tools::password_container> password_prompter(const char *prompt, bool verify)
   {
-    return password_prompter(verify ? sw::tr("Enter a new password for the wallet") : sw::tr("Wallet password"), verify);
+    return prompt_for_password(prompt, verify, nullptr);
+  }
+
+  boost::optional<tools::password_container> default_password_prompter(bool verify, bool *cancelled = nullptr)
+  {
+    return prompt_for_password(verify ? sw::tr("Enter a new password for the wallet") : sw::tr("Wallet password"), verify, cancelled);
   }
 
   inline std::string interpret_rpc_response(bool ok, const std::string& status)
@@ -2812,6 +2817,7 @@ simple_wallet::simple_wallet()
   , m_last_activity_time(time(NULL))
   , m_locked(false)
   , m_in_command(false)
+  , m_quit_requested(false)
 {
   m_cmd_binder.set_handler("start_mining",
                            std::bind(&simple_wallet::on_command, this, &simple_wallet::start_mining, std::placeholders::_1),
@@ -5829,42 +5835,67 @@ void simple_wallet::check_for_inactivity_lock(bool user)
 {
   if (m_locked)
   {
-#ifdef HAVE_READLINE
-    PAUSE_READLINE();
-    rdln::clear_screen();
-#endif
-    tools::clear_screen();
-    m_in_command = true;
+    if (m_quit_requested)
+      return;
 
-    tools::msg_writer() << R"(   |  |  |  |  |  |                                  )";
-    tools::msg_writer() << R"(  ==================                                 )";
-    tools::msg_writer() << R"(--|     /\      ___|--   _ __   ___ _ ____   ____ _  )";
-    tools::msg_writer() << R"(--|    /  \    / __     | '_ \ / _ \ '__\ \ / / _` | )";
-    tools::msg_writer() << R"(--|   / /\ \  / /  |--  | | | |  __/ |   \ V / (_| | )";
-    tools::msg_writer() << R"(--|__/ /  \ \/ /   |--  |_| |_|\___|_|    \_/ \__,_| )";
-    tools::msg_writer() << R"(   ___/    \  /    |-- ==============================)";
-    tools::msg_writer() << R"(--|         \/     |--  )" << MONERO_VERSION << ": " << MONERO_RELEASE_NAME;
-    tools::msg_writer() << R"(  ==================                                 )";
-    tools::msg_writer() << R"(   |  |  |  |  |  |                                  )";
-    tools::msg_writer() << "" << ENDL;
-
-    if (!user)
-      tools::msg_writer() << tr("Wallet locked due to inactivity.");
-    else
-      tools::msg_writer() << tr("Wallet locked at user request.");
-    while (1)
+    bool quit = false;
     {
-      tools::msg_writer() << tr("The wallet password is required to unlock the console.");
-      try
+#ifdef HAVE_READLINE
+      PAUSE_READLINE();
+      rdln::clear_screen();
+#endif
+      tools::clear_screen();
+      m_in_command = true;
+
+      tools::msg_writer() << R"(   |  |  |  |  |  |                                  )";
+      tools::msg_writer() << R"(  ==================                                 )";
+      tools::msg_writer() << R"(--|     /\      ___|--   _ __   ___ _ ____   ____ _  )";
+      tools::msg_writer() << R"(--|    /  \    / __     | '_ \ / _ \ '__\ \ / / _` | )";
+      tools::msg_writer() << R"(--|   / /\ \  / /  |--  | | | |  __/ |   \ V / (_| | )";
+      tools::msg_writer() << R"(--|__/ /  \ \/ /   |--  |_| |_|\___|_|    \_/ \__,_| )";
+      tools::msg_writer() << R"(   ___/    \  /    |-- ==============================)";
+      tools::msg_writer() << R"(--|         \/     |--  )" << MONERO_VERSION << ": " << MONERO_RELEASE_NAME;
+      tools::msg_writer() << R"(  ==================                                 )";
+      tools::msg_writer() << R"(   |  |  |  |  |  |                                  )";
+      tools::msg_writer() << "" << ENDL;
+
+      if (!user)
+        tools::msg_writer() << tr("Wallet locked due to inactivity.");
+      else
+        tools::msg_writer() << tr("Wallet locked at user request.");
+      tools::msg_writer() << tr("Press Ctrl-C or Ctrl-Q to exit the wallet.");
+      while (1)
       {
-        if (get_and_verify_password())
-          break;
+        tools::msg_writer() << tr("The wallet password is required to unlock the console.");
+        try
+        {
+          bool cancelled = false;
+          const auto pwd_container = default_password_prompter(m_wallet_file.empty(), &cancelled);
+          if (pwd_container && m_wallet->verify_password(pwd_container->password()))
+            break;
+          if (!pwd_container || std::cin.eof())
+          {
+            quit = true;
+            break;
+          }
+          fail_msg_writer() << tr("invalid password");
+        }
+        catch (...) { /* do nothing, just let the loop loop */ }
       }
-      catch (...) { /* do nothing, just let the loop loop */ }
+      m_last_activity_time = time(NULL);
+      m_in_command = false;
+      if (!quit)
+        m_locked = false;
     }
-    m_last_activity_time = time(NULL);
-    m_in_command = false;
-    m_locked = false;
+
+    // stop() must run after the readline suspension above is destroyed, or that
+    // destructor restarts readline once its reader thread has already been joined
+    if (quit)
+    {
+      m_quit_requested = true;
+      tools::msg_writer() << tr("Exiting wallet at user request.");
+      stop();
+    }
   }
 }
 //----------------------------------------------------------------------------------------------------
@@ -5881,6 +5912,8 @@ bool simple_wallet::on_command(bool (simple_wallet::*cmd)(const std::vector<std:
   });
 
   check_for_inactivity_lock(false);
+  if (m_quit_requested)
+    return true;
   return (this->*cmd)(args);
 }
 //----------------------------------------------------------------------------------------------------
