@@ -27,6 +27,8 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <set>
+#include <stdint.h>
 #include "cryptonote_basic/blobdatatype.h"
 
 namespace cryptonote
@@ -34,4 +36,8 @@ namespace cryptonote
   class Blockchain;
 
   bool tx_sanity_check(Blockchain &blockchain, const cryptonote::blobdata &tx_blob);
+
+  // Same rule, but taking the ring members directly so the wallet can apply it
+  // to a candidate ring before building a transaction around it.
+  bool tx_sanity_check(const std::set<uint64_t> &rct_indices, size_t n_indices, uint64_t rct_outs_available);
 }

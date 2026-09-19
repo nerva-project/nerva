@@ -75,6 +75,7 @@ using namespace epee;
 #include "common/combinator.h"
 #include "common/dns_utils.h"
 #include "common/notify.h"
+#include "cryptonote_core/tx_sanity_check.h"
 #include "common/perf_timer.h"
 #include "ringct/rctSigs.h"
 #include "ringdb.h"
@@ -7535,10 +7536,61 @@ void wallet2::light_wallet_get_outs(std::vector<std::vector<tools::wallet2::get_
   }
 }
 
+static std::pair<std::set<uint64_t>, size_t> outs_unique(const std::vector<std::vector<tools::wallet2::get_outs_entry>> &outs)
+{
+  std::set<uint64_t> unique;
+  size_t total = 0;
+
+  for (const auto &it : outs)
+  {
+    for (const auto &out : it)
+      unique.insert(std::get<0>(out));
+    total += it.size();
+  }
+
+  return std::make_pair(std::move(unique), total);
+}
+
+// A ring is recorded in the shared ringdb the first time an output is spent and
+// reused on every later attempt, so the caller cannot re-roll it by retrying.
+// The daemon's sanity check, however, is relative to the CURRENT size of the
+// output set: a ring that passed when it was built fails once the chain has
+// grown past it, and then fails harder every day, which leaves the output
+// permanently unspendable through a checking daemon. So test the ring here and,
+// when it no longer holds up, drop the stored one and pick fresh decoys.
 void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> &outs, const std::vector<size_t> &selected_transfers, size_t fake_outputs_count, const rct::RCTConfig &rct_config)
+{
+  std::vector<uint64_t> rct_offsets;
+  for (size_t attempts = 3; attempts > 0; --attempts)
+  {
+    get_outs(outs, selected_transfers, fake_outputs_count, rct_config, rct_offsets);
+
+    if (fake_outputs_count == 0)
+      return;
+
+    const auto unique = outs_unique(outs);
+    const uint64_t rct_outs_available = rct_offsets.size() >= CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE
+      ? rct_offsets.at(rct_offsets.size() - CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE) : 0;
+    if (cryptonote::tx_sanity_check(unique.first, unique.second, rct_outs_available))
+      return;
+
+    std::vector<crypto::key_image> key_images;
+    key_images.reserve(selected_transfers.size());
+    for (size_t index: selected_transfers)
+      key_images.push_back(m_transfers[index].m_key_image);
+    MWARNING("Ring for this transaction failed the daemon's sanity check, discarding it and picking new decoys");
+    unset_ring(key_images);
+    rct_offsets.clear();
+  }
+
+  THROW_WALLET_EXCEPTION(error::wallet_internal_error, tr("Transaction sanity check failed"));
+}
+
+void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> &outs, const std::vector<size_t> &selected_transfers, size_t fake_outputs_count, const rct::RCTConfig &rct_config, std::vector<uint64_t> &rct_offsets)
 {
   LOG_PRINT_L2("fake_outputs_count: " << fake_outputs_count);
   outs.clear();
+  rct_offsets.clear();
 
   if(m_light_wallet && fake_outputs_count > 0) {
     light_wallet_get_outs(outs, selected_transfers, fake_outputs_count, rct_config);
@@ -7557,7 +7609,6 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
     bool is_shortly_after_segregation_fork = height >= segregation_fork_height && height < segregation_fork_height + SEGREGATION_FORK_VICINITY;
     bool is_after_segregation_fork = height >= segregation_fork_height;
     uint64_t rct_start_height;
-    std::vector<uint64_t> rct_offsets;
     bool has_rct = false;
     uint64_t max_rct_index = 0;
     for (size_t idx: selected_transfers)
