@@ -50,8 +50,8 @@ namespace tools
     password_container(std::string&& password) noexcept;
     password_container(const epee::wipeable_string& password) noexcept;
 
-    //! \return A password from stdin TTY prompt or `std::cin` pipe.
-    static boost::optional<password_container> prompt(bool verify, const char *mesage = "Password", bool hide_input = true);
+    //! \return A password from stdin TTY prompt or `std::cin` pipe. `cancelled`, if given, is set when the user aborted the prompt with ctrl-C, ctrl-Q or ctrl-D rather than the read failing.
+    static boost::optional<password_container> prompt(bool verify, const char *mesage = "Password", bool hide_input = true, bool *cancelled = nullptr);
     static std::atomic<bool> is_prompting;
 
     password_container(const password_container&) = delete;
