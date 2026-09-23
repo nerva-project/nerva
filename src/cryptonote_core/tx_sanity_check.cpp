@@ -71,27 +71,31 @@ bool tx_sanity_check(Blockchain &blockchain, const cryptonote::blobdata &tx_blob
     n_indices += in_to_key.key_offsets.size();
   }
 
+  return tx_sanity_check(rct_indices, n_indices, blockchain.get_num_mature_outputs(0));
+}
+
+bool tx_sanity_check(const std::set<uint64_t> &rct_indices, size_t n_indices, uint64_t rct_outs_available)
+{
   if (n_indices < DEFAULT_RINGSIZE)
   {
     MDEBUG("n_indices is only " << n_indices << ", not checking");
     return true;
   }
 
-  uint64_t n_available = blockchain.get_num_mature_outputs(0);
-  if (n_available < 10000)
+  if (rct_outs_available < 10000)
     return true;
 
   if (rct_indices.size() < n_indices * 8 / 10)
   {
-    MERROR("amount of unique indices is too low (amount of rct indices is " << rct_indices.size() << ", out of total " << n_indices << "indices.");
+    MERROR("amount of unique indices is too low (amount of rct indices is " << rct_indices.size() << ", out of total " << n_indices << " indices.");
     return false;
   }
 
   std::vector<uint64_t> offsets(rct_indices.begin(), rct_indices.end());
   uint64_t median = epee::misc_utils::median(offsets);
-  if (median < n_available * 5 / 10)
+  if (median < rct_outs_available * 5 / 10)
   {
-    MERROR("median offset index is too low (median is " << median << " out of total " << n_available << "offsets). Transactions should contain a higher fraction of recent outputs.");
+    MERROR("median offset index is too low (median is " << median << " out of total " << rct_outs_available << " offsets). Transactions should contain a higher fraction of recent outputs.");
     return false;
   }
 
