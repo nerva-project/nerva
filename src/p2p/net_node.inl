@@ -854,8 +854,10 @@ namespace nodetool
       for(auto& zone : m_network_zones)
         zone.second.m_net_server.deinit_server();
       // remove UPnP port mapping
-      if(m_igd == igd)
-        delete_upnp_port_mapping(m_listening_port);
+      if (m_upnp_mapped_ipv4)
+        delete_upnp_port_mapping_v4(m_listening_port);
+      if (m_upnp_mapped_ipv6)
+        delete_upnp_port_mapping_v6(m_listening_port_ipv6);
     }
     return store_config();
   }
@@ -2842,10 +2844,11 @@ namespace nodetool
   }
 
   template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::add_upnp_port_mapping_impl(uint32_t port, bool ipv6) // if ipv6 false, do ipv4
+  bool node_server<t_payload_net_handler>::add_upnp_port_mapping_impl(uint32_t port, bool ipv6) // if ipv6 false, do ipv4
   {
     std::string ipversion = ipv6 ? "(IPv6)" : "(IPv4)";
     MDEBUG("Attempting to add IGD port mapping " << ipversion << ".");
+    bool mapped = false;
     int result;
     const int ipv6_arg = ipv6 ? 1 : 0;
 #if MINIUPNPC_API_VERSION > 13
@@ -2874,6 +2877,7 @@ namespace nodetool
           LOG_ERROR("UPNP_AddPortMapping failed, error: " << strupnperror(portMappingResult));
         } else {
           MLOG_GREEN(el::Level::Info, "Added IGD port mapping.");
+          mapped = true;
         }
       } else if (result == 2) {
         MWARNING("IGD was found but reported as not connected.");
@@ -2887,18 +2891,19 @@ namespace nodetool
     } else {
       MINFO("No IGD was found.");
     }
+    return mapped;
   }
 
   template<class t_payload_net_handler>
   void node_server<t_payload_net_handler>::add_upnp_port_mapping_v4(uint32_t port)
   {
-    add_upnp_port_mapping_impl(port, false);
+    m_upnp_mapped_ipv4 = add_upnp_port_mapping_impl(port, false);
   }
 
   template<class t_payload_net_handler>
   void node_server<t_payload_net_handler>::add_upnp_port_mapping_v6(uint32_t port)
   {
-    add_upnp_port_mapping_impl(port, true);
+    m_upnp_mapped_ipv6 = add_upnp_port_mapping_impl(port, true);
   }
 
   template<class t_payload_net_handler>
@@ -2964,13 +2969,6 @@ namespace nodetool
   void node_server<t_payload_net_handler>::delete_upnp_port_mapping_v6(uint32_t port)
   {
     delete_upnp_port_mapping_impl(port, true);
-  }
-
-  template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::delete_upnp_port_mapping(uint32_t port)
-  {
-    delete_upnp_port_mapping_v4(port);
-    delete_upnp_port_mapping_v6(port);
   }
 
   template<typename t_payload_net_handler>
