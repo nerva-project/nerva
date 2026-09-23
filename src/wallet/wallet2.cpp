@@ -75,8 +75,8 @@ using namespace epee;
 #include "common/combinator.h"
 #include "common/dns_utils.h"
 #include "common/notify.h"
-#include "cryptonote_core/tx_sanity_check.h"
 #include "common/perf_timer.h"
+#include "cryptonote_core/tx_sanity_check.h"
 #include "ringct/rctSigs.h"
 #include "ringdb.h"
 #include "device/device_cold.hpp"
@@ -7580,7 +7580,6 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
       key_images.push_back(m_transfers[index].m_key_image);
     MWARNING("Ring for this transaction failed the daemon's sanity check, discarding it and picking new decoys");
     unset_ring(key_images);
-    rct_offsets.clear();
   }
 
   THROW_WALLET_EXCEPTION(error::wallet_internal_error, tr("Transaction sanity check failed"));

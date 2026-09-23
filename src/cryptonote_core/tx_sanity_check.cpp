@@ -87,7 +87,7 @@ bool tx_sanity_check(const std::set<uint64_t> &rct_indices, size_t n_indices, ui
 
   if (rct_indices.size() < n_indices * 8 / 10)
   {
-    MERROR("amount of unique indices is too low (amount of rct indices is " << rct_indices.size() << ", out of total " << n_indices << "indices.");
+    MERROR("amount of unique indices is too low (amount of rct indices is " << rct_indices.size() << ", out of total " << n_indices << " indices.");
     return false;
   }
 
@@ -95,7 +95,7 @@ bool tx_sanity_check(const std::set<uint64_t> &rct_indices, size_t n_indices, ui
   uint64_t median = epee::misc_utils::median(offsets);
   if (median < rct_outs_available * 5 / 10)
   {
-    MERROR("median offset index is too low (median is " << median << " out of total " << rct_outs_available << "offsets). Transactions should contain a higher fraction of recent outputs.");
+    MERROR("median offset index is too low (median is " << median << " out of total " << rct_outs_available << " offsets). Transactions should contain a higher fraction of recent outputs.");
     return false;
   }
 
