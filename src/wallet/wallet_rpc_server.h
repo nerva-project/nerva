@@ -261,6 +261,7 @@ namespace tools
       bool not_open(epee::json_rpc::error& er);
       void handle_rpc_exception(const std::exception_ptr& e, epee::json_rpc::error& er, int default_error_code);
       bool check_daemon_rpc_version(wallet2 &wal, epee::json_rpc::error &er);
+      void replace_wallet(wallet2 *wal);
 
       template<typename Ts, typename Tu>
       bool fill_response(std::vector<tools::wallet2::pending_tx> &ptx_vector,
@@ -283,6 +284,7 @@ namespace tools
       boost::posix_time::ptime m_last_auto_refresh_time;
       boost::thread m_idle_thread;
       boost::mutex m_idle_mutex;
+      boost::mutex m_wallet_mutex;
       boost::condition_variable m_idle_cond;
       boost::condition_variable m_refresh_done_cond;
       std::atomic<bool> m_idle_run;
