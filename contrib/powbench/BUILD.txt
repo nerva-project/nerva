@@ -1,0 +1,16 @@
+Self-contained. No OpenCL SDK needed: clmin.h declares the subset of the API
+used and main.cpp binds it from OpenCL.dll at runtime. Static build so it can
+be copied to a machine with no toolchain.
+
+  g++ -O2 -std=c++14 -maes -static -o nerva-gpubench.exe main.cpp
+
+Run:
+  nerva-gpubench.exe          default, 50% of VRAM
+  nerva-gpubench.exe 25       use 25% of VRAM (see RESULTS.md, this matters)
+  nerva-gpubench.exe 0        skip the GPU entirely, CPU columns only
+
+sizecheck.cpp is a host-only checker for the buffer/work-group sizing maths.
+It replays the sizing for every machine we tested plus a stress case, so the
+paths that cannot be reproduced locally still get verified:
+
+  g++ -O2 -std=c++14 -o sizecheck.exe sizecheck.cpp && ./sizecheck.exe

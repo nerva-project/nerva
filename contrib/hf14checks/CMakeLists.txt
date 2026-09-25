@@ -12,6 +12,15 @@ project(hf14checks C CXX)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 14)
 
+# Without this CMake picks no build type at all, which means no -O flag, which
+# means -O0. The correctness checks do not care, but the benchmarks compare
+# code compiled here against code linked in from libcncrypto.a, which the main
+# build compiles at -O2. Measuring one against the other at -O0 makes anything
+# built here look several times more expensive than it is.
+if (NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif ()
+
 get_filename_component(NERVA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(NERVA_BUILD "${NERVA_ROOT}/build" CACHE PATH "A configured and built nerva build directory")
 
@@ -58,3 +67,12 @@ hf14check(t_serialization t_serialization.cpp)
 hf14check(t_fee_weight t_fee_weight.cpp)
 hf14check(t_cna_v7 t_cna_v7.cpp)
 hf14check(t_ring_size t_ring_size.cpp)
+hf14check(t_bench_pow t_bench_pow.cpp)
+# The resized v5 compilations are only comparable to the shipped v5/v6/v7 in
+# libcncrypto.a if they are built the same way. These are the crypto flags the
+# main build uses for slow-hash-hw.c, taken from its flags.make.
+# -fno-strict-aliasing is not optional: slow-hash type-puns the scratchpad.
+set_source_files_properties(
+  v5pad1.c v5pad1_25.c v5pad1_5.c v5pad2.c v5pad4.c v5pad8.c
+  PROPERTIES COMPILE_OPTIONS "-O2;-DNDEBUG;-maes;-march=x86-64;-fno-strict-aliasing")
+hf14check(t_bench_v5v6 "t_bench_v5v6.cpp;v5pad1.c;v5pad1_25.c;v5pad1_5.c;v5pad2.c;v5pad4.c;v5pad8.c")
