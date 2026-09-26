@@ -185,10 +185,14 @@ AMD Ryzen 9 7950X, 16 cores / 32 threads, 1 MB L2 per core, 64 MB L3 split
 | v5 2MB | 2048 | 1.73 | 1.09 | 2.65 | 577.3 | 0.87 |
 | v5 4MB | 4096 | 3.32 | 1.85 | 5.31 | 301.2 | 0.83 |
 | v5 8MB | 8192 | 6.72 | 3.80 | 9.43 | 148.8 | 0.84 |
-| v6 (HF13) | 8192 | 6.95 | 6.67 | 8.10 | 143.9 | 0.85 |
+| v6 (HF13) | 8192 | 6.95 | 6.67 | 8.10 | 143.9 | 0.87 |
 | v7 (HF14) | 24576 | 67.60 | 56.97 | 82.70 | 14.8 | |
 
-Two runs agree within 4% on every row.
+Two runs agree within 4% on every row **except v7**, which read 59.95 ms in one
+run and 67.60 in the other, 12.8% apart. v7's 24 MB buffer makes it by far the
+most sensitive row to anything else happening on the machine, so treat its
+absolute figures as indicative. The same caveat applies to the v7 1T cell in
+section 4.1.
 
 **v5 scales linearly in pad size**, not superlinearly: 8x the pad costs 8.84x,
 and ms-per-MB is flat from 1.25 MB up. The dominant cost is `salt_pad` and the
@@ -234,7 +238,12 @@ reps, i.e. noise. Lower `GPU:CPU` is better; above 1.0 the GPU wins.
 | v5 4MB | 4096 | 960 | 2 | 207.4 | 1693.0 | 0.12x | 5.48 | 5.91 |
 | v5 8MB | 8192 | 448 | 2 | 55.6 | 573.6 | 0.10x | 6.33 | 11.48 |
 | v6 HF13 | 8192 | 448 | 2 | 55.8 | 533.3 | 0.10x | 7.29 | 12.83 |
-| **v7 HF14** | 24576 | 160 | 2 | 90.0 | 67.9 | **1.33x** | 66.29 | 251.23 |
+| **v7 HF14** | 24576 | 160 | 2 | 90.0 | 67.9 | **1.33x** | 66.29* | 251.23 |
+
+\* The v7 1T of 66.29 ms is contaminated and should not be used. It is slower
+than the 9700X (43.45) and the 5600X (48.48) on the same test, which a 16-core
+Zen 4 will not genuinely be. This box had background load. The GPU:CPU column
+is unaffected: it comes from the all-threads measurement.
 
 ### 4.2 Ryzen 5 5600X (12T) + Radeon Vega FE (gfx901), 16 GB VRAM, 13.4 GB maxalloc, 64 CU
 
@@ -299,17 +308,22 @@ flagged `!`); run 2 on the same machine was sane:
 | variant | KB | nonces | run 1 GPU H/s | run 2 GPU H/s | run 2 GPU:CPU |
 |---|---|---|---|---|---|
 | v5 1MB | 1024 | 6208 | 111.5 | 116.8 | 0.03x |
-| v5 1.5MB | 1536 | 4096 | 114.9 | 114.9 | 0.03x |
+| v5 1.5MB | 1536 | 4096 | 114.9 | 114.9? | 0.03x? |
 | v5 2MB | 2048 | 3072 | **32,167,539.3!** | 109.6 | 0.04x |
 | v5 4MB | 4096 | 1536 | **123,870,967.7!** | 98.4 | 0.12x |
 | v5 8MB | 8192 | 768 | **34,439,461.9!** | 84.8! | 0.25x |
 | v6 HF13 | 8192 | 768 | **33,982,300.9!** | 92.8 | 0.30x |
 | v7 HF14 | 24576 | 256 | **11,583,710.4!** | (see note) | 0.35x |
 
-Its CPU column is sound and useful: 3864.4 H/s at v5 1MB down to 305.6 at v6.
+Its CPU column is sound and useful: 3864.4 H/s at v5 1MB down to 305.6 at v6,
+and it is the source of the 9700X figures used in section 5.2.
 
-Note: one cell of the v7 row in the run-2 photo was not legible; the ratio is
-recorded as printed.
+Two cells marked `?` are transcription-uncertain. The run-2 1.5 MB GPU value
+reads the same 114.9 as run 1, and 114.9 / 3233.5 is 0.04x, not the 0.03x
+recorded, so at least one of the three is misread off the photo. One cell of
+the v7 row in the run-2 photo was not legible either; its ratio is recorded as
+printed. Neither affects any conclusion: this machine's GPU is an iGPU and is
+excluded from the resistance comparison.
 
 ---
 
@@ -326,36 +340,80 @@ across two independent versions of the tool:
 | Vega FE | 2.02x / 2.07x |
 | GTX 1050 Ti | 3.55x / 3.61x |
 
-It is also the most expensive to verify by an order of magnitude (67.60 ms
-against v6's 6.95), and its single-thread cross-CPU spread is 2.65x, *worse*
-than v5 at 1 MB (1.90x). It is dominated on GPU resistance, CPU fairness, and
-verification cost simultaneously.
+It is also the most expensive to verify by an order of magnitude on the hash
+core alone (67.60 ms against v6's 6.95), about 8x once the chain fill is
+included on both sides.
+
+**v7 is not worse on all three axes. It is the best of any variant on CPU
+fairness**, with a 1.12x single-thread spread between the 9700X and the 5600X
+against v5 1MB's 1.99x and v6's 1.24x (section 5.2). That is almost certainly
+because a 24 MB serial chase is pure DRAM latency, and DRAM latency is similar
+across CPUs.
+
+An earlier version of this document claimed v7's spread was 2.65x, the worst of
+any variant. That was wrong: it was computed from a pre-fix run in which the
+5600X's v7 1T read 117.51 ms, against 48.48 / 48.45 ms in the current
+best-of-2 runs on the same machine. The old figure was contaminated.
+
+So the case against v7 rests on two axes, not three: it is the worst tested
+option for GPU resistance, and the most expensive to verify by a wide margin.
+Those are sufficient, but the CPU-fairness argument against it does not hold.
 
 ### 5.2 Pad size buys CPU fairness, not GPU resistance
 
-Single-thread per-core spread, 9700X against 5600X, narrows monotonically as
-the pad grows: 1.90x at 1 MB, 1.72x, 1.62x, 1.45x, 1.31x, **1.24x at 8 MB**.
+Single-thread cost, 5600X divided by 9700X, from the matched `vram=50%` runs.
+The spread narrows monotonically as the pad grows:
+
+| pad | 9700X 1T ms | 5600X 1T ms | spread |
+|---|---|---|---|
+| v5 1MB | 2.17 | 4.31 | 1.99x |
+| v5 1.5MB | 3.32 | 5.30 | 1.60x |
+| v5 2MB | 3.99 | 5.83 | 1.46x |
+| v5 4MB | 5.16 | 6.73 | 1.30x |
+| v5 8MB | 6.02 | 7.47 | **1.24x** |
+| v6 | 6.93 | 8.58 | 1.24x |
+| v7 | 43.45 | 48.48 | 1.12x |
 
 Whole-machine, 7950X 32T against 5600X 12T (core ratio 2.67x): the big machine
-earns 3.60x at v5 1MB, more than its core count justifies, but only 2.30x at
-8 MB and 2.23x on v6, less than it justifies. Per thread at 8 MB the 6-core
-5600X actually beats the 16-core 7950X by 1.16x, having 2.67 MB of L3 per
+earns 3.51x at v5 1MB, more than its core count justifies, but only 2.22x at
+8 MB and 2.19x on v6, less than it justifies. Per thread at 8 MB the 6-core
+5600X actually beats the 16-core 7950X by 1.20x, having 2.67 MB of L3 per
 thread against 2.0. The big pad inverts the core-count advantage rather than
 merely equalising it.
 
 Caveat: Zen 3 against Zen 4, so some of the 1 MB gap is IPC, not core count.
 The direction is solid; the exact multiple is not.
 
-GPU resistance from pad size is card-dependent and weaker than assumed. On the
-3050 the curve is flat (0.11-0.12x at every pad). On the Vega and 1050 Ti a
-bigger pad does help, but the resistance rests on VRAM scarcity, and even a
-16 GB Vega runs ~1% occupancy at 8 MB. Every card generation erodes this.
+GPU resistance from pad size is card-dependent, weaker than assumed, and not
+even monotonic on one of the three cards:
+
+| pad | RTX 3050 | Vega FE | GTX 1050 Ti |
+|---|---|---|---|
+| v5 1MB | 0.11x | 1.50x | 1.38x |
+| v5 1.5MB | 0.11x | 1.31x | **1.89x** |
+| v5 2MB | 0.11x | 1.19x | 1.80x |
+| v5 4MB | 0.12x | 1.05x | 1.10x |
+| v5 8MB | 0.10x | 0.75x | 0.38x |
+
+The 3050 is flat: pad size does nothing for it. The Vega falls monotonically.
+The 1050 Ti gets **worse** from 1 MB to 1.5 MB before improving, so a modest
+pad increase is not reliably an improvement. Only at 4 MB and above do all
+three agree that a bigger pad helps.
+
+Where it does help, the resistance rests on VRAM scarcity, and even a 16 GB
+Vega runs ~1% occupancy at 8 MB. Every card generation erodes this.
 
 ### 5.3 The fairness knob and the verification-cost knob are the same knob
 
 Equalising CPUs requires `threads x pad` to exceed L3, which on a 7950X means
 4 MB or more, which costs roughly what v6 costs. There is no pad size that
 buys cheap verification *and* CPU fairness.
+
+v7 is the clearest illustration of this, once its corrected figures are used.
+It has the fairest CPU profile of anything tested (1.12x spread) *and* the
+highest verification cost by a factor of eight. It bought the fairness by
+being enormously more expensive, which is the same trade every larger pad
+makes, just further along the curve.
 
 ### 5.4 The chain fill may be the real pool/GPU resistance
 
@@ -375,3 +433,6 @@ resistance, this is the mechanism that is, and the one worth strengthening.
 - The chain fill (~1.6 / ~2.2 ms) is inferred from miner calibration, not
   measured directly against the LMDB.
 - `t_clsag` in `contrib/hf14checks` does not link (missing `ws2_32`).
+- Section 4.5 has two transcription-uncertain cells, marked `?`.
+- The 1.25 MB pad exists only in the CPU tool (section 3). The GPU tool was
+  trimmed to 1 / 1.5 / 2 / 4 / 8 MB, so section 4 has no 1.25 MB row.
