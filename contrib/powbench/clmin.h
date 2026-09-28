@@ -36,6 +36,8 @@ typedef cl_int   cl_bool;
 #define CL_PLATFORM_NAME                 0x0903
 #define CL_MEM_READ_WRITE                (1 << 0)
 #define CL_MEM_HOST_NO_ACCESS            (1 << 9)
+#define CL_MEM_READ_ONLY                 (1 << 2)
+#define CL_DEVICE_HOST_UNIFIED_MEMORY    0x1035
 #define CL_PROGRAM_BUILD_LOG             0x1183
 #define CL_TRUE                          1
 

@@ -1,16 +1,37 @@
-Self-contained. No OpenCL SDK needed: clmin.h declares the subset of the API
-used and main.cpp binds it from OpenCL.dll at runtime. Static build so it can
-be copied to a machine with no toolchain.
+Self-contained: no OpenCL SDK (clmin.h binds OpenCL.dll at runtime), no Nerva
+build tree. Static, so it runs on a machine with no toolchain.
 
-  g++ -O2 -std=c++14 -maes -static -o nerva-gpubench.exe main.cpp
+  g++ -O2 -std=c++14 -maes -msse4.1 -static -o nerva-gpubench.exe main.cpp hc128.c
 
 Run:
-  nerva-gpubench.exe          default, 50% of VRAM
-  nerva-gpubench.exe 25       use 25% of VRAM (see RESULTS.md, this matters)
-  nerva-gpubench.exe 0        skip the GPU entirely, CPU columns only
+  nerva-gpubench.exe [vram%] [cooldown_s] [launch_cap_s]
+  defaults: 50 15 25
+    vram%       0 skips the GPU entirely
+    cooldown_s  idle between GPU variants; lets a display-attached card shed
+                heat. Does NOT help with TDR.
+    launch_cap_s  max seconds for one kernel launch. Trades freeze-safety
+                against GPU occupancy: too low and rows run starved (v7 read
+                0.08x at cap 10 and 0.33x at cap 25), too high and a display
+                GPU trips TDR. COMPARE MACHINES AT THE SAME CAP.
+  nerva-gpubench.exe 25     use 25% of VRAM (only if it hangs the desktop)
+  nerva-gpubench.exe 0      skip the GPU, CPU columns only
 
-sizecheck.cpp is a host-only checker for the buffer/work-group sizing maths.
-It replays the sizing for every machine we tested plus a stress case, so the
-paths that cannot be reproduced locally still get verified:
+COMPARE MACHINES ONLY AT THE SAME vram= SETTING. The header records it.
 
-  g++ -O2 -std=c++14 -o sizecheck.exe sizecheck.cpp && ./sizecheck.exe
+Files:
+  main.cpp         driver: allocation, thread/nonce sweeps, checksum gate, table
+  vm_kernels.cl.h  OpenCL ports of the v5/v6/v7 cores, plus cna_v6_alu (the
+                   ALU-only twin used to bound JIT headroom)
+  vm_ref.h         matching C reference; the checksum gate compares the two
+  chain_fill.h     per-nonce chain salt, ported from get_cna_v5_data/_v6_data
+  hc128.c/.h       copied verbatim from src/crypto, used by chain_fill
+  clmin.h          minimal OpenCL declarations
+
+REQUIREMENTS. It allocates a ~247 MB block cache at startup (one entry per
+block at CHAIN_HEIGHT, matching struct block_cache_data). CPU worker threads
+each allocate their own pad, so v7 at 32 threads wants ~768 MB on top. Budget
+about 1.5 GB of RAM.
+
+ok=yes on every row means the GPU and CPU produced identical hashes. A row
+without it gets no ratio, because the two sides were not computing the same
+thing.
