@@ -489,7 +489,7 @@ larger pad affordable, which is what the cross-CPU fairness argument wants.
 The alternative, wrapping the salt so sweep coverage scales, costs the verify
 time back and buys repeated salt with less entropy per pad byte.
 
-### F24. The pad decision, measured: 8 MB is disqualified and 2 MB is the fairness optimum
+### F24. Single-thread pad measurements: 8 MB is disqualified, 1/2/4 MB are close
 
 v8 verify cost, single thread, four machines, `contrib/powbench/v8bench.c`.
 The laptop is the machine that sets the spread, so its column is the mean of
@@ -530,26 +530,19 @@ premise that a smaller pad is fairer. There is a minimum around 2 to 4 MB:
 Three machines scale linearly across the whole range. The laptop, with 6 MB of
 L3, falls off a cliff between 4 and 8 MB.
 
-*This contradicts HF13's stated reasoning*, which was that 8 MB overflows
-L3-per-core on every machine class and therefore evens them out. It does not
-even them out. It falls off a cliff on one machine and not the others, which
-is the opposite of one box one vote. The plan's instinct to move off 8 MB was
-right, and an earlier note in this session suggesting 8 MB might now be
-affordable was wrong because it looked only at the 7950X.
+*This does NOT contradict HF13's reasoning, as an earlier version of this
+entry claimed.* HF13 argued that "under full multi-core mining, 8 MB per thread
+overflows the L3-per-core budget on nearly every machine class". Everything in
+this table is single-threaded, which is the right measure for verification cost
+and the wrong one for mining fairness. Both can be true at once, and F27
+measures the case HF13 was actually talking about.
 
-*Recommendation:* **4 MB**, because the fairness axis does not separate it from
-2 MB and the ASIC axis does: 4 MB forces roughly twice the silicon. The laptop
-verifies in 5.21 ms against a 15 ms target, so there is headroom. 1 MB is both
-slightly worse on spread and ASIC-friendly in the wrong direction.
-
-*Note on how this recommendation was reached*, because the first two attempts
-were wrong. An earlier pass recommended 2 MB on a 0.28x spread advantage, and
-a later one recommended 4 MB on a 0.03x one. Both differences were inside the
-laptop's run-to-run variance, which is the only machine that sets the spread.
-The defensible statement is narrower than either: **8 MB is disqualified, 1 MB
-is slightly worse, and 2 versus 4 MB is decided on ASIC grounds because the
-measurement cannot separate them.** A ranking that flips when one machine is
-re-run is not a ranking.
+*No recommendation from this table alone.* An earlier version recommended 2 MB
+on a 0.28x spread advantage, then 4 MB on a 0.03x one. Both differences were
+inside the run-to-run variance of the laptop, which is the only machine that
+sets the spread, and a ranking that flips when one machine is re-run is not a
+ranking. What this table supports is narrower: **8 MB is disqualified; 1, 2 and
+4 MB cannot be separated single-threaded.** The decision comes from F27.
 
 *Caveats:* this harness excludes the chain fill, which RESULTS.md charges to
 the CPU and which is machine-dependent, so the real spread may differ. And no
@@ -600,6 +593,142 @@ build: -0.23%, -0.67%, -0.52%, -0.38%.
 isolation broke something one level up, after HF14's `seg_hops` landing inside
 a function live v6 calls (F9). Both were caught by a check rather than by
 review.
+
+### F26. `v5pad.inc` shadows consensus macros, and every shadow is a divergence waiting to happen
+
+`contrib/hf14checks/v5pad.inc` rebuilds the hash at a different pad size by
+`#undef`-ing and redefining macros from `slow-hash.h`. That is what makes the
+pad sweep possible, and it means **the benchmark holds a private copy of parts
+of the algorithm**. Whenever the real macro changes, the copy has to change in
+the same commit or the two silently compute different things while every number
+still looks plausible.
+
+It has happened four times in one session:
+
+1. `salt_pad_v8` was added to `slow-hash.h`, and `v5pad.inc` had no wrap for it,
+   so resized v8 rows would have read past the salt (caught before running).
+2. v8's stride became pad-aware, and `v5pad.inc` still overrode `salt_pad_v8`
+   with the wrap, so the benchmark measured a different algorithm from the
+   daemon above 1 MB (F25).
+3. v8's wrap override was removed but v5's remained, so the 1 MB control became
+   wrapped against unwrapped and overstated v8 by 3 to 5 points on narrow cores
+   (F25, caught by the harness's own consistency check).
+4. v8 moved to its own translation unit at its own pad size, and `v5pad.inc`
+   included only `slow-hash-impl.h`, so the resized v8 builds vanished (a link
+   error) and, behind that, v8 read `cna_scratchpad` while the benchmark handed
+   it a different buffer through `scratchpad`.
+
+Three of the four would have produced confident wrong numbers rather than a
+build failure.
+
+*Rule:* anything in `slow-hash.h` or the impl headers that becomes pad-aware or
+buffer-aware has a mirror in `v5pad.inc`. Update both in one commit, and prefer
+making the shipped macro general enough that the override can be **deleted**
+rather than maintained, as was done for `salt_pad_v8` and `CN_V8_PAD`.
+
+*Guard:* `v8bench` now proves the shipped and recompiled builds compute the same
+function, by hashing 24 inputs through both and comparing bytes, before it
+times anything. A timing control cannot do this: a cost ratio cannot separate
+"different algorithm" from "different memory behaviour", and those need
+opposite responses. Output comparison settles it in a fraction of a second and
+is the check that would have caught cases 2 and 3 immediately.
+
+### F27. Multi-thread fairness decides the pad, and it chose 1 MB
+
+Everything before this was single-threaded, which measures verification cost.
+Mining runs every core at once and the pads compete for a shared L3, so a pad
+that fits on one thread may not fit eight times over. That is the case HF13's
+argument was about, and it had never been measured.
+
+Peak total H/s, `v8bench` thread scaling, four machines:
+
+| | cores | 1 MB | 2 MB | 4 MB | 8 MB |
+|---|---|---|---|---|---|
+| 7950X | 16 | 24120 | 12848 | 4553 | 747 |
+| 9700X | 8 | 12309 | 6443 | 2396 | 803 |
+| 5600X | 6 | 6827 | 3924 | 1452 | 537 |
+| i7-7700HQ | 4 | 2132 | 656 | 191 | 49 |
+| **spread** | 4.0x | **11.3x** | 19.6x | 23.8x | 16.4x |
+
+The amplification each machine gets from threading, peak over 1T:
+
+| | 1 MB | 2 MB | 4 MB | 8 MB |
+|---|---|---|---|---|
+| 7950X | 18.6x | 18.0x | 11.5x | 3.5x |
+| 9700X | 8.4x | 8.2x | 5.9x | 3.6x |
+| 5600X | 7.0x | 7.1x | 4.8x | 3.4x |
+| i7-7700HQ | 3.4x | 1.9x | **1.0x** | **1.0x** |
+
+**HF13's effect is real and visible**: at 8 MB the three desktops amplify by
+3.5x, 3.6x and 3.4x across 16, 8 and 6 cores. A large pad genuinely does stop
+core count mattering.
+
+**But it does not apply to everyone.** The laptop gets 1.0x at both 4 and 8 MB:
+with 6 MB of L3 a single 4 MB pad leaves no room for a second thread, so four
+cores buy nothing. The cliff does not hit machines evenly, it hits **small
+machines first and hardest**. A large pad equalises the machines that are
+already comfortable and excludes the one that is not.
+
+The pattern is simply how many threads each machine can fit in L3: at 1 MB the
+laptop fits four, at 2 MB two, at 4 MB one, at 8 MB less than one.
+
+*Decision: 1 MB*, the pad v5 has used since HF11.
+
+| | fairness (1T) | fairness (nT) | verify | GPU | ASIC |
+|---|---|---|---|---|---|
+| 1 MB | 2.39x | **11.3x** | **best** | see F28 | see F28 |
+| 4 MB | 2.56x | 23.8x | 3.4x cost | see F28 | see F28 |
+
+Both cleanly measured fairness axes favour it, one decisively, and it is 3.4x
+cheaper to verify. The two axes that favour a larger pad could not carry a
+decision (F28). Lower-end hardware than the laptop, which is what the fairness
+argument is ultimately for, is excluded harder at every step up in pad size.
+
+A secondary benefit: at 1 MB, v8 is v5 with one token changed. For a fork
+already carrying CLSAG, Bulletproofs+ and ring size 16, the most conservative
+possible PoW change is a virtue.
+
+### F28. Neither argument for a larger pad could carry the decision
+
+**The ASIC argument is unmeasured.** It appears once, in `PLAN-v8.md`, as "1 MB
+fits in on-die SRAM at useful core counts (~200 MB for an ASIC to match one
+7950X)" against "~680 MB" at 4 MB. `RESULTS.md`, which holds every measurement,
+contains no ASIC content at all, and the plan flags it itself: "arithmetic about
+SRAM density and concurrency... should be weighted as engineering estimate, not
+evidence." It is also **linear in pad size by construction**, being pad times an
+assumed concurrency, so it carries no information beyond "4x the pad, 4x the
+SRAM" and cannot say whether either figure is prohibitive.
+
+Weak counter-evidence exists that it did not matter: Nerva ran v5 at 1 MB from
+HF11 to HF13, about 3.8M blocks, and no ASIC appeared. Coin value affects that
+as much as algorithm does, but it is more evidence than the arithmetic. At this
+chain's size an ASIC is not a plausible economic threat.
+
+**The GPU comparison cannot support a pad comparison.** The table reads 0.17x
+worst-case at 1 MB against 0.06x at 4 MB, which looks like a 3x argument for the
+larger pad. RESULTS.md's own caveats undo it:
+
+- the ratio swings **2.8x with nonce count** (v6 at 1 MB: 0.17x at 1984 nonces,
+  0.48x at 8128)
+- and **4x with the launch cap** (v7: 0.08x at cap 10, 0.33x at cap 25)
+- the large-pad rows are the ones that hit the cap and ran starved, so their
+  figures are explicitly "floors", while the 1 MB rows were not starved
+
+So the comparison is an honest number against a floor, confounded in exactly the
+direction that flatters large pads.
+
+What the GPU data *can* say: on every variant and pad measured, the GPU loses,
+0.01x to 0.48x. What it has never covered is **v5 or v8 at 1 MB against a GPU at
+full occupancy**, which is the single most relevant number for this choice and
+is the open question being referred outward.
+
+*Route to measuring it properly, if wanted:* `main.cpp` states "chunking cannot
+help: an in-order queue runs one kernel at a time, so short chunks starve the
+device". That rules out chunking the **nonces**, which is what was tried. It does
+not rule out chunking the **work**: keep every nonce resident and split the main
+loop, leaving the pad, salt and registers in VRAM between launches. Occupancy
+stays full while launch duration becomes independent of it, which is how miners
+run on display-attached cards under Windows.
 
 ## Working environment
 

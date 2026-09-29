@@ -6,76 +6,87 @@ first, especially section 2 (the mistakes) and section 7 (known gaps).
 
 ## Status
 
-v7 has never activated and never will. Mainnet HF14 sits at the placeholder
-height 4,500,000 in `cryptonote_config.h` and the chain is at ~4,420,000, so
-no block has ever been hashed with `cn_slow_hash_v14` outside testnet. Two
-consequences shape this whole document:
+**Phases 1, 3 and 4 are done. v8 is wired to HF14 and awaiting testnet.**
 
-1. **v8 takes the existing HF14 slot.** `get_block_longhash` routes
-   `default:` (major_version >= 14) to `get_block_longhash_v14`. v8 replaces
-   the body of that one branch. There is no `{15, ...}` hard-fork entry, no
-   second fork event, and no user upgrades twice. If v8 fails its gates, the
-   fallback is to drop the PoW change and leave HF14 on v6.
-2. **HF14 is not only the PoW.** That slot also carries CLSAG, Bulletproofs+
-   (type 7 only) and ring size 16. Those are orthogonal to
-   `get_block_longhash` and are untouched by everything below. The PoW work
-   can fail without taking them down with it.
-3. **Cost uniformity is now a fifth target.** In v6, a nonce's cost is
-   estimable from its VM program alone, more cheaply than the nonce can be
-   hashed, at a measured correlation of 0.88 to 0.95 between estimate and real
-   cost. Measured end to end, including what the estimate costs and the chain
-   fill, screening alone is worth about **1.3 to 1.4x** throughput at its best
-   (FINDINGS.md F6, F6b). That is screening in isolation and not a verdict on
-   the larger optimisation work it was reported alongside, which bundles
-   several unrelated and legitimate miner improvements that were not tested.
-   Worth designing out of v8, since even 1.3x to whoever implements it is a
-   fairness problem, but not a reason to slow HF14 down.
+| phase | state |
+|---|---|
+| 1, fourth hash function | done, measured on four machines |
+| 2, floating point | not started |
+| 3, pad and parameters | done, pad is 1 MB |
+| 4, plumbing | done, `get_block_longhash_v14` live at major_version >= 14 |
+| 5, validation | self-test and mainnet sync pass; testnet round outstanding |
 
-Everything this plan asserts about the existing code is recorded, with how it
-was checked, in `FINDINGS.md`. Read that before trusting a comment in this
-tree: several of them describe behaviour the adjacent code does not have.
+What v8 is, in one sentence: **v5 with `salt_pad`'s extra-hash selector widened
+from three entries to four, at v5's 1 MB pad, using v6's windowed chain fill.**
 
-## Targets, measured against v6 8MB as it ships today
+v7 has been deleted. It was written for this same fork but never released: it
+did not perform, HF14 never activated while it existed, so no block was ever
+validated with it, and v8 took its slot. There is therefore no new hard fork
+version and no second upgrade for users.
 
-| axis | v6 8MB today | v8 target | why this number |
+HF14 also carries CLSAG, Bulletproofs+ (type 7) and ring size 16. Those are
+orthogonal to `get_block_longhash` and untouched by any of this, so the PoW work
+could have failed without taking them down.
+
+Everything asserted here about the existing code is recorded, with how it was
+checked, in `FINDINGS.md`. Read that before trusting a comment in this tree.
+
+## Targets, and what v8 actually achieved
+
+Set against v6 as it ships. v8 figures are at its 1 MB pad, from `v8bench` on
+four machines.
+
+| axis | v6 today | target | **v8 result** |
 |---|---|---|---|
-| verify, 7950X 1T | 10.11 ms | **< 8 ms** | sync speed was the original complaint |
-| verify, i7-7700HQ 1T | 27.51 ms | **< 15 ms** | the weakest machine is what gates fairness |
-| cross-CPU spread (4 CPUs) | 2.91x | **< 2.2x** | v5 4MB already reaches 2.15x |
-| GPU:CPU, worst of 4 | 0.05x | **<= 0.05x** | do not regress what v6 does well |
-| cost estimable ahead of time | r = 0.88-0.95 | **r < 0.1** | FINDINGS.md F6; gate is `screen.c` |
+| verify, 7950X 1T | 6.95 ms | < 8 ms | **0.77 ms** |
+| verify, i7-7700HQ 1T | 27.51 ms | < 15 ms | **1.58 ms** |
+| cross-CPU spread, 1T | 2.91x | < 2.2x | **2.39x**, missed |
+| cross-CPU spread, nT | not measured | (added) | 11.3x, against 23.8x at 4 MB |
+| GPU:CPU, worst of 4 | 0.05x | <= 0.05x | **not measured for v8** |
+| cost estimable ahead | r = 0.88-0.95 | r < 0.1 | **not measured for v8** |
 
-If a change cannot hold all five, it does not ship. v7 failed because it was
-allowed to trade verification cost away for a benefit that never materialised.
+Verify cost is met with an order of magnitude to spare, which was the original
+complaint and is no longer the constraint anything is traded against.
 
-The fifth row is the one to keep in view while reading the phases below,
-because it constrains the *shape* of v8 rather than its speed, and a
-construction can satisfy the other four while failing it outright.
+**The 2.2x spread target is not met and cannot be met by pad tuning**, since
+1 MB is already at the favourable end of that curve. Closing it needs work that
+adds cost without adding memory, which is what Phase 2 is for. That makes Phase 2
+load-bearing rather than optional if the target is firm.
 
-**Which v6 number the first four rows use.** RESULTS.md carries two, measured
-differently: 6.95 ms for the shipped function through `hf14checks`, and 10.11
-ms for the powbench port, which omits the Keccak framing and the four
-finalisation hashes. The table above uses the port's 10.11, because the
-cross-machine rows it compares against are also the port. A direct timing of
-the shipped `cn_slow_hash_v13` lands at 7.70 ms, agreeing with `hf14checks`.
-Keep port against port and function against function; reconcile the two before
-these targets are used to accept or reject a candidate (FINDINGS.md F17).
+**Two targets are unmeasured for v8.** The GPU ratio needs a powbench kernel.
+The cost-predictability gate needs `screen.c` adapted, and since v8 has no VM
+the estimator has to be redesigned around v8's cheapest predictor; that choice
+is the whole test and deserves review rather than being picked by whoever writes
+the patch. Note v8 inherits v5's protection here (FINDINGS.md F5): the per-nonce
+parameters come from an HC128 state that the chain fill re-seeds from its own
+output, so cost cannot be learned without doing the fill.
 
-## Starting point
+## Starting point, and where it ended up
 
-**v5 (`cn_slow_hash_v11`) at a 4 MB pad**, not 1 MB and not 8 MB.
+Started from **v5 (`cn_slow_hash_v11`)**, intending a 4 MB pad. It ships at
+**1 MB**, v5's own size, because the measurements went the other way.
 
-- 1 MB fits in on-die SRAM at useful core counts (~200 MB for an ASIC to match
-  one 7950X), so it is the ASIC-friendly size.
-- 8 MB punishes small-cache CPUs: the 6 MB-L3 laptop takes 27.51 ms on v6 8MB
-  against 9.46 on a 9700X, and can only use 3 of its 8 threads.
-- 4 MB measured 2.15x cross-CPU spread and 7.96 ms on the laptop, and forces
-  an ASIC to ~680 MB to match one CPU, which is HBM territory.
+The original reasoning was that 1 MB is "the ASIC-friendly size" and that a
+larger pad narrows cross-CPU spread. Neither survived:
 
-v5 keeps what it already has and v6 lacks: three data-dependent hash
-datapaths, per-sweep variable strides, variable work per nonce (4.7x), and a
-variable AES pipeline width. See RESULTS.md section 6.3 and the discussion of
-`salt_pad`.
+- **Fairness is not monotonic in pad size.** Single-threaded, 1/2/4 MB sit
+  within noise of each other and 8 MB is far worse. Multi-threaded, which is
+  where "1 CPU = 1 vote" actually lives, 1 MB is the clear winner at 11.3x
+  spread against 4 MB's 23.8x. A larger pad excludes small-cache machines from
+  threading first: the 6 MB-L3 laptop gets no benefit at all from its four cores
+  at 4 MB and above.
+- **The ASIC argument was never measured.** It was arithmetic about SRAM density,
+  linear in pad size by construction, flagged as an estimate in this document's
+  own open items, and at this chain's size an ASIC is not a plausible economic
+  threat. v5 also ran at 1 MB from HF11 to HF13, about 3.8M blocks, without one
+  appearing.
+- **The GPU comparison cannot settle it.** It swings 2.8x with nonce count and
+  4x with the launch cap, and the large-pad rows ran starved, so they are floors
+  compared against an honest small-pad number.
+
+See FINDINGS.md F24, F27, F28. The one open question is GPU behaviour at 1 MB at
+full occupancy, which no measurement has covered and which is being referred to
+someone with the GPU depth to answer it.
 
 ## The rule that governs every phase: historical PoW does not change
 
@@ -157,7 +168,19 @@ If Phase 2 adds a floating-point stage, rules 1 and 2 apply to it as well. FP
 that never feeds control flow is untouched by this; FP-driven branches
 reintroduce the problem unless the operands come from pad loads.
 
-## Phase 1: the fourth hash function
+## Phase 1: the fourth hash function  [DONE]
+
+**Result: v8 is 0.23% to 0.75% cheaper to verify than v5 across four machines**,
+against a prediction of -0.84% made from the hash costs alone before any run.
+Skein is the cheapest of the four on 200 bytes (290 ns against Groestl's 1758),
+so widening the selector lowers the mean cost per `salt_pad` call. A fourth
+structurally distinct datapath, for nothing. FINDINGS.md F18.
+
+Two things it took to get a trustworthy number, both recorded in F19: the bench
+sampled 60 nonces against a 4.7x work spread with a fixed RNG seed, so a pure
+sampling artifact reproduced across runs and looked real; and v5 and v8 had to
+be measured interleaved within one pass rather than as consecutive blocks.
+
 
 **Use all four hash functions in the `salt_pad` extra hash.**
 
@@ -371,60 +394,68 @@ Re-run the four targets. FP should cost near zero on verification. If it
 costs more than ~5%, the FP stage is too heavy; reduce the op count per
 iteration rather than dropping the phase.
 
-## Phase 3: pad and parameter tuning
+## Phase 3: pad and parameter tuning  [DONE]
 
-Only after phases 1 and 2 are measured.
+**Result: 1 MB.** See "Starting point" above and FINDINGS.md F24, F27, F28.
 
-- Sweep the pad from 2 to 8 MB on all four machines and pick the knee where
-  cross-CPU spread and verification both stay inside target.
+The salt stride and pad-init step now derive from `CN_SCRATCHPAD_MEMORY` rather
+than being hardcoded, so a future pad change cannot silently read past the salt.
+At 1 MB they reduce to the shipped constants, verified by comparing 400 hashes
+between the pre- and post-change builds, and `contrib/powbench/t_salt_bounds.c`
+proves no out-of-bounds index exhaustively over the whole input space at 1, 2, 4
+and 8 MB. The parameter ranges were left alone: widening them widens what a cost
+estimate would be worth, and the fifth target governs that.
 
-- **Answer HF13's reasoning rather than passing over it.** Moving to 4 MB
-  reverses a deliberate decision. HF13 went 4 MB to 8 MB arguing that 8 MB per
-  thread overflows L3-per-core on nearly every machine class, so they all fall
-  back to DRAM latency and even out, while 16 or 32 MB would push verify and
-  sync past what the sliding-window work protects. This plan wants 4 MB for
-  the opposite reason, that 8 MB punishes the 6 MB-L3 laptop. Both cannot be
-  right about the same machines. The measured cross-CPU spread decides it, and
-  the answer belongs in RESULTS.md next to the numbers. Worth knowing that pad
-  size has been argued four times in this project's history, in both
-  directions, and reverted twice (FINDINGS.md F11).
 
-- **Rescale the salt stride; do not wrap it.** `contrib/hf14checks/v5pad.inc`
-  describes the salt-index bound as a latent bug that holds only at 1 MB. It
-  is a maintained invariant. When the pad was briefly 3 MB in December 2018 the
-  stride line read `(offset_2 % 117) + 12`, minimum 12; when it was reverted to
-  1 MB the line became today's `((temp_1 * offset_1) % 125) + 4`, minimum 4.
-  The salt was 262144 bytes in both trees, and `3145728 / 12` and
-  `1048576 / 4` are both exactly 262144. Maximum stride is 128 in both. The
-  same invariant is in the macro names: `randomize_scratchpad_256k` steps 4
-  over 1 MB, which is 262144 salt bytes (FINDINGS.md F4).
+What was done, and what it settled.
 
-  So the AND-wrap that `v5pad.inc` uses is right for a benchmark and wrong for
-  consensus: at 4 MB it makes the salt repeat four times per sweep, which is a
-  different algorithm with less entropy per pad byte, not a resized one. Do
-  what the original author did and rescale the minimum stride with the pad:
-  4 MB wants `((temp_1 * offset_1) % 113) + 16`, and
-  `randomize_scratchpad_256k` wants a step of 16. Measure both variants rather
-  than assume, since they have different costs, but the rescale is what the
-  design intends. If a wrap is used anywhere it must be the AND and not a
-  compare and branch: as a branch it cost 29%.
+- **The pad was swept at 1, 2, 4 and 8 MB on all four machines, single- and
+  multi-threaded.** The single-thread sweep separates only 8 MB; the
+  multi-thread one is what decided it. FINDINGS.md F24, F27.
 
-- `state_index` masks with `(pad / 16 - 1)`, which addresses the whole pad only
-  when `pad / 16` is a power of two. At 4 MB the mask is fine; it is the odd
-  sizes that need the modulo. Keep that in mind if the sweep picks a non-power
-  of two.
+- **HF13's reasoning was tested rather than talked past.** HF13 went 4 MB to
+  8 MB arguing that 8 MB per thread overflows L3-per-core on nearly every
+  machine class, so they all fall back to DRAM latency and even out. Measured,
+  that is **true among the desktops** (at 8 MB they amplify 3.5x, 3.6x and 3.4x
+  across 16, 8 and 6 cores) and **false once a small machine is included**: the
+  6 MB-L3 laptop amplifies 1.0x, so it is excluded rather than equalised. A
+  large pad evens out the machines that are already comfortable. Pad size has
+  now been argued five times in this project, in both directions (F11).
 
-- **Widening `xx`/`yy` and `iters` is now constrained, not just a tradeoff.**
-  More variance in work per nonce is ASIC-hostile and raises verification
-  variance, which matters for block propagation. But it is also the axis the
-  fifth target governs: v5's existing 4.7x spread is acceptable only because
-  its parameters cannot be learned without doing the full chain fill first
-  (rule 3). Widening the ranges widens what an estimate would be worth, so any
-  widening has to keep that feedback intact and be re-checked with `screen.c`.
-  Narrowing toward constant work per nonce, v7's `seg_hops` shape, is the
-  safer direction and should be considered on its own merits.
+- **The salt stride is rescaled, not wrapped.** `v5pad.inc` describes the
+  salt-index bound as a latent bug holding only at 1 MB; it is a maintained
+  invariant. At a 3 MB pad in December 2018 the line read `(% 117) + 12`; back
+  at 1 MB it became `(% 125) + 4`. The salt was 262144 bytes in both, and
+  `3145728/12` and `1048576/4` are both exactly that. The macro names carry the
+  same invariant. So both now derive from the pad, and the AND-wrap stays where
+  it belongs, in the benchmark: at 4 MB it makes the salt repeat four times per
+  sweep, a different algorithm rather than a resized one. FINDINGS.md F4, F22.
 
-## Phase 4: plumbing
+- **`state_index` masks with `(pad / 16 - 1)`**, which addresses the whole pad
+  only when `pad / 16` is a power of two. Fine at 1 MB; relevant again only if a
+  non-power-of-two size is ever considered.
+
+- **`xx`/`yy` and `iters` ranges were left alone.** More variance per nonce is
+  ASIC-hostile but it is also the axis the fifth target governs: v5's 4.7x
+  spread is acceptable only because the parameters cannot be learned without
+  doing the full chain fill (rule 3). Widening them widens what a cost estimate
+  would be worth, so any change has to keep that feedback and be re-checked with
+  `screen.c`. Narrowing toward constant work per nonce is the safer direction if
+  it is ever revisited.
+
+## Phase 4: plumbing  [DONE]
+
+`get_block_longhash_v14` mirrors `get_block_longhash_v11`, with v6's windowed
+chain fill (`get_cna_v6_data`) rather than v5's. The window was a sync-speed fix
+independent of the v6 algorithm and had to be kept: it biases ~95% of block reads
+into the last 100k blocks so per-nonce cost stops growing with chain length,
+while the other ~5% still draw from the whole history so pool resistance is
+unchanged. The v6 fill re-seeds its HC128 state from its own output exactly as
+v5's does, so the property in FINDINGS.md F5 carries over.
+
+The dispatcher routes `case 13:` to v6 and `default:` to v8. No hard-fork table
+entry was added: v8 inherits HF14.
+
 
 - `CN_SCRATCHPAD_MEMORY_V15`, a **compile-time constant**, set once by Phase 3.
 
@@ -472,7 +503,22 @@ Only after phases 1 and 2 are measured.
   away. And `get_cna_v6_data` **stays**: it is v6's chain fill and v6 is live on
   mainnet, so only v7's own code goes.
 
-## Phase 5: validation
+## Phase 5: validation  [IN PROGRESS]
+
+Passed so far:
+
+- `cn_slow_hash_self_test`, covering v8's HW and SW arms, at every build
+- daemon starts on mainnet and validates live blocks through the new dispatcher
+- every pre-v8 hash body in `slow-hash-impl.h` byte-identical to `master`
+  (10 functions, 480 lines), and every pre-v8 `get_block_longhash_*` likewise
+- `t_salt_bounds`: no out-of-bounds salt index, exhaustive over the input space
+- the stride derivation is a no-op at 1 MB, 400 hashes compared old against new
+
+Outstanding: the testnet round. Testnet HF14 is at height 1000 on a fresh net,
+so a restart exercises the fork itself. Worth provoking deliberately: two miners
+racing near height 1000, confirming both nodes converge, which is the case where
+a wrong `random_values` bound would split them.
+
 
 - Extend `contrib/hf14checks/t_bench_v5v6.cpp` with v8; the control row must
   stay at ~1.00x.
@@ -496,32 +542,24 @@ Only after phases 1 and 2 are measured.
   testnet HF14 is at height 1000 on a fresh net, so a testnet restart exercises
   the fork itself rather than a placeholder.
 
-## Open items carried in from RESULTS.md
+## Open items
 
-1. **No GPU number is trustworthy at full occupancy.** Every large-pad row on
-   every machine hit the launch cap, because a display-attached GPU trips TDR.
-   One card running headless would fix this and would settle the pad question,
-   which is currently blocked on measurement rather than on analysis.
-2. **v7's CPU figure on the 7950X is 40% above the real function** and reads
-   faster on a slower CPU, which is impossible. Unexplained. Lower priority now
-   that v7 is not shipping, but the harness bug it implies may affect v8 rows.
-3. **The ASIC reasoning is not measured.** It is arithmetic about SRAM density
-   and concurrency, anchored to the historical CryptoNight ASIC experience. It
-   has not been validated against real hardware and should be weighted as
-   engineering estimate, not evidence.
-4. **Nerva's CPU miner is itself an interpreter** (`cn_vm_execute`). If v8 ends
-   up with a VM-like FP stage, JIT-ing the CPU miner is a cheaper way to widen
-   the CPU/GPU gap than another algorithm change.
-5. ~~F6 is measured in operation counts, not time.~~ Measured: the VM is 67%
-   of a v6 hash and the cost spread is worth about 1.5x net of screening cost
-   (FINDINGS.md F6b). Two further gaps remain: the figure omits the partial
-   chain fill a miner still owes per screened nonce, and it is one machine,
-   single-threaded.
-6. **Nobody has recorded why RandomX was dropped.** It was integrated in June
-   2019, worked through to January 2020 and then removed with no stated reason
-   (FINDINGS.md F13). This plan measures v8 against RandomX repeatedly, and
-   Phase 2 reimplements a piece of it. Worth asking someone who was there
-   before that work starts.
+1. **GPU behaviour at 1 MB at full occupancy is unmeasured**, and it is the only
+   evidence that would justify moving off 1 MB. Every GPU figure swings 2.8x
+   with nonce count and 4x with the launch cap, and the large-pad rows ran
+   starved. Being referred outward. FINDINGS.md F28 records the route to
+   measuring it in-house: chunk the **work** rather than the nonces, which
+   `main.cpp`'s objection does not rule out.
+2. **The cost-predictability gate has not been run against v8.** v6 measures
+   r = 0.88 to 0.95 (F6). v8 has no VM, so the estimator must be redesigned.
+3. **The ASIC reasoning remains unmeasured** and should not be used as a
+   tiebreaker again; it was, twice, and both times the decision it produced was
+   later reversed by measurement.
+4. **Nerva's CPU miner is itself an interpreter.** If v8 ever gains a VM-like
+   stage, JIT-ing the miner is a cheaper way to widen the CPU/GPU gap than
+   another algorithm change.
+5. ~~Why was RandomX dropped in January 2020?~~ Closed: nobody recalls, and the
+   project wants its own algorithm regardless.
 
 ## What not to do
 
@@ -530,8 +568,14 @@ Only after phases 1 and 2 are measured.
   point.
 - Do not add work to the chain fill to buy ASIC resistance. The fill runs
   during verification, so it is a direct sync-speed tax.
-- Do not grow the pad past the smallest target machine's L3. That punishes
-  exactly the machines fairness is meant to protect.
+- Do not grow the pad past the smallest target machine's L3, and remember that
+  machine is smaller than anything in the test set. A larger pad excludes small
+  machines from multi-threading before it constrains large ones.
+- Do not settle a pad question with the ASIC arithmetic. It is unmeasured and
+  linear in pad size by construction. It was used as a tiebreaker twice here and
+  both decisions were later reversed by measurement.
+- Do not quote the GPU table as a pad comparison. Its large-pad rows ran starved
+  against a launch cap and are floors, not measurements (FINDINGS.md F28).
 - Do not ship any phase whose verification cost is not measured on the weakest
   machine in the set, not the fastest.
 - Do not add a hard-fork version for v8. It inherits HF14, which has never
@@ -543,3 +587,7 @@ Only after phases 1 and 2 are measured.
 - Do not trust a comment in `src/crypto` or a figure in a commit message
   without checking the code. Several comments here describe behaviour the
   adjacent code does not have, and FINDINGS.md exists because of that.
+- Do not change a pad-aware or buffer-aware macro without updating its mirror in
+  `contrib/hf14checks/v5pad.inc`, or the benchmark and the daemon diverge
+  silently. That happened four times in one session (FINDINGS.md F26); prefer
+  making the shipped macro general enough that the override can be deleted.

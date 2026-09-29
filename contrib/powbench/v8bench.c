@@ -67,6 +67,8 @@
 #include <math.h>
 #include <time.h>
 #include <cpuid.h>
+#include <pthread.h>
+#include <unistd.h>
 
 #include "hash-ops.h"
 
@@ -230,6 +232,186 @@ static void bench_group(hashfn *fns, struct result *res, unsigned k,
     *ok = 1;
 }
 
+/* Do the shipped and recompiled v8 builds compute the same function?
+ *
+ * The timing control can only say their costs are close, and a cost ratio has
+ * no way to separate an algorithm difference from a memory artifact. This
+ * compares the hashes themselves, which settles it outright: same inputs, same
+ * pad size, so the outputs must be identical byte for byte.
+ *
+ * It is the check that would have caught v5pad.inc keeping a salt_pad_v8
+ * override after the shipped macro became pad-aware, where the benchmark and
+ * the daemon quietly ran different algorithms while every timing looked
+ * plausible. */
+static int shipped_matches_recompiled(void)
+{
+    static const char blob[] = "nerva cna v8 shipped against recompiled, identical inputs";
+    cn_hash_context_t *ctx = cn_hash_context_create();
+    uint8_t *own = NULL, *saved = NULL;
+    char a[32], b[32];
+    int i, bad = 0;
+
+    if (ctx == NULL) return -1;
+
+    /* one dispatcher call to fault in the pads the shipped build needs */
+    cn_slow_hash_v14(ctx, blob, sizeof(blob) - 1, a, 8, 8, 4, 4);
+    if (ctx->salt == NULL) { cn_hash_context_free(ctx); return -1; }
+
+    own = (uint8_t *)malloc(1024ull*1024);
+    if (own == NULL) { cn_hash_context_free(ctx); return -1; }
+
+    rng_state = 0x5EED1234u;
+    for (i = 0; i < 24; i++)
+    {
+        const struct params p = draw();
+
+        /* salt_pad writes back into salt, so both builds must start from the
+         * same salt, and random_values must match too */
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        memset(ctx->salt, 0, CN_SALT_MEMORY);
+        cn_slow_hash_v14(ctx, blob, sizeof(blob) - 1, a, p.iters, p.blk, p.xx, p.yy);
+
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        memset(ctx->salt, 0, CN_SALT_MEMORY);
+        memset(own, 0, 1024ull*1024);
+        saved = ctx->scratchpad; ctx->scratchpad = own;
+        cn_slow_hash_v14_p1(ctx, blob, sizeof(blob) - 1, b, p.iters, p.blk, p.xx, p.yy);
+        ctx->scratchpad = saved;
+
+        if (memcmp(a, b, 32) != 0) bad++;
+    }
+
+    free(own);
+    cn_hash_context_free(ctx);
+    return bad;
+}
+
+/* ------------------------------------------------------------------ */
+/* thread scaling                                                       */
+/*
+ * Everything above is single-threaded, which is the right measure for
+ * verification cost but the wrong one for "1 CPU = 1 vote". Mining runs every
+ * core at once and the pads compete for a shared L3, so a pad that fits
+ * comfortably on one thread may not fit eight times over.
+ *
+ * That distinction is the whole disagreement about pad size. Single-threaded, a
+ * large pad splits machines by L3 capacity. Multi-threaded, a large pad
+ * overflows every machine's L3 and pushes them all onto DRAM latency, which is
+ * the one hardware property a small box shares with a big one. HF13 argued the
+ * second; the sweep measures the first; neither settles the other.
+ *
+ * What this measures is total throughput at T threads. For fairness the number
+ * that matters is how that compares across machines against their core counts:
+ * if a 16-core earns 4x a 4-core, core count is what votes. If the ratio is
+ * much flatter than the core ratio, the memory system is what votes, which is
+ * closer to one box one vote.
+ */
+
+struct worker {
+    hashfn   fn;
+    size_t   pad_bytes;
+    unsigned n;
+    pthread_barrier_t *start;
+    double   hs;        /* out: hashes per second achieved by this thread */
+};
+
+static void *worker_main(void *arg)
+{
+    struct worker *w = (struct worker *)arg;
+    static const char blob[] = "nerva cna v8 thread scaling input, past the tweak at 35";
+    cn_hash_context_t *ctx = cn_hash_context_create();
+    uint8_t *own = NULL, *saved = NULL;
+    char out[32];
+    uint32_t seed;
+    unsigned i;
+    double t0;
+
+    w->hs = 0.0;
+    if (ctx == NULL) { pthread_barrier_wait(w->start); return NULL; }
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+
+    /* Set up, allocate and fault the pad in BEFORE the barrier. Timing the
+     * allocation alongside the hashing is what made an earlier harness read a
+     * thread-count collapse that was really the allocator: every thread
+     * memsets its pad, and at 32 threads that is hundreds of MB. */
+    { struct params wp; rng_state = 1; wp = draw();
+      cn_slow_hash_v11(ctx, blob, sizeof(blob) - 1, out, wp.iters, wp.blk, wp.xx, wp.yy); }
+    if (ctx->salt == NULL) { cn_hash_context_free(ctx); pthread_barrier_wait(w->start); return NULL; }
+
+    own = (uint8_t *)malloc(w->pad_bytes);
+    if (own == NULL) { cn_hash_context_free(ctx); pthread_barrier_wait(w->start); return NULL; }
+    memset(own, 0, w->pad_bytes);
+    saved = ctx->scratchpad;
+    ctx->scratchpad = own;
+
+    /* Each thread draws its own parameter stream, seeded from its own address,
+     * so the threads do not run in lockstep on identical work. */
+    seed = (uint32_t)(uintptr_t)w ^ 0x9E3779B9u;
+    if (seed == 0) seed = 1;
+
+    pthread_barrier_wait(w->start);
+
+    t0 = now_sec();
+    for (i = 0; i < w->n; i++)
+    {
+        struct params p;
+        seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+        p.xx  = (uint16_t)(4 + seed % 5);
+        p.yy  = (uint16_t)(4 + (seed >> 8) % 5);
+        p.blk = (uint8_t)(2u << ((seed >> 16) % 3));
+        p.iters = (seed >> 20) % 64;
+        w->fn(ctx, blob, sizeof(blob) - 1, out, p.iters, p.blk, p.xx, p.yy);
+    }
+    w->hs = (double)w->n / (now_sec() - t0);
+
+    ctx->scratchpad = saved;
+    free(own);
+    cn_hash_context_free(ctx);
+    return NULL;
+}
+
+/* Total H/s across t threads, measured as all the work divided by the wall
+ * time of the whole group.
+ *
+ * Not the sum of each thread's own rate, which was the first version and is
+ * biased upward: v8's work per nonce varies about 4.7x, so threads finish at
+ * different times, and the ones still running after others have exited get a
+ * quieter machine and report a rate no miner would ever see. The bias grows
+ * with thread count, which is exactly where the interesting behaviour is.
+ *
+ * The parent joins the barrier so timing starts when the last worker is set
+ * up, keeping allocation and page-faulting out of the measurement. */
+static double bench_threads(hashfn fn, size_t pad_bytes, unsigned n, unsigned t)
+{
+    pthread_barrier_t start;
+    pthread_t *th = (pthread_t *)malloc(t * sizeof(pthread_t));
+    struct worker *w = (struct worker *)malloc(t * sizeof(struct worker));
+    unsigned i, made = 0;
+    double t0, wall;
+
+    if (th == NULL || w == NULL) { free(th); free(w); return 0.0; }
+    if (pthread_barrier_init(&start, NULL, t + 1) != 0) { free(th); free(w); return 0.0; }
+
+    for (i = 0; i < t; i++) {
+        w[i].fn = fn; w[i].pad_bytes = pad_bytes; w[i].n = n;
+        w[i].start = &start; w[i].hs = 0.0;
+        if (pthread_create(&th[i], NULL, worker_main, &w[i]) != 0) break;
+        made++;
+    }
+    /* absorb the barrier slots of any thread that could not be created, or
+     * everyone waits forever */
+    for (i = made; i < t; i++) pthread_barrier_wait(&start);
+
+    pthread_barrier_wait(&start);       /* all set up; start the clock */
+    t0 = now_sec();
+    for (i = 0; i < made; i++) pthread_join(th[i], NULL);
+    wall = now_sec() - t0;
+
+    pthread_barrier_destroy(&start);
+    free(th); free(w);
+    return wall > 0.0 ? (double)made * (double)n / wall : 0.0;
+}
+
 static void row(const char *name, const struct result *r)
 {
     printf("  %-14s %9.4f %9.4f %9.4f %10.1f\n",
@@ -273,26 +455,54 @@ int main(int argc, char **argv)
     printf("samples: %u per variant at 1 MB, %u at 4 MB, interleaved\n\n", n1, n4);
     printf("Close other programs first. This measures single-thread verify cost.\n\n");
 
-    /* All four 1 MB variants go through one interleaved pass, so the control
-     * (ref against ctl) is measured under the same conditions as the
-     * comparison it is the control for. At 1 MB the resized build reads the
-     * same context scratchpad the shipped one does, so no separate pad is
-     * needed and all four can share the loop. 4 MB has no shipped counterpart,
-     * so it stays a pair against its own buffer. */
+    /* Establish that the two v8 builds are the same function before spending a
+     * minute timing them. If they are not, no number below means anything. */
     {
-        hashfn one_mb[4] = { cn_slow_hash_v11,    cn_slow_hash_v14,
-                             cn_slow_hash_v11_p1, cn_slow_hash_v14_p1 };
-        hashfn four_mb[2] = { cn_slow_hash_v11_p4, cn_slow_hash_v14_p4 };
+        const int bad = shipped_matches_recompiled();
+        if (bad < 0) {
+            printf("  could not run the shipped-vs-recompiled check (allocation failed)\n\n");
+        } else if (bad > 0) {
+            printf("  STOP: shipped v8 and recompiled v8 gave different hashes on %d of 24\n"
+                   "  inputs. They are not the same algorithm, so the timings below would be\n"
+                   "  meaningless. Check whether v5pad.inc still overrides something the\n"
+                   "  shipped macros now handle themselves.\n", bad);
+            return 1;
+        } else {
+            printf("  shipped v8 == recompiled v8 on 24 inputs (same algorithm, so any\n"
+                   "  difference in the 4 MB control below is memory behaviour, not code)\n\n");
+        }
+    }
+
+    /* Two interleaved groups, one per pad size, because the shipped builds no
+     * longer share a pad: v5 ships at 1 MB and v8 now ships at 4 MB. An earlier
+     * version put cn_slow_hash_v11 and cn_slow_hash_v14 in the same "1 MB" row
+     * and kept doing so after v8 moved, which silently turned the headline
+     * comparison into v5 at 1 MB against v8 at 4 MB. Every variant compared to
+     * another must be at the same pad, and that is what these groups enforce.
+     *
+     * Each group also carries one shipped build, so the control answers the
+     * question that actually matters: does the benchmarked build behave like
+     * the one that ships? At 1 MB that is v5, at 4 MB it is v8. One confound
+     * worth knowing: the shipped builds read the context's own pad, which is
+     * hugepage-backed, while the recompiled ones read a plain malloc buffer,
+     * so a small difference is expected and is not a fault in either. */
+    {
+        hashfn one_mb[4]  = { cn_slow_hash_v11,       /* shipped v5, 1 MB */
+                              cn_slow_hash_v11_p1,    /* recompiled v5, 1 MB */
+                              cn_slow_hash_v14_p1,    /* recompiled v8, 1 MB */
+                              cn_slow_hash_v14 };     /* shipped v8, 1 MB */
+        hashfn four_mb[2] = { cn_slow_hash_v11_p4,    /* recompiled v5, 4 MB */
+                              cn_slow_hash_v14_p4 };  /* recompiled v8, 4 MB */
         struct result r1[4], r4[2];
 
         rng_state = 0x9E3779B9u;
-        bench_group(one_mb, r1, 4, 0, n1, &ok1);
+        bench_group(one_mb, r1, 4, 1024ull*1024, n1, &ok1);
         rng_state = 0x9E3779B9u;
         bench_group(four_mb, r4, 2, 4096ull*1024, n4, &ok2);
 
         if (!ok1 || !ok2) { printf("setup failed (out of memory?)\n"); return 1; }
 
-        v5ref = r1[0]; v8ref = r1[1]; v5ctl = r1[2]; v8ctl = r1[3];
+        v5ref = r1[0]; v5ctl = r1[1]; v8ctl = r1[2]; v8ref = r1[3];
         v5p4  = r4[0]; v8p4  = r4[1];
     }
 
@@ -359,15 +569,114 @@ int main(int argc, char **argv)
             for (p = brand; *p; p++) if (*p == ' ') *p = '_';
             printf("\n  SWEEP %s 1MB=%.4f 2MB=%.4f 4MB=%.4f 8MB=%.4f\n",
                    brand, v8ms[0], v8ms[1], v8ms[2], v8ms[3]);
-            printf("  ^ send this one line from each machine; it is all the\n");
-            printf("    cross-CPU spread calculation needs.\n");
+        }
+
+        /* Thread scaling. Sized from the single-thread times just measured, so
+         * each configuration takes about the same wall time on any machine
+         * rather than a fixed sample count that is too small on a slow box and
+         * wasteful on a fast one. */
+        {
+            unsigned hw = 0, tcounts[6], ntc = 0, ti;
+            double base[4];
+            long procs;
+
+#if defined(_SC_NPROCESSORS_ONLN)
+            procs = sysconf(_SC_NPROCESSORS_ONLN);
+            hw = procs > 0 ? (unsigned)procs : 0;
+#endif
+            if (hw == 0) {
+                const char *e = getenv("NUMBER_OF_PROCESSORS");
+                hw = e ? (unsigned)atoi(e) : 0;
+            }
+            if (hw == 0) hw = 4;
+
+            /* A power-of-two ladder walks past the peak. Real miners settle at
+             * some count between physical cores and logical, and both cliffs
+             * seen so far (4 MB past 16T, 8 MB past 4T) sit between rungs.
+             * Sample around the physical core count instead, assuming 2-way
+             * SMT, which holds for all four machines in the set.
+             *
+             * Override with a third argument, e.g. v8bench 2000 600 1,6,12,14,16 */
+            if (argc > 3) {
+                const char *q = argv[3];
+                while (*q && ntc < 12) {
+                    unsigned v = (unsigned)atoi(q);
+                    if (v > 0) tcounts[ntc++] = v;
+                    while (*q && *q != ',') q++;
+                    if (*q == ',') q++;
+                }
+            } else {
+                const unsigned phys = hw >= 2 ? hw / 2 : 1;
+                unsigned cand[12]; unsigned nc = 0, a, b;
+                cand[nc++] = 1;
+                if (hw >= 2) cand[nc++] = 2;
+                if (hw >= 4) cand[nc++] = 4;
+                if (phys > 4) cand[nc++] = phys / 2;
+                if (phys > 2) cand[nc++] = phys - 2;
+                cand[nc++] = phys;                 /* physical cores */
+                if (hw > phys) cand[nc++] = phys + phys / 2;
+                if (hw > phys) cand[nc++] = hw;    /* full SMT */
+                /* sort and dedupe */
+                for (a = 0; a < nc; a++)
+                    for (b = a + 1; b < nc; b++)
+                        if (cand[b] < cand[a]) { unsigned t = cand[a]; cand[a] = cand[b]; cand[b] = t; }
+                for (a = 0; a < nc && ntc < 12; a++)
+                    if (cand[a] >= 1 && cand[a] <= hw && (ntc == 0 || cand[a] != tcounts[ntc-1]))
+                        tcounts[ntc++] = cand[a];
+            }
+
+            /* Kept to one line on purpose. The reasoning behind this pass, why
+             * the peak matters more than the tail, why the tail is sensitive to
+             * background load, and why OS thread placement muddies a multi-CCD
+             * part, is in the comment above bench_threads rather than reprinted
+             * on every run. */
+            printf("\n  thread scaling, total H/s, %u logical CPUs (peak is the number; tail is load-sensitive)\n\n", hw);
+            printf("  %-6s", "pad");
+            for (ti = 0; ti < ntc; ti++) printf(" %10uT", tcounts[ti]);
+            printf("  %s\n", "peak");
+
+            for (si = 0; si < 4; si++)
+            {
+                double best = 0.0, one = 0.0;
+                unsigned n, best_t = 0;
+
+                if (v8ms[si] <= 0.0) continue;
+                /* ~1.2 s of work per thread per configuration */
+                n = (unsigned)(1200.0 / v8ms[si]);
+                if (n < 8) n = 8;
+
+                printf("  %-6s", sweep[si].name);
+                for (ti = 0; ti < ntc; ti++) {
+                    const double hs = bench_threads(sweep[si].v8, sweep[si].pad, n, tcounts[ti]);
+                    if (ti == 0) one = hs;
+                    if (hs > best) { best = hs; best_t = tcounts[ti]; }
+                    printf(" %11.1f", hs);
+                }
+                /* where the peak is matters as much as how high: a pad whose
+                 * peak sits well below the core count is one the memory system
+                 * is already limiting, which is the regime fairness wants. */
+                printf("  %6.2fx @%uT\n", one > 0.0 ? best / one : 0.0, best_t);
+                v8ms[si] = best;   /* reuse the slot to carry peak H/s to the SCALE line */
+            }
+
+            {
+                char brand[49]; char *p;
+                cpu_brand(brand);
+                for (p = brand; *p; p++) if (*p == ' ') *p = '_';
+                printf("\n  SCALE %s cpus=%u 1MB=%.1f 2MB=%.1f 4MB=%.1f 8MB=%.1f\n",
+                       brand, hw, v8ms[0], v8ms[1], v8ms[2], v8ms[3]);
+                printf("  ^ peak total H/s per pad. Send this and the SWEEP line.\n");
+            }
         }
     }
 
-    printf("  %-14s %9s %9s %9s %10s\n", "VARIANT", "mean ms", "min ms", "max ms", "H/s (1T)");
-    row("v5 1MB ref", &v5ref); row("v8 1MB ref", &v8ref);
-    row("v5 1MB ctl", &v5ctl); row("v8 1MB ctl", &v8ctl);
-    row("v5 4MB",     &v5p4);  row("v8 4MB",     &v8p4);
+    printf("  %-16s %9s %9s %9s %10s\n", "VARIANT", "mean ms", "min ms", "max ms", "H/s (1T)");
+    row("v5 1MB shipped", &v5ref);
+    row("v5 1MB recomp",  &v5ctl);
+    row("v8 1MB recomp",  &v8ctl);
+    row("v8 1MB SHIPPED", &v8ref);
+    row("v5 4MB recomp",  &v5p4);
+    row("v8 4MB recomp",  &v8p4);
 
     /* The verdict below was wrong three separate ways and all three are fixed
      * here, because each of them produced a confident and false statement.
@@ -390,34 +699,39 @@ int main(int argc, char **argv)
      *
      * What can still invalidate a conclusion is the two like-for-like
      * comparisons disagreeing with each other, so that is what is checked. */
+    /* Each comparison is between two builds at the SAME pad, and each control
+     * asks whether the recompiled build matches the one that ships, at the size
+     * that build actually runs. */
     ctl_noise = fabs(v5ctl.mean_ms - v5ref.mean_ms) / v5ref.mean_ms * 100.0;
     d1 = (v8ctl.mean_ms - v5ctl.mean_ms) / v5ctl.mean_ms * 100.0;
     d4 = (v8p4.mean_ms  - v5p4.mean_ms)  / v5p4.mean_ms  * 100.0;
     gate = 2.0;   /* fixed: interleaving handles drift, so this need not flex */
 
     {
-        const double d1ref = (v8ref.mean_ms - v5ref.mean_ms) / v5ref.mean_ms * 100.0;
-        const double disagree = fabs(d1ref - d1);
+        const double v8_ship_vs_recomp =
+            fabs(v8ref.mean_ms - v8ctl.mean_ms) / v8ctl.mean_ms * 100.0;
 
-        /* Both 1 MB rows are like-for-like again: v5pad.inc makes its salt wrap
-         * identity at 1 MB, where it was always a no-op, so "ctl" is once more
-         * the same code as the shipped function rather than the same code plus
-         * an AND that only v5 pays. Above 1 MB they legitimately differ, since
-         * the wrap is the only way v5 can run there at all. */
-        printf("\n  v8 vs v5 at 1 MB, shipped build   = %+.2f%%   (negative is v8 cheaper)\n", d1ref);
-        printf("  v8 vs v5 at 1 MB, recompiled      = %+.2f%%\n", d1);
+        printf("\n  v8 vs v5 at 1 MB                  = %+.2f%%   (negative is v8 cheaper)\n", d1);
         printf("  v8 vs v5 at 4 MB                  = %+.2f%%   (v5 wrapped, v8 pad-aware)\n", d4);
-        printf("  pad-machinery overhead |ctl-ref|  = %.2f%%   (not noise; see the comment)\n", ctl_noise);
+        printf("\n  control, v5 1 MB shipped vs recomp = %.2f%%\n", ctl_noise);
+        printf("  control, v8 1 MB SHIPPED vs recomp = %.2f%%\n", v8_ship_vs_recomp);
         printf("  gate: v8 may not be more than %.2f%% slower\n", gate);
 
         printf("\n  1 MB: %s      4 MB: %s\n",
                d1 <= gate ? "PASS" : "SLOWER THAN GATE",
                d4 <= gate ? "PASS" : "SLOWER THAN GATE");
 
-        if (disagree > 3.0)
-            printf("\n  SUSPECT: the two 1 MB comparisons disagree by %.2f points. They differ\n"
-                   "  only in the salt wrap, so they should agree closely. Rerun on an idle\n"
-                   "  machine before believing either.\n", disagree);
+        /* The two builds are already proven identical by output at startup, so
+         * this figure is memory behaviour only. Some is expected: the shipped
+         * build reads v13's buffer while the recompiled one reads the
+         * benchmark's, so within the interleaved group the shipped build's pad
+         * is the one that has been sitting untouched while 4 MB of other pad
+         * streamed past it. Reported for information, never fatal. */
+        if (v8_ship_vs_recomp > 10.0)
+            printf("\n  note: the two v8 builds differ by %.2f%% in cost while computing the\n"
+                   "  same hashes. That is larger than buffer separation usually accounts\n"
+                   "  for; worth a look if it persists across machines.\n",
+                   v8_ship_vs_recomp);
     }
 
     printf("\n  Please report the SWEEP line above, plus these verdict lines.\n");

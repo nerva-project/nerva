@@ -24,6 +24,7 @@ gcc -O2 -maes -march=x86-64 -fno-strict-aliasing \
     contrib/hf14checks/v5pad1.c contrib/hf14checks/v5pad2.c \
     contrib/hf14checks/v5pad4.c contrib/hf14checks/v5pad8.c \
     src/crypto/slow-hash.c src/crypto/slow-hash-hw.c src/crypto/slow-hash-sw.c \
+    src/crypto/slow-hash-v8-hw.c src/crypto/slow-hash-v8-sw.c \
     src/crypto/cna-vm.c src/crypto/hc128.c src/crypto/oaes_lib.c \
     src/crypto/aesb.c src/crypto/keccak.c src/crypto/hash.c \
     src/crypto/blake256.c src/crypto/groestl.c src/crypto/jh.c \
@@ -31,7 +32,7 @@ gcc -O2 -maes -march=x86-64 -fno-strict-aliasing \
     src/crypto/hash-extra-blake.c src/crypto/hash-extra-groestl.c \
     src/crypto/hash-extra-jh.c src/crypto/hash-extra-skein.c \
     contrib/epee/src/memwipe.c \
-    -static -o "$OUT" -lm
+    -static -pthread -o "$OUT" -lm
 
 echo "built $OUT"
 echo
