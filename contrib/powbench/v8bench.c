@@ -66,18 +66,29 @@
 #include <stdint.h>
 #include <math.h>
 #include <time.h>
-#include <cpuid.h>
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+#  define V8B_X86 1
+#  include <cpuid.h>
+#endif
 #include <pthread.h>
 #include <unistd.h>
 
 #include "hash-ops.h"
 
+/* CPU identification is the only architecture-specific code in this harness.
+ * The hash bodies are not: slow-hash.h carries a full ARMv8 crypto path, so the
+ * measured work is the same function on both. */
+#if defined(V8B_X86)
 /* slow-hash.c asks crypto.cpp whether AES-NI is present and picks the HW or SW
  * body on the answer. Linking crypto.cpp would drag in the C++ crypto library
  * for one CPUID, so supply it here with the same check crypto::has_aesni()
  * does: leaf 1, ECX bit 25. Getting this wrong, or building without
  * SLOW_HASH_HW_AES_BUILT, silently measures software AES and reports a hash
- * about five times slower than it is. The banner prints which path ran. */
+ * about five times slower than it is. The banner prints which path ran.
+ *
+ * aarch64 needs no counterpart: detect_hardware_aes() in slow-hash.c reads
+ * getauxval(AT_HWCAP) & HWCAP_AES there and never calls this, so the symbol is
+ * genuinely x86-only rather than merely unused. */
 int crypto_has_aesni(void)
 {
     unsigned int a, b, c, d;
@@ -85,10 +96,25 @@ int crypto_has_aesni(void)
     if (!__get_cpuid(1, &a, &b, &c, &d)) return 0;
     return (c & (1u << 25)) != 0;
 }
+#endif
+
+/* parts pad the brand string with spaces, Intel at the front and AMD at the
+ * back, so trim both ends */
+static void brand_trim(char *out)
+{
+    char *p = out;
+    size_t n;
+    while (*p == ' ') p++;
+    if (p != out) memmove(out, p, strlen(p) + 1);
+    n = strlen(out);
+    while (n > 0 && out[n - 1] == ' ') out[--n] = '\0';
+}
 
 /* The CPU brand string, so a result pasted into a report says which box it came
- * from without anyone having to remember. CPUID leaves 0x80000002..4 hold it as
- * 48 bytes of ASCII; every x86-64 part supports them. */
+ * from without anyone having to remember. */
+#if defined(V8B_X86)
+/* CPUID leaves 0x80000002..4 hold it as 48 bytes of ASCII; every x86-64 part
+ * supports them. */
 static void cpu_brand(char out[49])
 {
     unsigned int r[12];
@@ -104,18 +130,55 @@ static void cpu_brand(char out[49])
         __get_cpuid(0x80000002u + (unsigned)i, &r[i*4], &r[i*4+1], &r[i*4+2], &r[i*4+3]);
     memcpy(out, r, 48);
     out[48] = '\0';
-
-    /* parts pad the brand string with spaces, Intel at the front and AMD at
-     * the back, so trim both ends */
-    {
-        char *p = out;
-        size_t n;
-        while (*p == ' ') p++;
-        if (p != out) memmove(out, p, strlen(p) + 1);
-        n = strlen(out);
-        while (n > 0 && out[n - 1] == ' ') out[--n] = '\0';
-    }
+    brand_trim(out);
 }
+#else
+/* ARM has no brand-string instruction. The kernel exposes a name on some
+ * platforms and not others, so try the places it appears and fall back to the
+ * architecture rather than printing an empty field: this string only has to
+ * identify a screenshot, and a vague name is better than a blank one. Android
+ * in particular usually drops the "Hardware" line on arm64. */
+static void cpu_brand(char out[49])
+{
+    static const char *const keys[] = { "Hardware", "model name", "Model" };
+    FILE *f;
+    char line[256];
+    size_t k;
+
+    out[0] = '\0';
+
+    f = fopen("/proc/device-tree/model", "rb");
+    if (f != NULL) {
+        size_t n = fread(out, 1, 48, f);
+        fclose(f);
+        out[n] = '\0';
+        brand_trim(out);
+        if (out[0] != '\0') return;
+    }
+
+    f = fopen("/proc/cpuinfo", "r");
+    if (f != NULL) {
+        while (fgets(line, sizeof(line), f) != NULL) {
+            for (k = 0; k < sizeof(keys) / sizeof(keys[0]); k++) {
+                if (strncmp(line, keys[k], strlen(keys[k])) == 0) {
+                    char *v = strchr(line, ':');
+                    if (v != NULL) {
+                        snprintf(out, 49, "%s", v + 1);
+                        out[strcspn(out, "\r\n")] = '\0';
+                        brand_trim(out);
+                    }
+                    break;
+                }
+            }
+            if (out[0] != '\0') break;
+        }
+        fclose(f);
+    }
+
+    if (out[0] == '\0')
+        snprintf(out, 49, "unknown aarch64");
+}
+#endif
 
 typedef void (*hashfn)(cn_hash_context_t *, const void *, size_t, char *,
                        size_t, uint8_t, uint16_t, uint16_t);
@@ -446,8 +509,13 @@ int main(int argc, char **argv)
     }
     printf("AES path: %s\n",
 #if defined(SLOW_HASH_HW_AES_BUILT)
-           crypto_has_aesni() ? "hardware (AES-NI)"
-                              : "SOFTWARE - this CPU has no AES-NI, numbers are not comparable to other machines"
+           /* ask the dispatcher, not the CPUID helper: on aarch64
+            * detect_hardware_aes() reads getauxval(AT_HWCAP) & HWCAP_AES and
+            * never consults crypto_has_aesni(), so asking the helper would
+            * report software AES while the hardware path ran. This must report
+            * what actually executed or the banner is worse than no banner. */
+           cn_hardware_aes_supported() ? "hardware (AES)"
+                              : "SOFTWARE - no hardware AES on this CPU, numbers are not comparable to other machines"
 #else
            "SOFTWARE - built without SLOW_HASH_HW_AES_BUILT, numbers are meaningless"
 #endif
