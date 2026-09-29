@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 // 
 // All rights reserved.
@@ -73,6 +73,10 @@ namespace crypto {
 
   inline void cn_slow_hash_v11(cn_hash_context_t *context, const void *data, size_t length, hash &hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy) {
     cn_slow_hash_v11(context, data, length, reinterpret_cast<char *>(&hash), iters, init_size_blk, xx, yy);
+  }
+
+  inline void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, hash &hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy) {
+    cn_slow_hash_v14(context, data, length, reinterpret_cast<char *>(&hash), iters, init_size_blk, xx, yy);
   }
 
   inline void cn_slow_hash_v10(cn_hash_context_t *context, const void *data, size_t length, hash &hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww) {

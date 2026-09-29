@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -127,6 +127,38 @@ static BOOL SetLockPagesPrivilege(HANDLE hProcess, BOOL bEnable)
 
 #define salt_pad(salt, salt_hash, a, b, c, d)          \
     extra_hashes[a % 3](salt, 200, salt_hash);         \
+    temp_1 = (uint16_t)(iters ^ (b ^ c));              \
+    offset_1 = temp_1 * ((d % 3) + 1);                 \
+    for (j = 0; j < 32; j++)                           \
+        (salt)[offset_1 + j] ^= (salt_hash)[j];        \
+    x = 0;                                             \
+    offset_1 = (d % 64) + 1;                           \
+    offset_2 = ((temp_1 * offset_1) % 125) + 4;        \
+    for (j = offset_1; j < CN_SCRATCHPAD_MEMORY; j += offset_2)      \
+        hp_state[j] ^= (salt)[x++];
+
+/* CNA v8's salt_pad. A copy of the macro above with one token changed, rather
+ * than a parameterised version of it, because the original is expanded by
+ * cn_slow_hash_v10 and cn_slow_hash_v11, which validate every block between
+ * heights 341,000 and 4,320,000. Any edit there rewrites history, and a
+ * reviewer of a consensus change should be able to diff one token instead of
+ * proving that a refactor left the live expansion alone.
+ *
+ * The one token: `a % 3` becomes `a & 3`, so the selector reaches all four
+ * entries of extra_hashes instead of three. Skein has sat unused in that table
+ * since the macro was written in December 2018. It is already consensus-live
+ * at the other end of the hash, where finalize_hash picks with
+ * `state.hs.b[0] & 3`, so this adds no code and no new dependency: it forces a
+ * fourth structurally distinct hash datapath (Threefish, against Blake's ARX,
+ * Groestl's AES-like and JH) into anything trying to implement the algorithm
+ * in silicon.
+ *
+ * `& 3` rather than `% 4` to match how finalize_hash already selects. They are
+ * identical on unsigned. It is also the more uniform of the two: `a` is
+ * uint16_t and 65536 divides by 4 exactly, where `% 3` leans very slightly
+ * toward Blake. */
+#define salt_pad_v8(salt, salt_hash, a, b, c, d)       \
+    extra_hashes[a & 3](salt, 200, salt_hash);         \
     temp_1 = (uint16_t)(iters ^ (b ^ c));              \
     offset_1 = temp_1 * ((d % 3) + 1);                 \
     for (j = 0; j < 32; j++)                           \

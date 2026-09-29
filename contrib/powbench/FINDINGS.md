@@ -288,6 +288,88 @@ reason was, it is not in the repository.
 
 *Checked:* commit list and dates.
 
+## Phase 1 results
+
+### F18. CNA v8 costs nothing to verify, measured on two machines
+
+`contrib/powbench/v8bench.c`, interleaved pairs (one v5 nonce then one v8 nonce
+on identical parameters), 2000 samples at 1 MB and 600 at 4 MB.
+
+| machine | control | v8 vs v5, 1 MB | v8 vs v5, 4 MB | verdict |
+|---|---|---|---|---|
+| Ryzen 9 7950X (Zen 4) | 1.46% | **-0.75%** | +0.07% | PASS |
+| Ryzen 7 9700X (Zen 5) | 1.12% | **-0.63%** | -0.31% | PASS |
+| Ryzen 5 5600X (Zen 3) | 5.88% | **-0.79%** | +0.15% | control flagged, see F20 |
+| Core i7-7700HQ (Kaby Lake) | 1.07% | **-0.58%** | +0.09% | PASS |
+
+Negative is v8 cheaper. Four CPUs across four microarchitectures and three
+generations of core, and the 1 MB figure lands between -0.58% and -0.79% on
+every one of them, mean about -0.69%. At 4 MB it is between -0.31% and +0.15%,
+which is zero.
+
+This agrees with an independent prediction made from the hash costs alone,
+before these runs. Measured on 200-byte inputs: blake 765 ns, groestl 1758 ns,
+jh 978 ns, **skein 290 ns**. Skein is the cheapest of the four by a wide margin
+and Groestl the dearest by six times, so widening the selector from three to
+four drops the mean per `salt_pad` call from 1167 ns to 948 ns. Over ~30 calls
+that is about -6.6 us on a ~780 us nonce, or **-0.84%** at 1 MB, diluting
+toward zero at 4 MB where the pad sweep quadruples but the hash cost does not.
+Predicted -0.84%, measured -0.75% and -0.52%.
+
+*Consequence:* Phase 1 adds a fourth structurally distinct hash datapath for no
+verification cost, on every machine in the set including the 6 MB-L3 laptop the
+fairness argument rests on. The gate is met on the machine that was supposed to
+decide it. Phase 1 is done.
+
+### F20. The control check in `v8bench.c` measures the wrong thing
+
+The 5600X run printed "UNUSABLE: the control pair disagrees by more than 4%"
+at 5.88%, while its actual v8-against-v5 figures (-0.79% and +0.15%) sit right
+on top of the other three machines. The verdict was a false alarm, and the
+reason is a design error in the harness, not noise on that box.
+
+`v5ref` and `v5ctl` are measured in **separate passes**, one after the other.
+`v5` and `v8` are measured **interleaved**, alternating within a single pass on
+identical parameters. So drift, boost behaviour and background load land on the
+ref-against-ctl comparison but largely cancel in the v5-against-v8 one. Using
+the first as a noise floor for the second therefore overstates the floor, and
+scaling the gate to `2 x` it compounds the error.
+
+The evidence that it is drift rather than a real build difference: the same
+machine gives a different control figure run to run (7950X 1.46% then 2.21%,
+laptop 2.73% then 1.07%). A systematic difference between two builds of the
+same source would not move like that.
+
+*How to fix it:* interleave `ref` and `ctl` the same way the variants are
+interleaved, so the control measures what it claims to. Until then read the
+control as an upper bound on drift and treat the paired v5/v8 numbers as sound
+even when it trips. The 5600X row above is good data.
+
+*Kept as a finding rather than silently patched* because the harness has
+already been distributed and its output is in three screenshots; anyone
+re-reading those needs to know which number to believe.
+
+### F19. Interleaving is what made Phase 1 measurable
+
+The first attempt measured v5 and v8 as consecutive blocks at n=60 and reported
+v8 **1.7% slower** at 1 MB and 3.2% slower at 4 MB, reproducing to two decimals
+across three runs. All of it was an artifact.
+
+`bench_single` in `t_bench_v5v6.cpp` uses a fixed RNG seed, so a small sample
+draws the *same* unrepresentative parameter set every run: a sampling
+difference looks stable and reads as a real result. With work per nonce varying
+about 4.7x, the standard error at n=60 is near 4.5%, so a 2% question is not
+answerable at that sample size.
+
+The tell, missed at first, was that the apparent penalty *grew* with pad size.
+The extra-hash cost is constant per nonce while the pad sweep quadruples, so
+any real effect had to shrink. **A result that contradicts the mechanism is a
+reason to distrust the measurement, however well it reproduces.**
+
+Two fixes, both kept: raise n (2000 at 1 MB), and interleave the pair within
+one process so drift and boost behaviour hit both variants equally. After
+those, the sign flipped and matched the arithmetic.
+
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell

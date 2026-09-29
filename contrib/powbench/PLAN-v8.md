@@ -192,17 +192,19 @@ unchanged. For a consensus function, prefer the copy.
 Free side effect worth recording: `a` is `uint16_t` and 65536 is divisible by
 4, so `& 3` is exactly uniform where `% 3` is slightly biased toward Blake.
 
-### 1b. New entry point `cn_slow_hash_v15`
+### 1b. New entry point `cn_slow_hash_v14`
 
-Nerva's internal numbering makes CNA v8 into `cn_slow_hash_v15` (v11 = CNA v5,
-v13 = v6, v14 = v7). Copy the `v11` body twice, once per arm, swapping
+These functions are named for the hard fork that introduces them, not for the
+CryptoNight-Adaptive generation, which is why there is no v12 and why CNA v8
+becomes `cn_slow_hash_v14`. The name was held by CNA v7, which is deleted
+first: it never released, so no chain history refers to it. Copy the `v11` body twice, once per arm, swapping
 `salt_pad` for `salt_pad_v8` and changing nothing else. Same signature
 (`iters`, `init_size_blk`, `xx`, `yy`).
 
 | file | what |
 |---|---|
 | `slow-hash-impl.h` (HW arm, SW arm) | the two bodies |
-| `slow-hash-hw.c`, `slow-hash-sw.c` | `#define cn_slow_hash_v15 cn_slow_hash_v15_hw` / `_sw` |
+| `slow-hash-hw.c`, `slow-hash-sw.c` | `#define cn_slow_hash_v14 cn_slow_hash_v14_hw` / `_sw` |
 | `slow-hash.c` | externs plus the `CN_DISPATCH` wrapper |
 | `hash-ops.h`, `hash.h` | declaration and C++ inline |
 
@@ -216,7 +218,7 @@ arm from its own arm and do not reconcile them. Reconciling them forks HW from
 SW, and only on machines without AES-NI, which is where it will be found late.
 See FINDINGS.md F3.
 
-**No `get_block_longhash_v15` and no dispatcher change in Phase 1.** This
+**No `get_block_longhash_v14` and no dispatcher change in Phase 1.** This
 phase is measurement. The consensus diff stays at zero and the whole phase
 reverts with one `git revert`. Wiring it to major_version 14 happens in
 Phase 4, once phases 1 to 3 have all been measured.
@@ -224,7 +226,7 @@ Phase 4, once phases 1 to 3 have all been measured.
 ### 1c. Wire it into the pad-resize machinery
 
 `contrib/hf14checks/v5pad.inc` renames each variant per translation unit. Add
-`#define cn_slow_hash_v15 V5PAD_CAT(cn_slow_hash_v15_, V5PAD_TAG)` to that
+`#define cn_slow_hash_v14 V5PAD_CAT(cn_slow_hash_v14_, V5PAD_TAG)` to that
 block and `v5pad1.c` / `v5pad4.c` give v8 at 1 MB and 4 MB for free.
 
 Measure at both. 1 MB isolates the selector change against the shipped
@@ -234,7 +236,7 @@ reference. 4 MB is where v8 is intended to live, and the salt wrap in
 ### 1d. The measurement
 
 Add three rows to `VS[]` in `contrib/hf14checks/t_bench_v5v6.cpp`: `v8ref`
-(dispatcher, `own_pad` 0), `v8ctl` (`cn_slow_hash_v15_p1`, 1 MB) and `v8_4`
+(dispatcher, `own_pad` 0), `v8ctl` (`cn_slow_hash_v14_p1`, 1 MB) and `v8_4`
 (`_p4`, 4 MB). Keep every existing row.
 
 The comparison that decides the gate is **`v5ctl` vs `v8ctl`** and **`v5_4` vs
@@ -262,12 +264,24 @@ j < CN_SCRATCHPAD_MEMORY; j += offset_2)` with `offset_2` in [4,128], meaning
 hash against that is noise. And the mix moves Groestl, the slowest of the four
 on short inputs, from 1/3 of calls to 1/4 while adding Skein at 1/4.
 
-Gate: if verification moves more than 2%, reconsider. If it reads worse than
-that, suspect the harness before the algorithm.
+**The gate is self-calibrating, because a fixed 2% is not measurable.** The
+bench's runs agree within about 4% (RESULTS.md section 3), so a flat 2%
+threshold sits inside its own noise and a pass could not be told from a fail.
+Instead, the control pair sets the resolution: `v5ref` and `v5ctl` are the same
+source at the same size, so whatever they differ by *is* the harness's noise
+floor for that run.
+
+    pass if |v8ctl - v5ctl| <= max(2%, 2 x |v5ref - v5ctl|)
+
+Report both numbers, always. If the control pair differs by more than 4% the
+run is too noisy to conclude anything and the machine, not the algorithm, is
+what needs attention. Measuring `v5ctl` and `v8ctl` interleaved within one
+process rather than as consecutive blocks is what makes the floor small enough
+to be useful, since thermal drift then hits both rows equally.
 
 ### 1f. HW equals SW
 
-Add a `v15` pair to `cn_slow_hash_self_test` mirroring the existing `v11`
+Add a `v14` pair to `cn_slow_hash_self_test` mirroring the existing `v11`
 pair, including the `memset(ctx->salt, ...)` between the two calls, since
 `salt_pad` writes back into `salt`. `xx/yy = 2,2` keeps it in milliseconds
 while still hitting both loop levels. This passing is a precondition for
@@ -284,9 +298,9 @@ trimmed, stays an engineering estimate under open item 3.
 
 ### 1h. Exit criteria
 
-- `v15` HW output equals SW output at 1 MB and 4 MB
-- `v8ctl` within 2% of `v5ctl` on all four machines, gated on the i7-7700HQ
-  and not the 7950X
+- `v14` HW output equals SW output at 1 MB and 4 MB
+- `v8ctl` within the self-calibrating gate above of `v5ctl`, on all four
+  machines, gated on the i7-7700HQ and not the 7950X
 - control rows still ~1.00x
 - RESULTS.md carries the four-machine table, and this section records the
   measured figure, not the predicted one
@@ -300,8 +314,8 @@ ASIC must implement full IEEE-754 with four rounding modes, denormals and NaN
 handling, which is large silicon that cannot be simplified without breaking
 consensus. It is the biggest single gap between both v5 and v6 and RandomX.
 
-Phase 2 extends `cn_slow_hash_v15` in place. It does not need another entry
-point, because v15 has no fork version pointed at it until Phase 4.
+Phase 2 extends `cn_slow_hash_v14` in place. It does not need another entry
+point, because nothing routes to it until Phase 4.
 
 ### 2a. Design
 
@@ -412,10 +426,18 @@ Only after phases 1 and 2 are measured.
 
 ## Phase 4: plumbing
 
-- `CN_SCRATCHPAD_MEMORY_V15` at whatever Phase 3 picks, and a decision made
-  early on whether v15 is a fixed-size entry point or takes a size parameter,
-  because it affects the test harness.
-- `get_block_longhash_v15` in `cryptonote_tx_utils.cpp`, keeping the
+- `CN_SCRATCHPAD_MEMORY_V15`, a **compile-time constant**, set once by Phase 3.
+
+  Decided against a runtime pad-size parameter. The argument for one was that
+  Phase 3 sweeps the pad, but the sweep is a benchmark concern and
+  `v5pad.inc` already solves it by compiling the same source at several sizes
+  as separate translation units. Paying for that flexibility in shipping code
+  means `state_index`'s mask becomes a register rather than an immediate and
+  the salt stride's minimum becomes a division rather than a constant, both in
+  the innermost loop of the hash. That loop is where the 29% branch-versus-AND
+  result came from, and it is the last place to spend anything for
+  convenience. One size ships; the bench compiles as many as it likes.
+- `get_block_longhash_v14` in `cryptonote_tx_utils.cpp`, keeping the
   `HC128_Init` + `get_cna_v5_data` chain fill unchanged. **The fill is the
   pool resistance and must not be weakened.** v8 uses the v5 fill; the v6
   fill (`get_cna_v6_data`) goes dead along with v7.
@@ -425,10 +447,10 @@ Only after phases 1 and 2 are measured.
   the same height on competing chains, and a stale bound indexes past the pad
   and forks the chain. The comment in `get_block_longhash_v14` documents the
   v13/v14 instance. If v8 runs at a different pad size than v6's 8 MB, it is
-  the same trap with different numbers: fetch with v15's own bound on every
+  the same trap with different numbers: fetch with v14's own bound on every
   call and invalidate `cached_height`, exactly as v14 does now.
 - Dispatcher: point `default:` (major_version >= 14) at
-  `get_block_longhash_v15`. This is the only live-code line the whole project
+  `get_block_longhash_v14`. This is the only live-code line the whole project
   changes, and it changes no historical height because HF14 has never been
   reached.
 - Set the real HF14 height, replacing the 4,500,000 placeholder, once the
@@ -436,12 +458,19 @@ Only after phases 1 and 2 are measured.
 - `ASSUME_VALID_HEIGHT` bump at release, and seed-height handling
   (`CN_SEED_MIN_HEIGHT`) checked against the chosen pad.
 - Both HW and SW AES paths must produce identical hashes;
-  `cn_slow_hash_self_test` must cover v15.
-- Decide whether to delete v7 (`cn_slow_hash_v14`, its `cna-vm.c` paths,
-  `CN_SCRATCHPAD_MEMORY_V14`, `get_cna_v6_data`). It is dead once the
-  dispatcher moves, and it never validated a mainnet block, so removal is
-  clean. Deleting it is the one case in this codebase where dropping a PoW
-  function does not touch history.
+  `cn_slow_hash_self_test` must cover v14.
+- **Delete v7** (`cn_slow_hash_v14`, `cn_vm_execute_v7` and the `seg_hops`
+  generation, `CN_SCRATCHPAD_MEMORY_V14`, `CN_V7_*`, `get_block_longhash_v14`).
+  It is dead once the dispatcher moves, it never validated a mainnet block, and
+  removing it is the one case in this codebase where dropping a PoW function
+  touches no history. Its removal also takes the `seg_hops` draws back out of
+  `cn_vm_generate_program`, which is a function live HF13 consensus calls (F9);
+  that alone is worth doing.
+
+  Two constraints. It lands as **its own commit**, separate from adding v8, so
+  that the fallback of shipping HF14 on v6 with no PoW change stays one revert
+  away. And `get_cna_v6_data` **stays**: it is v6's chain fill and v6 is live on
+  mainnet, so only v7's own code goes.
 
 ## Phase 5: validation
 

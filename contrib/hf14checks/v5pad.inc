@@ -75,6 +75,7 @@ _Static_assert((CN_SALT_MEMORY & (CN_SALT_MEMORY - 1)) == 0,
 #define cn_slow_hash_v10  V5PAD_CAT(cn_slow_hash_v10_, V5PAD_TAG)
 #define cn_slow_hash_v11  V5PAD_CAT(cn_slow_hash_v11_, V5PAD_TAG)
 #define cn_slow_hash_v13  V5PAD_CAT(cn_slow_hash_v13_, V5PAD_TAG)
+#define cn_slow_hash_v14  V5PAD_CAT(cn_slow_hash_v14_, V5PAD_TAG)
 
 #include "crypto/slow-hash.h"
 
@@ -107,6 +108,27 @@ _Static_assert((V5PAD_BLOCKS & (V5PAD_BLOCKS - 1)) == 0,
 #undef salt_pad
 #define salt_pad(salt, salt_hash, a, b, c, d)                   \
     extra_hashes[a % 3](salt, 200, salt_hash);                  \
+    temp_1 = (uint16_t)(iters ^ (b ^ c));                       \
+    offset_1 = temp_1 * ((d % 3) + 1);                          \
+    for (j = 0; j < 32; j++)                                    \
+        (salt)[offset_1 + j] ^= (salt_hash)[j];                 \
+    x = 0;                                                      \
+    offset_1 = (d % 64) + 1;                                    \
+    offset_2 = ((temp_1 * offset_1) % 125) + 4;                 \
+    for (j = offset_1; j < CN_SCRATCHPAD_MEMORY; j += offset_2) \
+        hp_state[j] ^= (salt)[V5PAD_SALT_WRAP(x++)];
+
+/* CNA v8's salt_pad needs the same wrap for the same reason. Without this the
+ * v14 compilations would keep the unwrapped macro from slow-hash.h and read
+ * past the salt at any pad above 1 MB: the sweep steps the salt once per
+ * offset_2 pad bytes, and offset_2's minimum of 4 is what makes 1 MB consume
+ * exactly CN_SALT_MEMORY and no more. At 4 MB it would index four times that.
+ *
+ * Only the selector differs from the macro above, `a & 3` against `a % 3`,
+ * which is the whole of CNA v8 and the thing these rows exist to measure. */
+#undef salt_pad_v8
+#define salt_pad_v8(salt, salt_hash, a, b, c, d)                \
+    extra_hashes[a & 3](salt, 200, salt_hash);                  \
     temp_1 = (uint16_t)(iters ^ (b ^ c));                       \
     offset_1 = temp_1 * ((d % 3) + 1);                          \
     for (j = 0; j < 32; j++)                                    \

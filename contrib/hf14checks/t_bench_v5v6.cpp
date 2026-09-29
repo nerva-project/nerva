@@ -66,6 +66,12 @@ void cn_slow_hash_v11_p1_5(cn_hash_context_t *, const void *, size_t, char *, si
 void cn_slow_hash_v11_p2(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v11_p4(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v11_p8(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
+/* CNA v8 at the same two sizes. v8 is v11 with salt_pad's extra-hash selector
+ * widened to four entries, so it shares the signature and the pad. 1 MB
+ * isolates the selector change against v5 at the size v5 ships; 4 MB is where
+ * v8 is meant to live and exercises v5pad.inc's salt wrap, a different path. */
+void cn_slow_hash_v14_p1(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
+void cn_slow_hash_v14_p4(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 }
 
 enum Gen { GEN_V5 = 5, GEN_V6 = 6 };
@@ -87,14 +93,28 @@ struct V {
 // compilation is an inner function that reads context->scratchpad with no
 // allocation of its own, so it must be handed a buffer, the 1 MB ones included.
 static const V VS[] = {
-  { "v5ref",  "v5 1MB ref",  GEN_V5, cn_slow_hash_v11,       0,            1024, 60, 20, true  },
-  { "v5ctl",  "v5 1MB ctl",  GEN_V5, cn_slow_hash_v11_p1,    1024ull*1024, 1024, 60, 20, false },
+  // single_n is 2000 on the rows that carry the v5-against-v8 comparison, not
+  // the 60 the pad-sweep rows use. v5 draws its work per nonce and the spread
+  // is about 4.7x, so at n=60 the standard error on the mean is near 4.5% and
+  // a 2% gate cannot be resolved. Worse, the Rng seed is fixed, so a small
+  // sample repeats the same draw every run: a difference that is pure sampling
+  // looks stable across runs and reads as a real result. n=2000 costs about
+  // 1.6 s a row here and brings the error under 1%.
+  { "v5ref",  "v5 1MB ref",  GEN_V5, cn_slow_hash_v11,       0,            1024, 2000, 20, true  },
+  { "v5ctl",  "v5 1MB ctl",  GEN_V5, cn_slow_hash_v11_p1,    1024ull*1024, 1024, 2000, 20, false },
   { "v5_125", "v5 1.25MB",   GEN_V5, cn_slow_hash_v11_p1_25, 1280ull*1024, 1280, 40, 14, true  },
   { "v5_15",  "v5 1.5MB",    GEN_V5, cn_slow_hash_v11_p1_5,  1536ull*1024, 1536, 35, 12, true  },
   { "v5_2",   "v5 2MB",      GEN_V5, cn_slow_hash_v11_p2,    2048ull*1024, 2048, 30, 10, true  },
-  { "v5_4",   "v5 4MB",      GEN_V5, cn_slow_hash_v11_p4,    4096ull*1024, 4096, 30, 10, true  },
+  { "v5_4",   "v5 4MB",      GEN_V5, cn_slow_hash_v11_p4,    4096ull*1024, 4096, 600, 10, true  },
   { "v5_8",   "v5 8MB",      GEN_V5, cn_slow_hash_v11_p8,    8192ull*1024, 8192, 20,  6, true  },
   { "v6",     "v6 (HF13)",   GEN_V6, NULL,                   0,            8192, 20,  6, true  },
+  // CNA v8. v8ref comes out of libcncrypto.a, v8ctl is the same source
+  // recompiled here, exactly as v5ref/v5ctl pair up. The comparison that
+  // decides Phase 1 is v5ctl against v8ctl and v5_4 against v8_4: same
+  // translation unit, same flags, same pad, one token of difference.
+  { "v8ref",  "v8 1MB ref",  GEN_V5, cn_slow_hash_v14,       0,            1024, 2000, 20, true  },
+  { "v8ctl",  "v8 1MB ctl",  GEN_V5, cn_slow_hash_v14_p1,    1024ull*1024, 1024, 2000, 20, false },
+  { "v8_4",   "v8 4MB",      GEN_V5, cn_slow_hash_v14_p4,    4096ull*1024, 4096, 600, 10, true  },
 };
 static const size_t NVS = sizeof(VS) / sizeof(VS[0]);
 
@@ -271,8 +291,9 @@ static void bench_v5_v6_v7()
   std::printf("  A flat ms-per-MB column means the pad is only buying more of the same work.\n");
   std::printf("  A rising one means the pad has left a cache level and every byte costs more.\n");
 
-  std::printf("\n  v6 / v5 1MB = %.2fx   v6 / v5 8MB = %.2fx\n",
-              mean_of("v6") / ref, mean_of("v6") / mean_of("v5_8"));
+  std::printf("\n  v6 / v5 1MB = %.2fx   v6 / v5 8MB = %.2fx   v8ctl / v5ctl = %.3fx\n",
+              mean_of("v6") / ref, mean_of("v6") / mean_of("v5_8"),
+              mean_of("v8ctl") / mean_of("v5ctl"));
 
   unsigned hw = std::thread::hardware_concurrency(); if (!hw) hw = 4;
   std::printf("\n  == thread scaling (H/s total), hardware_concurrency = %u ==\n", hw);

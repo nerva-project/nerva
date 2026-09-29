@@ -60,6 +60,7 @@ extern void cn_slow_hash_v9_hw(cn_hash_context_t *context, const void *data, siz
 extern void cn_slow_hash_v10_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww);
 extern void cn_slow_hash_v11_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 extern void cn_slow_hash_v13_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
+extern void cn_slow_hash_v14_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 #endif
 
 extern void cn_slow_hash_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters);
@@ -68,6 +69,7 @@ extern void cn_slow_hash_v9_sw(cn_hash_context_t *context, const void *data, siz
 extern void cn_slow_hash_v10_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww);
 extern void cn_slow_hash_v11_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 extern void cn_slow_hash_v13_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
+extern void cn_slow_hash_v14_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 
 /* Runtime CPU detection. Cached in a function-static so the per-hash overhead
  * is one branch on a hot variable. Override with NERVA_FORCE_SOFTWARE_AES=1 to
@@ -151,6 +153,18 @@ void cn_slow_hash_v11(cn_hash_context_t *ctx, const void *data, size_t length, c
     cn_pads_require(ctx, 1, 0);
     CN_DISPATCH(cn_slow_hash_v11_hw(ctx, data, length, hash, iters, init_size_blk, xx, yy),
                 cn_slow_hash_v11_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy));
+}
+
+/* CNA v8. Same pads and same signature as v11, since it is v11 with a
+ * different hash selector inside salt_pad. Nothing routes here yet;
+ * get_block_longhash gains a v14 branch in Phase 4 once the pad size is
+ * settled. Until then this exists so the benchmark and the self-test can
+ * reach it without any consensus path changing. */
+void cn_slow_hash_v14(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
+{
+    cn_pads_require(ctx, 1, 0);
+    CN_DISPATCH(cn_slow_hash_v14_hw(ctx, data, length, hash, iters, init_size_blk, xx, yy),
+                cn_slow_hash_v14_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy));
 }
 
 void cn_slow_hash_v13(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, const uint8_t *seed)
@@ -535,6 +549,35 @@ int cn_slow_hash_self_test(void)
     memset(ctx->salt, 0, CN_SALT_MEMORY);
     cn_slow_hash_v11_sw(ctx, input, sizeof(input) - 1, sw, 64, 8, 2, 2);
     if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
+
+    /* v14 (CNA v8): same shape as v11, and the same reason for testing it.
+     * The two arms are separate copies whose r2 aliases a different register
+     * on purpose, so a transcription slip between them is invisible to review
+     * and would split the chain along the AES-NI line. This comparison is the
+     * only thing that catches it.
+     *
+     * xx/yy run to 3 rather than v11's 2 so the inner loop body executes more
+     * than once, which is what varies the salt_pad selector: with xx=yy=2 the
+     * hash makes a single salt_pad call per level and could agree by accident
+     * while the widened selector was wrong. The salt is reset between the two
+     * calls because salt_pad writes back into it. */
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+    memset(ctx->salt, 0, CN_SALT_MEMORY);
+    cn_slow_hash_v14_hw(ctx, input, sizeof(input) - 1, hw, 64, 8, 3, 3);
+    memset(ctx->salt, 0, CN_SALT_MEMORY);
+    cn_slow_hash_v14_sw(ctx, input, sizeof(input) - 1, sw, 64, 8, 3, 3);
+    if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
+
+    /* v14 must also differ from v11 on the same inputs. If the selector change
+     * did not take (a stale macro, a bad copy, a build that picked up salt_pad
+     * instead of salt_pad_v8) the two agree, the HW/SW check above still
+     * passes, and the whole phase silently does nothing. Roughly a quarter of
+     * salt_pad calls should now route to Skein, so with xx=yy=3 the chance of
+     * a genuine collision is negligible. */
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+    memset(ctx->salt, 0, CN_SALT_MEMORY);
+    cn_slow_hash_v11_hw(ctx, input, sizeof(input) - 1, sw, 64, 8, 3, 3);
+    if (memcmp(hw, sw, HASH_SIZE) == 0) ok = 0;
 
     /* v13: 8 MB scratchpad + VM. seed is a fixed 32-byte value; salt and
      * random_values reset so both paths see identical inputs. */
