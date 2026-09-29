@@ -4,6 +4,23 @@ A v5-derived PoW for Nerva, aiming to beat the current v6 on all three axes at
 once. Every target below comes from measurements in `RESULTS.md`; read that
 first, especially section 2 (the mistakes) and section 7 (known gaps).
 
+## Status
+
+v7 has never activated and never will. Mainnet HF14 sits at the placeholder
+height 4,500,000 in `cryptonote_config.h` and the chain is at ~4,420,000, so
+no block has ever been hashed with `cn_slow_hash_v14` outside testnet. Two
+consequences shape this whole document:
+
+1. **v8 takes the existing HF14 slot.** `get_block_longhash` routes
+   `default:` (major_version >= 14) to `get_block_longhash_v14`. v8 replaces
+   the body of that one branch. There is no `{15, ...}` hard-fork entry, no
+   second fork event, and no user upgrades twice. If v8 fails its gates, the
+   fallback is to drop the PoW change and leave HF14 on v6.
+2. **HF14 is not only the PoW.** That slot also carries CLSAG, Bulletproofs+
+   (type 7 only) and ring size 16. Those are orthogonal to
+   `get_block_longhash` and are untouched by everything below. The PoW work
+   can fail without taking them down with it.
+
 ## Targets, measured against v6 8MB as it ships today
 
 | axis | v6 8MB today | v8 target | why this number |
@@ -32,27 +49,153 @@ datapaths, per-sweep variable strides, variable work per nonce (4.7x), and a
 variable AES pipeline width. See RESULTS.md section 6.3 and the discussion of
 `salt_pad`.
 
----
+## The rule that governs every phase: historical PoW does not change
 
-## Phase 1: the free change (do first, measure, stop if it costs anything)
+**No edit may alter the hash any already-mined block was validated against.**
 
-**Use all four hash functions in `salt_pad`.**
+This is not a style preference. It is the single easiest way to break this
+chain, and the codebase makes it easy to do by accident:
 
-`src/crypto/slow-hash.h`:
+- `salt_pad` in `src/crypto/slow-hash.h` is expanded by **both**
+  `cn_slow_hash_v10` and `cn_slow_hash_v11`, in both the HW and SW arms of
+  `slow-hash-impl.h`. `get_block_longhash` routes major_version 10 to v10 and
+  11 and 12 to v11. Editing that macro in place rewrites PoW for heights
+  341,000 through 4,320,000.
+- It would do so **silently for almost everyone**. `ASSUME_VALID_HEIGHT` is
+  4,320,000 and `Blockchain::block_needs_pow` skips PoW below it under fast
+  sync, so a fast-syncing node never recomputes those hashes. The divergence
+  surfaces only with `--fast-block-sync 0`, in FAKECHAIN tests, or for anyone
+  auditing the chain from genesis. A consensus break that hides from the
+  default sync path is the worst failure mode available here.
+
+So: every algorithm change lands as a **new macro and a new entry point**,
+with `cn_slow_hash_v10` and `cn_slow_hash_v11` left byte-identical. The diff
+that touches a live function is the one-line dispatcher change at the fork
+version, and nothing else.
+
+## Phase 1: the fourth hash function
+
+**Use all four hash functions in the `salt_pad` extra hash.**
+
+`src/crypto/slow-hash.h:129` currently reads `extra_hashes[a % 3]`, so Skein
+is never selected even though the table declares four entries. Skein is
+Threefish-based, structurally unlike Blake (ARX), Groestl (AES-like) or JH, so
+forcing it into the selection puts a fourth distinct datapath into any ASIC
+that cannot be trimmed away.
+
+Skein already ships and is already consensus-live: `finalize_hash` selects it
+via `extra_hashes[state.hs.b[0] & 3]`, so roughly a quarter of every v5, v6
+and v7 hash already terminates in Skein. Phase 1 adds no new code, no new
+dependency and no new endianness surface. That is what makes it cheap.
+
+### 1a. New macro, live macro untouched
+
+Add `salt_pad_v8` next to `salt_pad` in `slow-hash.h`, identical in every line
+but the selector:
+
 ```c
-extra_hashes[a % 3](salt, 200, salt_hash);   ->   extra_hashes[a % 4]
+extra_hashes[a & 3](salt, 200, salt_hash);
 ```
 
-The table already declares four entries and Skein is never selected. Skein is
-Threefish-based, structurally unlike Blake (ARX), Groestl (AES-like) or JH, so
-this forces a fourth distinct datapath into any ASIC that cannot be trimmed.
+`& 3` rather than `% 4`: identical on unsigned, and it matches how
+`finalize_hash` already selects. Keep the other eight lines byte-identical so
+a reviewer diffs one token.
 
-- Cost to CPU: Skein runs at comparable speed to the others, ~30 calls per
-  nonce on 200 bytes. Expect under 1% on verification. **Measure it.**
-- Cost in silicon: an entire additional hash core.
-- Risk: none beyond being a consensus change.
+Do **not** parameterise the existing macro and redefine `salt_pad` in terms of
+it. It is tidier and it forces a reviewer to prove the live expansion is
+unchanged. For a consensus function, prefer the copy.
 
-Gate: if verification moves more than 2%, reconsider.
+Free side effect worth recording: `a` is `uint16_t` and 65536 is divisible by
+4, so `& 3` is exactly uniform where `% 3` is slightly biased toward Blake.
+
+### 1b. New entry point `cn_slow_hash_v15`
+
+Nerva's internal numbering makes CNA v8 into `cn_slow_hash_v15` (v11 = CNA v5,
+v13 = v6, v14 = v7). Copy the `v11` body twice, once per arm, swapping
+`salt_pad` for `salt_pad_v8` and changing nothing else. Same signature
+(`iters`, `init_size_blk`, `xx`, `yy`).
+
+| file | what |
+|---|---|
+| `slow-hash-impl.h` (HW arm, SW arm) | the two bodies |
+| `slow-hash-hw.c`, `slow-hash-sw.c` | `#define cn_slow_hash_v15 cn_slow_hash_v15_hw` / `_sw` |
+| `slow-hash.c` | externs plus the `CN_DISPATCH` wrapper |
+| `hash-ops.h`, `hash.h` | declaration and C++ inline |
+
+**No `get_block_longhash_v15` and no dispatcher change in Phase 1.** This
+phase is measurement. The consensus diff stays at zero and the whole phase
+reverts with one `git revert`. Wiring it to major_version 14 happens in
+Phase 4, once phases 1 to 3 have all been measured.
+
+### 1c. Wire it into the pad-resize machinery
+
+`contrib/hf14checks/v5pad.inc` renames each variant per translation unit. Add
+`#define cn_slow_hash_v15 V5PAD_CAT(cn_slow_hash_v15_, V5PAD_TAG)` to that
+block and `v5pad1.c` / `v5pad4.c` give v8 at 1 MB and 4 MB for free.
+
+Measure at both. 1 MB isolates the selector change against the shipped
+reference. 4 MB is where v8 is intended to live, and the salt wrap in
+`v5pad.inc` is live there, so it is a different code path.
+
+### 1d. The measurement
+
+Add three rows to `VS[]` in `contrib/hf14checks/t_bench_v5v6.cpp`: `v8ref`
+(dispatcher, `own_pad` 0), `v8ctl` (`cn_slow_hash_v15_p1`, 1 MB) and `v8_4`
+(`_p4`, 4 MB). Keep every existing row.
+
+The comparison that decides the gate is **`v5ctl` vs `v8ctl`** and **`v5_4` vs
+`v8_4`**: same translation unit, same flags, same pad, one token of
+difference. `v5ref` and `v8ref` cross-check that the in-tree build agrees with
+the recompile.
+
+Two traps, both of which have already bitten this work:
+
+1. `contrib/hf14checks/CMakeLists.txt` names the resized TUs explicitly in
+   `set_source_files_properties`. A new TU that is not in that list builds at
+   the directory default, which is `-O0`, and the comparison inverts. This is
+   the trap that reversed the conclusion twice.
+2. If `v5ref` and `v5ctl` stop agreeing at ~1.00x, nothing below that line
+   means anything, v8 rows included.
+
+### 1e. State the prediction before measuring
+
+Expect **neutral to marginally faster**, not slower.
+
+`salt_pad` runs `(xx-1) * yy` times per nonce, so 12 to 56 calls with a mean
+near 30. Each call's cost is dominated by its pad sweep, `for (j = offset_1;
+j < CN_SCRATCHPAD_MEMORY; j += offset_2)` with `offset_2` in [4,128], meaning
+8k to 262k byte-XORs at 1 MB and four times that at 4 MB. One 200-byte extra
+hash against that is noise. And the mix moves Groestl, the slowest of the four
+on short inputs, from 1/3 of calls to 1/4 while adding Skein at 1/4.
+
+Gate: if verification moves more than 2%, reconsider. If it reads worse than
+that, suspect the harness before the algorithm.
+
+### 1f. HW equals SW
+
+Add a `v15` pair to `cn_slow_hash_self_test` mirroring the existing `v11`
+pair, including the `memset(ctx->salt, ...)` between the two calls, since
+`salt_pad` writes back into `salt`. `xx/yy = 2,2` keeps it in milliseconds
+while still hitting both loop levels. This passing is a precondition for
+reporting any number.
+
+### 1g. What Phase 1 cannot tell you
+
+`contrib/powbench` does not model `extra_hashes` at all: the kernel and the C
+reference substitute a mix64 chain of equal call count, deliberately. So the
+GPU:CPU column is unchanged **by construction, not by measurement**. Record it
+as not applicable in RESULTS.md, or the table claims a result it did not
+produce. The ASIC argument for Phase 1, a fourth hash core that cannot be
+trimmed, stays an engineering estimate under open item 3.
+
+### 1h. Exit criteria
+
+- `v15` HW output equals SW output at 1 MB and 4 MB
+- `v8ctl` within 2% of `v5ctl` on all four machines, gated on the i7-7700HQ
+  and not the 7950X
+- control rows still ~1.00x
+- RESULTS.md carries the four-machine table, and this section records the
+  measured figure, not the predicted one
 
 ## Phase 2: floating point (the substantive work)
 
@@ -62,6 +205,9 @@ it does not hurt small-cache machines, and it barely touches verification. An
 ASIC must implement full IEEE-754 with four rounding modes, denormals and NaN
 handling, which is large silicon that cannot be simplified without breaking
 consensus. It is the biggest single gap between both v5 and v6 and RandomX.
+
+Phase 2 extends `cn_slow_hash_v15` in place. It does not need another entry
+point, because v15 has no fork version pointed at it until Phase 4.
 
 ### 2a. Design
 
@@ -78,9 +224,9 @@ data-dependent:
 
 ### 2b. Determinism, which is the real risk
 
-Cross-platform FP determinism is a consensus-critical hazard. A single ULP of
-disagreement between x86 and ARM, or between two compilers, forks the chain.
-Non-negotiable rules:
+Cross-platform FP determinism is a consensus-critical hazard and it is the
+largest one in this document. A single ULP of disagreement between x86 and
+ARM, or between two compilers, forks the chain. Non-negotiable rules:
 
 1. **Only add, sub, mul, div, sqrt.** All are IEEE-754 exact and correctly
    rounded. No transcendentals, no FMA (contraction changes results), no x87.
@@ -95,7 +241,9 @@ Non-negotiable rules:
    ARM64, HW-AES and SW-AES paths, GCC and Clang, debug and release.
 
 If rule 5 cannot be satisfied, phase 2 does not ship. An algorithm that hashes
-differently on two machines is worse than no change at all.
+differently on two machines is worse than no change at all. Failing it is now
+cheap: Phase 1 alone can take the HF14 slot and Phase 2 can wait for a later
+fork.
 
 ### 2c. Measure after
 
@@ -112,21 +260,48 @@ Only after phases 1 and 2 are measured.
 - Review whether `xx`/`yy` ranges [4,8] and `iters` [0,63] should widen. More
   variance in work per nonce is ASIC-hostile but raises verification variance,
   which matters for block propagation.
-- `randomize_scratchpad_256k` and the salt wrap: fix the two latent
-  assumptions documented in `contrib/hf14checks/v5pad.inc` before any pad
-  other than 1 MB ships. They are not live bugs at 1 MB and are hard bugs at
-  any other size.
+- **Lift the three pad-size assumptions into shipping code.**
+  `randomize_scratchpad_256k` and the `salt_pad` sweep each step the salt once
+  per pad step and stay in bounds only because a 1 MB pad yields exactly
+  `CN_SALT_MEMORY` steps; at 4 MB they read past the salt. `state_index`
+  masks with `(pad / 16 - 1)`, which addresses the whole pad only when
+  `pad / 16` is a power of two. All three are documented in
+  `contrib/hf14checks/v5pad.inc`, which fixes them for the bench only. They
+  are not live bugs at 1 MB and are hard bugs at any other size. The wrap must
+  be the AND, not a compare and branch: written as a branch it cost 29%.
 
 ## Phase 4: plumbing
 
-- `CN_SCRATCHPAD_MEMORY_V8` and a new `cn_slow_hash_v15` (or reuse the v11
-  entry point with a size parameter; decide early, it affects the test harness).
-- `get_block_longhash_v15` in `cryptonote_tx_utils.cpp`, keeping the existing
+- `CN_SCRATCHPAD_MEMORY_V15` at whatever Phase 3 picks, and a decision made
+  early on whether v15 is a fixed-size entry point or takes a size parameter,
+  because it affects the test harness.
+- `get_block_longhash_v15` in `cryptonote_tx_utils.cpp`, keeping the
   `HC128_Init` + `get_cna_v5_data` chain fill unchanged. **The fill is the
-  pool resistance and must not be weakened.**
-- Hard-fork table entry, `ASSUME_VALID_HEIGHT` bump, seed-height handling.
-- Both HW and SW AES paths (`slow-hash-hw.c`, `slow-hash-sw.c`) must produce
-  identical hashes; `cn_slow_hash_self_test` must cover v8.
+  pool resistance and must not be weakened.** v8 uses the v5 fill; the v6
+  fill (`get_cna_v6_data`) goes dead along with v7.
+- **The reorg trap, which this codebase has already been bitten by once.**
+  `context->random_values` is fetched with a pad-size bound and cached by
+  height. Around a fork, one context can hash both the old and new version at
+  the same height on competing chains, and a stale bound indexes past the pad
+  and forks the chain. The comment in `get_block_longhash_v14` documents the
+  v13/v14 instance. If v8 runs at a different pad size than v6's 8 MB, it is
+  the same trap with different numbers: fetch with v15's own bound on every
+  call and invalidate `cached_height`, exactly as v14 does now.
+- Dispatcher: point `default:` (major_version >= 14) at
+  `get_block_longhash_v15`. This is the only live-code line the whole project
+  changes, and it changes no historical height because HF14 has never been
+  reached.
+- Set the real HF14 height, replacing the 4,500,000 placeholder, once the
+  validation gates pass. Leave enough runway for miners and pools to ship v8.
+- `ASSUME_VALID_HEIGHT` bump at release, and seed-height handling
+  (`CN_SEED_MIN_HEIGHT`) checked against the chosen pad.
+- Both HW and SW AES paths must produce identical hashes;
+  `cn_slow_hash_self_test` must cover v15.
+- Decide whether to delete v7 (`cn_slow_hash_v14`, its `cna-vm.c` paths,
+  `CN_SCRATCHPAD_MEMORY_V14`, `get_cna_v6_data`). It is dead once the
+  dispatcher moves, and it never validated a mainnet block, so removal is
+  clean. Deleting it is the one case in this codebase where dropping a PoW
+  function does not touch history.
 
 ## Phase 5: validation
 
@@ -135,9 +310,13 @@ Only after phases 1 and 2 are measured.
 - Extend `contrib/powbench` with a v8 kernel and C reference. **The checksum
   gate must pass**; a row that does not verify gets no ratio.
 - Run all four machines at identical `vram` and `launch cap`.
-- Testnet round with the full HF14 test procedure from the runbook.
-
----
+- Reverify a range of historical blocks with `--fast-block-sync 0` across the
+  v10, v11 and v13 height ranges, and confirm the hashes are bit-identical to
+  a build from master. This is the direct test of the rule above, and it is a
+  merge blocker.
+- Testnet round with the full HF14 test procedure from the runbook. Note that
+  testnet HF14 is at height 1000 on a fresh net, so a testnet restart exercises
+  the fork itself rather than a placeholder.
 
 ## Open items carried in from RESULTS.md
 
@@ -146,7 +325,8 @@ Only after phases 1 and 2 are measured.
    One card running headless would fix this and would settle the pad question,
    which is currently blocked on measurement rather than on analysis.
 2. **v7's CPU figure on the 7950X is 40% above the real function** and reads
-   faster on a slower CPU, which is impossible. Unexplained.
+   faster on a slower CPU, which is impossible. Unexplained. Lower priority now
+   that v7 is not shipping, but the harness bug it implies may affect v8 rows.
 3. **The ASIC reasoning is not measured.** It is arithmetic about SRAM density
    and concurrency, anchored to the historical CryptoNight ASIC experience. It
    has not been validated against real hardware and should be weighted as
@@ -157,9 +337,14 @@ Only after phases 1 and 2 are measured.
 
 ## What not to do
 
+- **Do not edit `salt_pad`, `cn_slow_hash_v10` or `cn_slow_hash_v11` in
+  place.** See the rule section. Every change is a new macro and a new entry
+  point.
 - Do not add work to the chain fill to buy ASIC resistance. The fill runs
   during verification, so it is a direct sync-speed tax.
 - Do not grow the pad past the smallest target machine's L3. That punishes
   exactly the machines fairness is meant to protect.
 - Do not ship any phase whose verification cost is not measured on the weakest
   machine in the set, not the fastest.
+- Do not add a hard-fork version for v8. It inherits HF14, which has never
+  activated. Adding one forces users through a second upgrade for no reason.
