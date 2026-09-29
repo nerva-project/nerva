@@ -440,6 +440,167 @@ Two fixes, both kept: raise n (2000 at 1 MB), and interleave the pair within
 one process so drift and boost behaviour hit both variants equally. After
 those, the sign flipped and matched the arithmetic.
 
+## Phase 3
+
+### F22. Deriving the salt stride from the pad is not cost-neutral above 1 MB
+
+The Phase 3 change was framed as an out-of-bounds fix. It is also a work
+change, and a large one. Measured on the 7950X, control 0.45%:
+
+| pad | v5 ms | v8 ms | v8 vs v5 |
+|---|---|---|---|
+| 1 MB | 0.8080 | 0.7931 | -1.84% |
+| 2 MB | 1.6768 | 1.4039 | -16.27% |
+| 4 MB | 3.3681 | 2.5600 | -23.99% |
+| 8 MB | 6.5043 | 4.6769 | -28.10% |
+
+Sweep iterations go as pad over stride, and the expectation is dominated by
+the small strides. v5 draws `offset_2` uniform in [4,128]; v8 at 4 MB draws
+from [16,128]. `E[1/s]` falls from about 0.0288 to 0.0187, so v8 does roughly
+35% fewer sweep steps. The sweep is most of the hash, which lands at -24%.
+
+This follows from the invariant rather than from anything new: pinning
+worst-case salt consumption at `CN_SALT_MEMORY` means **the salt sweep does
+roughly constant work whatever the pad size**. The pad still grows the AES
+fill, the finalize pass and the random-access footprint; it no longer grows
+the sweep. The author's own 3 MB version had the same property.
+
+### F23. The salt stays fully consumed at every pad size, so chain binding is unchanged
+
+F22 raises an obvious worry: if the sweep touches a smaller fraction of a
+larger pad (a quarter of it at 1 MB, a sixteenth at 4 MB), is the chain-derived
+salt still binding the whole hash?
+
+It is, and the reason is the pad init rather than the sweep.
+`randomize_scratchpad_256k_v8` steps `CN_V8_SALT_STEP`, which is
+`pad / CN_SALT_MEMORY`, so it runs exactly `pad / (pad / 262144)` = **262144
+iterations at any pad size**, consuming `salt[0 .. 262143]` in full, every
+hash, unconditionally. The static assert that the pad divides the salt evenly
+is what makes that exact rather than approximate.
+
+So every salt byte is load-bearing at every pad size, and per-nonce chain
+dependence (the pool resistance) is identical. What shrinks is only how widely
+the *sweep* spreads salt through the pad before the AES main loop diffuses it,
+and the main loop's `state_index` access covers the whole pad regardless.
+
+*Consequence:* the pinned-consumption invariant can be kept. It is the
+documented historical design, it leaves chain binding intact, and it makes a
+larger pad affordable, which is what the cross-CPU fairness argument wants.
+The alternative, wrapping the salt so sweep coverage scales, costs the verify
+time back and buys repeated salt with less entropy per pad byte.
+
+### F24. The pad decision, measured: 8 MB is disqualified and 2 MB is the fairness optimum
+
+v8 verify cost, single thread, four machines, `contrib/powbench/v8bench.c`.
+The laptop is the machine that sets the spread, so its column is the mean of
+two agreeing runs; a third, earlier run read 12% high at 4 MB and 4% high at
+8 MB and is excluded as thermally suspect.
+
+| pad | 7950X | 9700X | 5600X | 7700HQ | spread |
+|---|---|---|---|---|---|
+| 1 MB | 0.7627 | 0.6642 | 1.0179 | 1.5827 | 2.38x |
+| 2 MB | 1.3565 | 1.2304 | 1.7856 | 2.8052 | 2.28x |
+| 4 MB | 2.4331 | 2.2911 | 3.2379 | 5.2069 | **2.27x** |
+| 8 MB | 4.5528 | 4.3388 | 6.1236 | **20.3413** | **4.69x** |
+
+Spread is slowest over fastest, and the target is < 2.2x. No pad reaches it.
+v6 today is 2.91x, so 2 or 4 MB improves on the shipped algorithm by a useful
+margin and 8 MB is far worse than it.
+
+**Fairness is not monotonic in pad size**, which cuts against the plan's
+premise that a smaller pad is fairer. There is a minimum around 2 to 4 MB:
+
+- at 1 MB everything is cache-resident on every machine, so what is measured
+  is core speed, and cores differ a lot (2.38x)
+- from 2 MB the memory system starts to dominate and the machines converge
+  (2.28x, 2.27x)
+- at 8 MB the 6 MB-L3 laptop exceeds its cache and diverges again (4.69x)
+
+2 MB and 4 MB are a statistical tie. Fairness does not choose between them.
+
+**8 MB is out.** Cost per doubling of the pad, per machine:
+
+| | 1→2 | 2→4 | 4→8 |
+|---|---|---|---|
+| 7950X | 1.79x | 1.79x | 1.88x |
+| 9700X | 1.86x | 1.87x | 1.89x |
+| 5600X | 1.75x | 1.81x | 1.89x |
+| i7-7700HQ | 1.75x | 2.09x | **3.60x** |
+
+Three machines scale linearly across the whole range. The laptop, with 6 MB of
+L3, falls off a cliff between 4 and 8 MB.
+
+*This contradicts HF13's stated reasoning*, which was that 8 MB overflows
+L3-per-core on every machine class and therefore evens them out. It does not
+even them out. It falls off a cliff on one machine and not the others, which
+is the opposite of one box one vote. The plan's instinct to move off 8 MB was
+right, and an earlier note in this session suggesting 8 MB might now be
+affordable was wrong because it looked only at the 7950X.
+
+*Recommendation:* **4 MB**, because the fairness axis does not separate it from
+2 MB and the ASIC axis does: 4 MB forces roughly twice the silicon. The laptop
+verifies in 5.21 ms against a 15 ms target, so there is headroom. 1 MB is both
+slightly worse on spread and ASIC-friendly in the wrong direction.
+
+*Note on how this recommendation was reached*, because the first two attempts
+were wrong. An earlier pass recommended 2 MB on a 0.28x spread advantage, and
+a later one recommended 4 MB on a 0.03x one. Both differences were inside the
+laptop's run-to-run variance, which is the only machine that sets the spread.
+The defensible statement is narrower than either: **8 MB is disqualified, 1 MB
+is slightly worse, and 2 versus 4 MB is decided on ASIC grounds because the
+measurement cannot separate them.** A ranking that flips when one machine is
+re-run is not a ranking.
+
+*Caveats:* this harness excludes the chain fill, which RESULTS.md charges to
+the CPU and which is machine-dependent, so the real spread may differ. And no
+pad reaches 2.2x, so if that target is firm then pad tuning alone cannot get
+there and Phase 2 stops being optional.
+
+### F25. Removing the v8 wrap from v5pad.inc contaminated the 1 MB control
+
+The harness printed SUSPECT on the laptop and the 5600X, at 3.25 and 4.67
+points between its two 1 MB comparisons. The check was right and the cause was
+a change made earlier in this session.
+
+`v5pad.inc` wraps the salt index so v5, whose stride is hardcoded for 1 MB, can
+be benchmarked at larger pads. When v8 became pad-aware its override was
+removed, correctly. But v5's remained, so at 1 MB the "ctl" comparison became
+**v5 with the wrap against v8 without it**, which is not like for like. The
+wrap is a single AND in the innermost loop, which is why narrower cores showed
+it most.
+
+Effects, and what survives:
+
+- Phase 1's correct figure is the shipped-build row: **-0.75%, -0.63%, -0.45%,
+  -0.70%**. Consistent with F18, so no published conclusion changes.
+- The sweep's `v8 vs v5` percentage column is inflated by the same artifact.
+  The -24% at 4 MB is mostly the real stride effect (F22 predicts about 35%
+  fewer sweep iterations) but not purely that.
+- The sweep's absolute `v8 ms` column is unaffected, so F24 stands entirely.
+
+*Fixed:* `V5PAD_SALT_WRAP` is identity at exactly 1 MB, where it was always a
+provable no-op, so the control is once more the same code as the shipped
+function. Above 1 MB the two legitimately differ, because the wrap is the only
+way v5 can run there at all.
+
+*Confirmed.* The overhead the harness reports is what the wrap cost, and
+removing it at 1 MB removed essentially all of it:
+
+    machine    before   after
+    7950X       0.57%    0.35%
+    9700X       2.20%    0.03%
+    5600X       4.60%    0.05%
+    7700HQ      3.17%    0.13%
+
+SUSPECT no longer fires anywhere, and the two 1 MB comparisons now agree within
+0.27 to 0.79 points on every machine. Phase 1 across the four, from the shipped
+build: -0.23%, -0.67%, -0.52%, -0.38%.
+
+*Worth keeping in view:* this is the second time a change that was right in
+isolation broke something one level up, after HF14's `seg_hops` landing inside
+a function live v6 calls (F9). Both were caught by a check rather than by
+review.
+
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell

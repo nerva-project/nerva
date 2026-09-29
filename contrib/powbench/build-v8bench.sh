@@ -21,7 +21,8 @@ gcc -O2 -maes -march=x86-64 -fno-strict-aliasing \
     -DSLOW_HASH_HW_AES_BUILT=1 \
     -I src -I src/crypto -I contrib/epee/include -I contrib/hf14checks \
     contrib/powbench/v8bench.c \
-    contrib/hf14checks/v5pad1.c contrib/hf14checks/v5pad4.c \
+    contrib/hf14checks/v5pad1.c contrib/hf14checks/v5pad2.c \
+    contrib/hf14checks/v5pad4.c contrib/hf14checks/v5pad8.c \
     src/crypto/slow-hash.c src/crypto/slow-hash-hw.c src/crypto/slow-hash-sw.c \
     src/crypto/cna-vm.c src/crypto/hc128.c src/crypto/oaes_lib.c \
     src/crypto/aesb.c src/crypto/keccak.c src/crypto/hash.c \

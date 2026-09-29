@@ -120,9 +120,13 @@ typedef void (*hashfn)(cn_hash_context_t *, const void *, size_t, char *,
 
 /* the resized recompilations, from contrib/hf14checks/v5pad{1,4}.c */
 void cn_slow_hash_v11_p1(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
+void cn_slow_hash_v11_p2(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v11_p4(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
+void cn_slow_hash_v11_p8(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v14_p1(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
+void cn_slow_hash_v14_p2(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v14_p4(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
+void cn_slow_hash_v14_p8(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 
 static double now_sec(void)
 {
@@ -242,9 +246,21 @@ int main(int argc, char **argv)
 
     {
         char brand[49];
+        char when[64];
+        time_t t = time(NULL);
+        struct tm *lt = localtime(&t);
+
         cpu_brand(brand);
-        printf("CNA v8 (Skein in salt_pad) against CNA v5, Phase 1\n");
+        printf("CNA v8 (Skein in salt_pad) against CNA v5\n");
         printf("CPU: %s\n", brand);
+
+        /* Both stamps, because results come back as screenshots from several
+         * machines over several days. The run time says when a number was
+         * taken; the build stamp says which binary produced it, which is the
+         * one that catches an old copy still sitting on a box after a rebuild. */
+        if (lt != NULL && strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", lt) > 0)
+            printf("run: %s (local)\n", when);
+        printf("built: %s %s\n", __DATE__, __TIME__);
     }
     printf("AES path: %s\n",
 #if defined(SLOW_HASH_HW_AES_BUILT)
@@ -280,31 +296,130 @@ int main(int argc, char **argv)
         v5p4  = r4[0]; v8p4  = r4[1];
     }
 
+    /* Phase 3's question is which pad to ship, so sweep it. Each size is a
+     * separate compilation of the same source at a different
+     * CN_SCRATCHPAD_MEMORY, which is also what makes v8's derived salt stride
+     * worth having: each build picks up the stride its pad requires with no
+     * per-size constant to get wrong.
+     *
+     * Two numbers matter per size and they pull against each other. Verify
+     * cost sets sync speed, and it rises with the pad. Cross-CPU spread sets
+     * how close this gets to one box one vote, and the whole premise of moving
+     * off v6's 8 MB is that a smaller pad narrows it. Collect both here; the
+     * spread needs every machine, so it is computed from the reported rows
+     * rather than printed by any single run. */
+    {
+        /* Sample counts are per pad, and chosen so every row gets a comparable
+         * amount of wall time rather than a comparable sample count. The
+         * previous version used 600 at 4 and 8 MB, which made the large pads
+         * the noisiest rows precisely where the pad decision needs precision:
+         * two runs minutes apart disagreed by 5.7% at 4 MB. These give roughly
+         * 7 s a row, about 30 s for the sweep, and cut that scatter by half. */
+        static const struct { const char *name; hashfn v5, v8; size_t pad; unsigned n; } sweep[] = {
+            { "1 MB", cn_slow_hash_v11_p1, cn_slow_hash_v14_p1, 1024ull*1024, 4000 },
+            { "2 MB", cn_slow_hash_v11_p2, cn_slow_hash_v14_p2, 2048ull*1024, 2500 },
+            { "4 MB", cn_slow_hash_v11_p4, cn_slow_hash_v14_p4, 4096ull*1024, 1500 },
+            { "8 MB", cn_slow_hash_v11_p8, cn_slow_hash_v14_p8, 8192ull*1024,  800 },
+        };
+        size_t si;
+        double v8ms[4];
+
+        printf("\n  pad sweep (v8, and v5 alongside for reference; ~30 s)\n");
+        printf("  %-6s %11s %11s %11s %11s %7s\n",
+               "pad", "v5 ms", "v8 ms", "v8 H/s", "v8 vs v5", "n");
+
+        for (si = 0; si < 4; si++) v8ms[si] = 0.0;
+
+        for (si = 0; si < sizeof(sweep)/sizeof(sweep[0]); si++)
+        {
+            hashfn pair[2] = { sweep[si].v5, sweep[si].v8 };
+            struct result r[2];
+            int ok;
+
+            rng_state = 0x9E3779B9u;
+            bench_group(pair, r, 2, sweep[si].pad, sweep[si].n, &ok);
+            if (!ok) { printf("  %-6s  (allocation failed)\n", sweep[si].name); continue; }
+
+            v8ms[si] = r[1].mean_ms;
+            printf("  %-6s %11.4f %11.4f %11.1f %+10.2f%% %7u\n",
+                   sweep[si].name, r[0].mean_ms, r[1].mean_ms,
+                   1000.0 / r[1].mean_ms,
+                   (r[1].mean_ms - r[0].mean_ms) / r[0].mean_ms * 100.0,
+                   sweep[si].n);
+        }
+
+        /* Cross-CPU spread is slowest divided by fastest at each pad, so it
+         * cannot be computed by any single run. Results come back from four
+         * machines as screenshots, so print one line that is easy to read off
+         * and hard to transcribe wrongly. */
+        {
+            char brand[49];
+            char *p;
+            cpu_brand(brand);
+            for (p = brand; *p; p++) if (*p == ' ') *p = '_';
+            printf("\n  SWEEP %s 1MB=%.4f 2MB=%.4f 4MB=%.4f 8MB=%.4f\n",
+                   brand, v8ms[0], v8ms[1], v8ms[2], v8ms[3]);
+            printf("  ^ send this one line from each machine; it is all the\n");
+            printf("    cross-CPU spread calculation needs.\n");
+        }
+    }
+
     printf("  %-14s %9s %9s %9s %10s\n", "VARIANT", "mean ms", "min ms", "max ms", "H/s (1T)");
     row("v5 1MB ref", &v5ref); row("v8 1MB ref", &v8ref);
     row("v5 1MB ctl", &v5ctl); row("v8 1MB ctl", &v8ctl);
     row("v5 4MB",     &v5p4);  row("v8 4MB",     &v8p4);
 
-    /* ref against ctl is the same source built two ways, so their difference
-     * is this machine's floor for the comparison below. */
+    /* The verdict below was wrong three separate ways and all three are fixed
+     * here, because each of them produced a confident and false statement.
+     *
+     * 1. It failed on improvements. The test was |delta| <= gate, so v8 being
+     *    24% CHEAPER at 4 MB reported "OVER GATE" exactly as a 24% regression
+     *    would. Phase 1 asks whether v8 costs more to verify, so only a
+     *    regression can fail.
+     *
+     * 2. It scaled the gate by the control. That made sense while ref and ctl
+     *    were measured in separate passes and their difference was drift. They
+     *    are interleaved now, so the control is no longer noise.
+     *
+     * 3. It called the control a noise floor and failed above 4%. Post
+     *    interleaving that number is a real, understood difference: ctl comes
+     *    from v5pad.inc, which wraps the salt index, and at 1 MB that wrap is a
+     *    logical no-op that still costs an AND in the innermost loop. Narrower
+     *    cores pay more for it. Failing on it condemned a machine whose actual
+     *    results were in line with every other box.
+     *
+     * What can still invalidate a conclusion is the two like-for-like
+     * comparisons disagreeing with each other, so that is what is checked. */
     ctl_noise = fabs(v5ctl.mean_ms - v5ref.mean_ms) / v5ref.mean_ms * 100.0;
     d1 = (v8ctl.mean_ms - v5ctl.mean_ms) / v5ctl.mean_ms * 100.0;
     d4 = (v8p4.mean_ms  - v5p4.mean_ms)  / v5p4.mean_ms  * 100.0;
-    gate = 2.0 * ctl_noise; if (gate < 2.0) gate = 2.0;
+    gate = 2.0;   /* fixed: interleaving handles drift, so this need not flex */
 
-    printf("\n  control  |v5ctl - v5ref| = %.2f%%   (the noise floor on this machine)\n", ctl_noise);
-    printf("  v8 vs v5 at 1 MB        = %+.2f%%   (negative is v8 cheaper)\n", d1);
-    printf("  v8 vs v5 at 4 MB        = %+.2f%%\n", d4);
-    printf("  gate = max(2%%, 2 x floor) = %.2f%%\n", gate);
+    {
+        const double d1ref = (v8ref.mean_ms - v5ref.mean_ms) / v5ref.mean_ms * 100.0;
+        const double disagree = fabs(d1ref - d1);
 
-    if (ctl_noise > 4.0)
-        printf("\n  UNUSABLE: the control pair disagrees by more than 4%%. Something else is\n"
-               "  running on this machine. Close it and run again; do not read the rows above.\n");
-    else
+        /* Both 1 MB rows are like-for-like again: v5pad.inc makes its salt wrap
+         * identity at 1 MB, where it was always a no-op, so "ctl" is once more
+         * the same code as the shipped function rather than the same code plus
+         * an AND that only v5 pays. Above 1 MB they legitimately differ, since
+         * the wrap is the only way v5 can run there at all. */
+        printf("\n  v8 vs v5 at 1 MB, shipped build   = %+.2f%%   (negative is v8 cheaper)\n", d1ref);
+        printf("  v8 vs v5 at 1 MB, recompiled      = %+.2f%%\n", d1);
+        printf("  v8 vs v5 at 4 MB                  = %+.2f%%   (v5 wrapped, v8 pad-aware)\n", d4);
+        printf("  pad-machinery overhead |ctl-ref|  = %.2f%%   (not noise; see the comment)\n", ctl_noise);
+        printf("  gate: v8 may not be more than %.2f%% slower\n", gate);
+
         printf("\n  1 MB: %s      4 MB: %s\n",
-               fabs(d1) <= gate ? "PASS" : "OVER GATE",
-               fabs(d4) <= gate ? "PASS" : "OVER GATE");
+               d1 <= gate ? "PASS" : "SLOWER THAN GATE",
+               d4 <= gate ? "PASS" : "SLOWER THAN GATE");
 
-    printf("\n  Please report all six rows plus the control line.\n");
+        if (disagree > 3.0)
+            printf("\n  SUSPECT: the two 1 MB comparisons disagree by %.2f points. They differ\n"
+                   "  only in the salt wrap, so they should agree closely. Rerun on an idle\n"
+                   "  machine before believing either.\n", disagree);
+    }
+
+    printf("\n  Please report the SWEEP line above, plus these verdict lines.\n");
     return 0;
 }
