@@ -72,6 +72,12 @@
 #endif
 #include <pthread.h>
 #include <unistd.h>
+#if !defined(_WIN32)
+#  include <sys/ioctl.h>
+#endif
+#if defined(__ANDROID__)
+#  include <sys/system_properties.h>
+#endif
 
 #include "hash-ops.h"
 
@@ -146,6 +152,26 @@ static void cpu_brand(char out[49])
     size_t k;
 
     out[0] = '\0';
+
+#if defined(__ANDROID__)
+    /* Android drops the Hardware line from /proc/cpuinfo on arm64 and SELinux
+     * denies an unprivileged app most of /sys, so both of the paths below come
+     * back empty on a phone and the first ARM run reported "unknown_aarch64".
+     * The property system is the one place a device name is reliably readable.
+     * ro.product.model is the marketing name ("Pixel 7a"); ro.board.platform is
+     * the SoC, which is what actually matters for a hardware comparison, so
+     * prefer both together when they fit. */
+    {
+        char model[PROP_VALUE_MAX], soc[PROP_VALUE_MAX];
+        int nm = __system_property_get("ro.product.model", model);
+        int ns = __system_property_get("ro.board.platform", soc);
+        if (nm > 0 && ns > 0) snprintf(out, 49, "%s %s", model, soc);
+        else if (nm > 0)      snprintf(out, 49, "%s", model);
+        else if (ns > 0)      snprintf(out, 49, "%s", soc);
+        brand_trim(out);
+        if (out[0] != '\0') return;
+    }
+#endif
 
     f = fopen("/proc/device-tree/model", "rb");
     if (f != NULL) {
@@ -475,8 +501,71 @@ static double bench_threads(hashfn fn, size_t pad_bytes, unsigned n, unsigned t)
     return wall > 0.0 ? (double)made * (double)n / wall : 0.0;
 }
 
+/* Results come back as phone screenshots now, not just desktop terminals, and a
+ * table that wraps at 40 columns is unreadable in a way that costs a rerun. So
+ * every wide block below has a narrow form. Nothing is dropped that a reader
+ * needs: the narrow form stacks instead of truncating, except for the sample
+ * count and the max column, which are fixed and recoverable respectively.
+ *
+ * Detected rather than flagged, because the person running it on a phone is the
+ * least likely to know a flag exists. V8BENCH_NARROW=1 or =0 overrides. */
+static int g_narrow;
+
+static void detect_narrow(void)
+{
+    const char *e = getenv("V8BENCH_NARROW");
+    unsigned cols = 0;
+
+    if (e != NULL && e[0] != '\0') { g_narrow = (e[0] != '0'); return; }
+
+#if defined(TIOCGWINSZ)
+    {
+        struct winsize ws;
+        if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
+            cols = (unsigned)ws.ws_col;
+    }
+#endif
+    if (cols == 0) {
+        const char *c = getenv("COLUMNS");
+        if (c != NULL) cols = (unsigned)atoi(c);
+    }
+    /* An unknown width is assumed wide: a desktop redirecting to a file is far
+     * more common than a phone that reports nothing. */
+    g_narrow = (cols > 0 && cols < 60);
+}
+
+/* The SWEEP and SCALE lines are meant to be transcribed, so the narrow form
+ * keeps every token identical and only breaks where a phone would break it
+ * anyway. Splitting on our terms beats letting the terminal split mid-number. */
+static void tag_line(const char *tag, const char *brand, const char *extra,
+                     const char *unit, const double v[4], int decimals)
+{
+    static const char *const pads[4] = { "1MB", "2MB", "4MB", "8MB" };
+    int i;
+
+    if (!g_narrow) {
+        printf("\n  %s %s%s", tag, brand, extra);
+        for (i = 0; i < 4; i++)
+            printf(" %s=%.*f", pads[i], decimals, v[i]);
+        printf("\n");
+        return;
+    }
+
+    printf("\n  %s %s%s\n", tag, brand, extra);
+    for (i = 0; i < 4; i++)
+        printf("%s%s=%.*f%s", (i % 2) == 0 ? "    " : " ",
+               pads[i], decimals, v[i], (i % 2) == 1 ? "\n" : "");
+    (void)unit;
+}
+
 static void row(const char *name, const struct result *r)
 {
+    if (g_narrow) {
+        printf("  %-14s %8.1f H/s\n", name, 1000.0 / r->mean_ms);
+        printf("    mean %.4f min %.4f max %.4f\n",
+               r->mean_ms, r->min_ms, r->max_ms);
+        return;
+    }
     printf("  %-14s %9.4f %9.4f %9.4f %10.1f\n",
            name, r->mean_ms, r->min_ms, r->max_ms, 1000.0 / r->mean_ms);
 }
@@ -489,6 +578,8 @@ int main(int argc, char **argv)
     int ok1, ok2;
     double ctl_noise, d1, d4, gate;
 
+    detect_narrow();
+
     {
         char brand[49];
         char when[64];
@@ -496,7 +587,8 @@ int main(int argc, char **argv)
         struct tm *lt = localtime(&t);
 
         cpu_brand(brand);
-        printf("CNA v8 (Skein in salt_pad) against CNA v5\n");
+        printf(g_narrow ? "CNA v8 vs CNA v5\n"
+                        : "CNA v8 (Skein in salt_pad) against CNA v5\n");
         printf("CPU: %s\n", brand);
 
         /* Both stamps, because results come back as screenshots from several
@@ -514,14 +606,20 @@ int main(int argc, char **argv)
             * never consults crypto_has_aesni(), so asking the helper would
             * report software AES while the hardware path ran. This must report
             * what actually executed or the banner is worse than no banner. */
-           cn_hardware_aes_supported() ? "hardware (AES)"
-                              : "SOFTWARE - no hardware AES on this CPU, numbers are not comparable to other machines"
+           cn_hardware_aes_supported()
+               ? "hardware (AES)"
+               : (g_narrow ? "SOFTWARE - not comparable"
+                           : "SOFTWARE - no hardware AES on this CPU, numbers are not comparable to other machines")
 #else
            "SOFTWARE - built without SLOW_HASH_HW_AES_BUILT, numbers are meaningless"
 #endif
           );
-    printf("samples: %u per variant at 1 MB, %u at 4 MB, interleaved\n\n", n1, n4);
-    printf("Close other programs first. This measures single-thread verify cost.\n\n");
+    if (g_narrow) {
+        printf("samples: %u @1MB, %u @4MB\n\n", n1, n4);
+    } else {
+        printf("samples: %u per variant at 1 MB, %u at 4 MB, interleaved\n\n", n1, n4);
+        printf("Close other programs first. This measures single-thread verify cost.\n\n");
+    }
 
     /* Establish that the two v8 builds are the same function before spending a
      * minute timing them. If they are not, no number below means anything. */
@@ -535,6 +633,8 @@ int main(int argc, char **argv)
                    "  meaningless. Check whether v5pad.inc still overrides something the\n"
                    "  shipped macros now handle themselves.\n", bad);
             return 1;
+        } else if (g_narrow) {
+            printf("  shipped v8 == recomp v8 (24 inputs)\n\n");
         } else {
             printf("  shipped v8 == recompiled v8 on 24 inputs (same algorithm, so any\n"
                    "  difference in the 4 MB control below is memory behaviour, not code)\n\n");
@@ -602,9 +702,15 @@ int main(int argc, char **argv)
         size_t si;
         double v8ms[4];
 
-        printf("\n  pad sweep (v8, and v5 alongside for reference; ~30 s)\n");
-        printf("  %-6s %11s %11s %11s %11s %7s\n",
-               "pad", "v5 ms", "v8 ms", "v8 H/s", "v8 vs v5", "n");
+        if (g_narrow) {
+            printf("\n  pad sweep (~30 s)\n");
+            printf("  %-4s %7s %7s %6s %7s\n",
+                   "pad", "v5 ms", "v8 ms", "H/s", "v8:v5");
+        } else {
+            printf("\n  pad sweep (v8, and v5 alongside for reference; ~30 s)\n");
+            printf("  %-6s %11s %11s %11s %11s %7s\n",
+                   "pad", "v5 ms", "v8 ms", "v8 H/s", "v8 vs v5", "n");
+        }
 
         for (si = 0; si < 4; si++) v8ms[si] = 0.0;
 
@@ -619,11 +725,17 @@ int main(int argc, char **argv)
             if (!ok) { printf("  %-6s  (allocation failed)\n", sweep[si].name); continue; }
 
             v8ms[si] = r[1].mean_ms;
-            printf("  %-6s %11.4f %11.4f %11.1f %+10.2f%% %7u\n",
-                   sweep[si].name, r[0].mean_ms, r[1].mean_ms,
-                   1000.0 / r[1].mean_ms,
-                   (r[1].mean_ms - r[0].mean_ms) / r[0].mean_ms * 100.0,
-                   sweep[si].n);
+            if (g_narrow)
+                printf("  %-4s %7.4f %7.4f %6.1f %+6.2f%%\n",
+                       sweep[si].name, r[0].mean_ms, r[1].mean_ms,
+                       1000.0 / r[1].mean_ms,
+                       (r[1].mean_ms - r[0].mean_ms) / r[0].mean_ms * 100.0);
+            else
+                printf("  %-6s %11.4f %11.4f %11.1f %+10.2f%% %7u\n",
+                       sweep[si].name, r[0].mean_ms, r[1].mean_ms,
+                       1000.0 / r[1].mean_ms,
+                       (r[1].mean_ms - r[0].mean_ms) / r[0].mean_ms * 100.0,
+                       sweep[si].n);
         }
 
         /* Cross-CPU spread is slowest divided by fastest at each pad, so it
@@ -635,8 +747,7 @@ int main(int argc, char **argv)
             char *p;
             cpu_brand(brand);
             for (p = brand; *p; p++) if (*p == ' ') *p = '_';
-            printf("\n  SWEEP %s 1MB=%.4f 2MB=%.4f 4MB=%.4f 8MB=%.4f\n",
-                   brand, v8ms[0], v8ms[1], v8ms[2], v8ms[3]);
+            tag_line("SWEEP", brand, "", "ms", v8ms, 4);
         }
 
         /* Thread scaling. Sized from the single-thread times just measured, so
@@ -698,10 +809,15 @@ int main(int argc, char **argv)
              * background load, and why OS thread placement muddies a multi-CCD
              * part, is in the comment above bench_threads rather than reprinted
              * on every run. */
-            printf("\n  thread scaling, total H/s, %u logical CPUs (peak is the number; tail is load-sensitive)\n\n", hw);
-            printf("  %-6s", "pad");
-            for (ti = 0; ti < ntc; ti++) printf(" %10uT", tcounts[ti]);
-            printf("  %s\n", "peak");
+            if (g_narrow) {
+                printf("\n  thread scaling, total H/s, %u CPUs\n", hw);
+                printf("  (peak matters; tail is noisy)\n");
+            } else {
+                printf("\n  thread scaling, total H/s, %u logical CPUs (peak is the number; tail is load-sensitive)\n\n", hw);
+                printf("  %-6s", "pad");
+                for (ti = 0; ti < ntc; ti++) printf(" %10uT", tcounts[ti]);
+                printf("  %s\n", "peak");
+            }
 
             for (si = 0; si < 4; si++)
             {
@@ -713,32 +829,53 @@ int main(int argc, char **argv)
                 n = (unsigned)(1200.0 / v8ms[si]);
                 if (n < 8) n = 8;
 
-                printf("  %-6s", sweep[si].name);
+                /* The narrow form stacks the thread counts three to a line under
+                 * the pad name rather than buffering them to put the peak
+                 * first, so a slow machine still shows progress as it measures. */
+                if (g_narrow) printf("  %s\n", sweep[si].name);
+                else          printf("  %-6s", sweep[si].name);
                 for (ti = 0; ti < ntc; ti++) {
                     const double hs = bench_threads(sweep[si].v8, sweep[si].pad, n, tcounts[ti]);
                     if (ti == 0) one = hs;
                     if (hs > best) { best = hs; best_t = tcounts[ti]; }
-                    printf(" %11.1f", hs);
+                    if (g_narrow) {
+                        printf("%s%uT=%.1f", (ti % 3) == 0 ? "    " : " ",
+                               tcounts[ti], hs);
+                        if ((ti % 3) == 2 || ti + 1 == ntc) printf("\n");
+                    } else {
+                        printf(" %11.1f", hs);
+                    }
                 }
                 /* where the peak is matters as much as how high: a pad whose
                  * peak sits well below the core count is one the memory system
                  * is already limiting, which is the regime fairness wants. */
-                printf("  %6.2fx @%uT\n", one > 0.0 ? best / one : 0.0, best_t);
+                if (g_narrow)
+                    printf("    peak %.2fx @%uT\n", one > 0.0 ? best / one : 0.0, best_t);
+                else
+                    printf("  %6.2fx @%uT\n", one > 0.0 ? best / one : 0.0, best_t);
                 v8ms[si] = best;   /* reuse the slot to carry peak H/s to the SCALE line */
             }
 
             {
-                char brand[49]; char *p;
+                char brand[49]; char *p; char extra[24];
                 cpu_brand(brand);
                 for (p = brand; *p; p++) if (*p == ' ') *p = '_';
-                printf("\n  SCALE %s cpus=%u 1MB=%.1f 2MB=%.1f 4MB=%.1f 8MB=%.1f\n",
-                       brand, hw, v8ms[0], v8ms[1], v8ms[2], v8ms[3]);
-                printf("  ^ peak total H/s per pad. Send this and the SWEEP line.\n");
+                snprintf(extra, sizeof(extra), " cpus=%u", hw);
+                tag_line("SCALE", brand, extra, "H/s", v8ms, 1);
+                if (g_narrow) {
+                    printf("  ^ peak total H/s per pad.\n");
+                    printf("  Send this and the SWEEP line.\n");
+                } else {
+                    printf("  ^ peak total H/s per pad. Send this and the SWEEP line.\n");
+                }
             }
         }
     }
 
-    printf("  %-16s %9s %9s %9s %10s\n", "VARIANT", "mean ms", "min ms", "max ms", "H/s (1T)");
+    if (g_narrow)
+        printf("\n  VARIANT (ms, and H/s at 1T)\n");
+    else
+        printf("  %-16s %9s %9s %9s %10s\n", "VARIANT", "mean ms", "min ms", "max ms", "H/s (1T)");
     row("v5 1MB shipped", &v5ref);
     row("v5 1MB recomp",  &v5ctl);
     row("v8 1MB recomp",  &v8ctl);
@@ -779,11 +916,20 @@ int main(int argc, char **argv)
         const double v8_ship_vs_recomp =
             fabs(v8ref.mean_ms - v8ctl.mean_ms) / v8ctl.mean_ms * 100.0;
 
-        printf("\n  v8 vs v5 at 1 MB                  = %+.2f%%   (negative is v8 cheaper)\n", d1);
-        printf("  v8 vs v5 at 4 MB                  = %+.2f%%   (v5 wrapped, v8 pad-aware)\n", d4);
-        printf("\n  control, v5 1 MB shipped vs recomp = %.2f%%\n", ctl_noise);
-        printf("  control, v8 1 MB SHIPPED vs recomp = %.2f%%\n", v8_ship_vs_recomp);
-        printf("  gate: v8 may not be more than %.2f%% slower\n", gate);
+        if (g_narrow) {
+            printf("\n  v8 vs v5 1MB = %+.2f%%\n", d1);
+            printf("  v8 vs v5 4MB = %+.2f%%\n", d4);
+            printf("  (negative = v8 cheaper)\n");
+            printf("\n  ctl v5 1MB ship/recomp = %.2f%%\n", ctl_noise);
+            printf("  ctl v8 1MB ship/recomp = %.2f%%\n", v8_ship_vs_recomp);
+            printf("  gate: v8 max %.2f%% slower\n", gate);
+        } else {
+            printf("\n  v8 vs v5 at 1 MB                  = %+.2f%%   (negative is v8 cheaper)\n", d1);
+            printf("  v8 vs v5 at 4 MB                  = %+.2f%%   (v5 wrapped, v8 pad-aware)\n", d4);
+            printf("\n  control, v5 1 MB shipped vs recomp = %.2f%%\n", ctl_noise);
+            printf("  control, v8 1 MB SHIPPED vs recomp = %.2f%%\n", v8_ship_vs_recomp);
+            printf("  gate: v8 may not be more than %.2f%% slower\n", gate);
+        }
 
         printf("\n  1 MB: %s      4 MB: %s\n",
                d1 <= gate ? "PASS" : "SLOWER THAN GATE",
@@ -802,6 +948,9 @@ int main(int argc, char **argv)
                    v8_ship_vs_recomp);
     }
 
-    printf("\n  Please report the SWEEP line above, plus these verdict lines.\n");
+    if (g_narrow)
+        printf("\n  Report the SWEEP line plus these\n  verdict lines.\n");
+    else
+        printf("\n  Please report the SWEEP line above, plus these verdict lines.\n");
     return 0;
 }
