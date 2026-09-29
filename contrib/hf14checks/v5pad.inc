@@ -75,7 +75,6 @@ _Static_assert((CN_SALT_MEMORY & (CN_SALT_MEMORY - 1)) == 0,
 #define cn_slow_hash_v10  V5PAD_CAT(cn_slow_hash_v10_, V5PAD_TAG)
 #define cn_slow_hash_v11  V5PAD_CAT(cn_slow_hash_v11_, V5PAD_TAG)
 #define cn_slow_hash_v13  V5PAD_CAT(cn_slow_hash_v13_, V5PAD_TAG)
-#define cn_slow_hash_v14  V5PAD_CAT(cn_slow_hash_v14_, V5PAD_TAG)
 
 #include "crypto/slow-hash.h"
 

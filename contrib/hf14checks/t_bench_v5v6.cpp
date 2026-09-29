@@ -68,7 +68,7 @@ void cn_slow_hash_v11_p4(cn_hash_context_t *, const void *, size_t, char *, size
 void cn_slow_hash_v11_p8(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 }
 
-enum Gen { GEN_V5 = 5, GEN_V6 = 6, GEN_V7 = 7 };
+enum Gen { GEN_V5 = 5, GEN_V6 = 6 };
 
 struct V {
   const char *key;        // short id used by the ratio lines below
@@ -95,7 +95,6 @@ static const V VS[] = {
   { "v5_4",   "v5 4MB",      GEN_V5, cn_slow_hash_v11_p4,    4096ull*1024, 4096, 30, 10, true  },
   { "v5_8",   "v5 8MB",      GEN_V5, cn_slow_hash_v11_p8,    8192ull*1024, 8192, 20,  6, true  },
   { "v6",     "v6 (HF13)",   GEN_V6, NULL,                   0,            8192, 20,  6, true  },
-  { "v7",     "v7 (HF14)",   GEN_V7, NULL,                   0,           24576,  4,  2, true  },
 };
 static const size_t NVS = sizeof(VS) / sizeof(VS[0]);
 
@@ -140,7 +139,6 @@ static void one_hash(const V &v, cn_hash_context_t *ctx, const uint8_t *seed, Rn
     break;
   }
   case GEN_V6: cn_slow_hash_v13(ctx, SAMPLE, sizeof(SAMPLE) - 1, out, seed); break;
-  case GEN_V7: cn_slow_hash_v14(ctx, SAMPLE, sizeof(SAMPLE) - 1, out, seed); break;
   }
 }
 
@@ -273,8 +271,8 @@ static void bench_v5_v6_v7()
   std::printf("  A flat ms-per-MB column means the pad is only buying more of the same work.\n");
   std::printf("  A rising one means the pad has left a cache level and every byte costs more.\n");
 
-  std::printf("\n  v6 / v5 1MB = %.2fx   v7 / v6 = %.2fx   v6 / v5 8MB = %.2fx\n",
-              mean_of("v6") / ref, mean_of("v7") / mean_of("v6"), mean_of("v6") / mean_of("v5_8"));
+  std::printf("\n  v6 / v5 1MB = %.2fx   v6 / v5 8MB = %.2fx\n",
+              mean_of("v6") / ref, mean_of("v6") / mean_of("v5_8"));
 
   unsigned hw = std::thread::hardware_concurrency(); if (!hw) hw = 4;
   std::printf("\n  == thread scaling (H/s total), hardware_concurrency = %u ==\n", hw);

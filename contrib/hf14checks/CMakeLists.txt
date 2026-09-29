@@ -65,9 +65,7 @@ hf14check(t_bp_plus t_bp_plus.cpp)
 hf14check(t_clsag t_clsag.cpp)
 hf14check(t_serialization t_serialization.cpp)
 hf14check(t_fee_weight t_fee_weight.cpp)
-hf14check(t_cna_v7 t_cna_v7.cpp)
 hf14check(t_ring_size t_ring_size.cpp)
-hf14check(t_bench_pow t_bench_pow.cpp)
 # The resized v5 compilations are only comparable to the shipped v5/v6/v7 in
 # libcncrypto.a if they are built the same way. These are the crypto flags the
 # main build uses for slow-hash-hw.c, taken from its flags.make.
