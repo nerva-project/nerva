@@ -117,6 +117,13 @@ int cn_hardware_aes_supported(void)
 #define CN_DISPATCH(call_hw, call_sw) do { call_sw; } while (0)
 #endif
 
+/* v8 hashes into the legacy buffer, which at 1 MB is large enough. Raising the
+ * pad past it means pointing CN_V8_PAD at cna_scratchpad and relaxing this.
+ * Here rather than in hash-ops.h because that header is included from C++,
+ * where _Static_assert is not a keyword. */
+_Static_assert(CN_SCRATCHPAD_MEMORY_V8 <= CN_SCRATCHPAD_MEMORY,
+               "v8 pad must fit the legacy buffer it hashes into; see CN_V8_PAD");
+
 /* defined below, next to the allocator it uses */
 static void cn_pads_require(cn_hash_context_t *ctx, int legacy, int v6);
 
@@ -162,6 +169,7 @@ void cn_slow_hash_v11(cn_hash_context_t *ctx, const void *data, size_t length, c
  * reach it without any consensus path changing. */
 void cn_slow_hash_v14(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
 {
+    /* v8 runs at CN_SCRATCHPAD_MEMORY_V8, which fits the legacy pad. */
     cn_pads_require(ctx, 1, 0);
     CN_DISPATCH(cn_slow_hash_v14_hw(ctx, data, length, hash, iters, init_size_blk, xx, yy),
                 cn_slow_hash_v14_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy));
@@ -550,17 +558,10 @@ int cn_slow_hash_self_test(void)
     cn_slow_hash_v11_sw(ctx, input, sizeof(input) - 1, sw, 64, 8, 2, 2);
     if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
 
-    /* v14 (CNA v8): same shape as v11, and the same reason for testing it.
-     * The two arms are separate copies whose r2 aliases a different register
-     * on purpose, so a transcription slip between them is invisible to review
-     * and would split the chain along the AES-NI line. This comparison is the
-     * only thing that catches it.
-     *
-     * xx/yy run to 3 rather than v11's 2 so the inner loop body executes more
-     * than once, which is what varies the salt_pad selector: with xx=yy=2 the
-     * hash makes a single salt_pad call per level and could agree by accident
-     * while the widened selector was wrong. The salt is reset between the two
-     * calls because salt_pad writes back into it. */
+    /* v14 (CNA v8). The two arms are separate copies whose r2 aliases a
+     * different register on purpose, so a slip between them is invisible to
+     * review and would split the chain along the AES-NI line. xx/yy run to 3 so
+     * the inner loop runs more than once and actually varies the selector. */
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
     memset(ctx->salt, 0, CN_SALT_MEMORY);
     cn_slow_hash_v14_hw(ctx, input, sizeof(input) - 1, hw, 64, 8, 3, 3);
@@ -568,12 +569,10 @@ int cn_slow_hash_self_test(void)
     cn_slow_hash_v14_sw(ctx, input, sizeof(input) - 1, sw, 64, 8, 3, 3);
     if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
 
-    /* v14 must also differ from v11 on the same inputs. If the selector change
-     * did not take (a stale macro, a bad copy, a build that picked up salt_pad
-     * instead of salt_pad_v8) the two agree, the HW/SW check above still
-     * passes, and the whole phase silently does nothing. Roughly a quarter of
-     * salt_pad calls should now route to Skein, so with xx=yy=3 the chance of
-     * a genuine collision is negligible. */
+    /* v14 must also differ from v11 on the same inputs, which catches a build
+     * where the variant silently failed to take effect (stale macro, bad copy,
+     * an arm that picked up salt_pad). The HW/SW check above would still pass
+     * in all of those. */
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
     memset(ctx->salt, 0, CN_SALT_MEMORY);
     cn_slow_hash_v11_hw(ctx, input, sizeof(input) - 1, sw, 64, 8, 3, 3);

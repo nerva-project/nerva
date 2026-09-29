@@ -134,17 +134,19 @@ _Static_assert((V5PAD_BLOCKS & (V5PAD_BLOCKS - 1)) == 0,
     for (j = offset_1; j < CN_SCRATCHPAD_MEMORY; j += offset_2) \
         hp_state[j] ^= (salt)[V5PAD_SALT_WRAP(x++)];
 
-/* v8 needs no override here. Its macros in slow-hash.h derive the salt stride
- * and the pad-init step from CN_SCRATCHPAD_MEMORY, which this file has already
- * redefined to V5PAD_BYTES above, so the resized v8 compilations pick up the
- * correct stride for their pad on their own.
- *
- * That is the point: v5 needs the wrap below because its stride is hardcoded
- * for a 1 MB pad, while v8 is pad-aware, so these rows measure exactly the
- * algorithm that ships rather than a wrapped approximation of it. If a
- * salt_pad_v8 override ever reappears here, the benchmark and the daemon have
- * diverged.
- */
+/* v8 needs no override: its macros derive the stride from CN_SCRATCHPAD_MEMORY,
+ * already redefined above, so the resized builds pick up the right one. v5 needs
+ * the wrap below because its stride is hardcoded for 1 MB. If a salt_pad_v8
+ * override reappears here, the benchmark and the daemon have diverged. */
 
 
 #include "crypto/slow-hash-impl.h"
+
+/* v8's bodies live in their own file; here they compile at V5PAD_BYTES like
+   everything else, giving the sweep its resized v8 rows. CN_V8_PAD is pointed
+   at ctx->scratchpad so they read the buffer the harness supplies, the same
+   memory the v5 rows they are compared against use. */
+#undef CN_V8_PAD
+#define CN_V8_PAD(ctx) ((ctx)->scratchpad)
+
+#include "crypto/slow-hash-v8-impl.h"

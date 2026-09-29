@@ -91,7 +91,15 @@ void cn_fast_hash(const void *data, size_t length, char *hash);
 #define CN_SCRATCHPAD_MEMORY    1048576         // 1 MB — used by v9–v12
 #define CN_SCRATCHPAD_MEMORY_V13 (8*1024*1024)  // 8 MB — v13: a bigger pad keeps hashing memory-bound
                                                 // (1 CPU = 1 vote) and costlier to put on an ASIC
+/* CNA v8 (HF14). Same 1 MB pad v5 has used since HF11, chosen on measurement
+ * across four CPUs: a larger pad is worse on both fairness axes and excludes
+ * small-cache machines from multi-threading first. FINDINGS.md F24, F27, F28.
+ * Its own constant, and v8 has its own translation unit, so this is a one-line
+ * change if that is ever revisited. */
+#define CN_SCRATCHPAD_MEMORY_V8 (1024*1024)
+
 #define CN_SALT_MEMORY 262144
+
 #define CNA_V6_WINDOW_BLOCKS     100000U        // recent-block window for sliding reads (~5.6 MB)
 #define CNA_V6_FULL_HISTORY_ODDS 13U            // out of 256 (~5%) go to full history
 #define CN_RANDOM_VALUES 32

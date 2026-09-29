@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2026, The Nerva Project
+// Copyright (c) 2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -27,18 +27,27 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-/* Hardware-AES path. This translation unit is compiled with -maes (x86) or
- * -march=armv8-a+crypto (aarch64). It defines cn_slow_hash*_hw symbols that
- * the dispatcher in slow-hash.c picks when the running CPU supports AES. */
+/* CNA v8, software-AES arm.
+ *
+ * Its own translation unit purely so it can run at its own pad size:
+ * expand_key, finalize_hash and state_index bake CN_SCRATCHPAD_MEMORY in at
+ * compile time, so v8 cannot use a different pad inside the TU that builds
+ * v10, v11 and v13. Redefining the constant before slow-hash.h is the same
+ * pattern contrib/hf14checks/v5pad.inc uses for resized benchmark builds.
+ *
+ * The redefine has to happen after hash-ops.h (which defines both constants)
+ * and before slow-hash.h (whose macros read it). Everything v8 needs then
+ * resolves at 4 MB, including the derived salt stride.
+ */
 
 #include "hash-ops.h"
 
-#define cn_slow_hash       cn_slow_hash_hw
-#define cn_slow_hash_v7_8  cn_slow_hash_v7_8_hw
-#define cn_slow_hash_v9    cn_slow_hash_v9_hw
-#define cn_slow_hash_v10   cn_slow_hash_v10_hw
-#define cn_slow_hash_v11   cn_slow_hash_v11_hw
-#define cn_slow_hash_v13   cn_slow_hash_v13_hw
+#undef CN_SCRATCHPAD_MEMORY
+#define CN_SCRATCHPAD_MEMORY CN_SCRATCHPAD_MEMORY_V8
+
+#define cn_slow_hash_v14 cn_slow_hash_v14_sw
+
+#define CN_FORCE_SOFTWARE_AES 1
 
 #include "slow-hash.h"
-#include "slow-hash-impl.h"
+#include "slow-hash-v8-impl.h"

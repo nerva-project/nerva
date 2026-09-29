@@ -137,68 +137,37 @@ static BOOL SetLockPagesPrivilege(HANDLE hProcess, BOOL bEnable)
     for (j = offset_1; j < CN_SCRATCHPAD_MEMORY; j += offset_2)      \
         hp_state[j] ^= (salt)[x++];
 
-/* CNA v8's salt_pad. A copy of the macro above with one token changed, rather
- * than a parameterised version of it, because the original is expanded by
- * cn_slow_hash_v10 and cn_slow_hash_v11, which validate every block between
- * heights 341,000 and 4,320,000. Any edit there rewrites history, and a
- * reviewer of a consensus change should be able to diff one token instead of
- * proving that a refactor left the live expansion alone.
- *
- * The one token: `a % 3` becomes `a & 3`, so the selector reaches all four
- * entries of extra_hashes instead of three. Skein has sat unused in that table
- * since the macro was written in December 2018. It is already consensus-live
- * at the other end of the hash, where finalize_hash picks with
- * `state.hs.b[0] & 3`, so this adds no code and no new dependency: it forces a
- * fourth structurally distinct hash datapath (Threefish, against Blake's ARX,
- * Groestl's AES-like and JH) into anything trying to implement the algorithm
- * in silicon.
- *
- * `& 3` rather than `% 4` to match how finalize_hash already selects. They are
- * identical on unsigned. It is also the more uniform of the two: `a` is
- * uint16_t and 65536 divides by 4 exactly, where `% 3` leans very slightly
- * toward Blake. */
-/* Pad size and salt stride are coupled, and the coupling is deliberate even
- * though nothing in the tree says so. The sweep below steps the salt once per
- * offset_2 pad bytes, so the worst case consumes CN_SCRATCHPAD_MEMORY divided
- * by the SMALLEST stride, and that has to land on CN_SALT_MEMORY exactly or
- * the sweep reads past the salt.
- *
- * The project has already done this once by hand. When the pad was briefly
- * 3 MB in December 2018 the line read `(offset_2 % 117) + 12`, minimum stride
- * 12; when it was reverted to 1 MB it became `((temp_1 * offset_1) % 125) + 4`,
- * minimum 4. The salt was 262144 bytes in both trees, and 3145728/12 and
- * 1048576/4 are both exactly 262144. The maximum stayed at 128 in both. The
- * macro names carry the same invariant: randomize_scratchpad_256k steps 4 over
- * a 1 MB pad, which is 262144 salt bytes, and the _4k variant steps 256.
- *
- * So the minimum stride scales with the pad and the modulus follows from it.
- * Deriving both here rather than hardcoding them means a pad change cannot
- * silently reintroduce the out-of-bounds read, and at 1 MB these reduce to the
- * shipped constants 4 and 125, so v8 at 1 MB is unchanged.
- *
- * Wrapping the salt index instead would also stay in bounds and is what
- * contrib/hf14checks/v5pad.inc does, correctly, for a benchmark. It is the
- * wrong answer for consensus: at 4 MB it makes the salt repeat four times per
- * sweep, which is a different algorithm with less entropy per pad byte rather
- * than the same one resized. */
+/* Pad size and salt stride are coupled: the sweep steps the salt once per
+ * offset_2 pad bytes, so the worst case consumes pad / smallest-stride, and
+ * that must land on CN_SALT_MEMORY exactly or it reads past the salt. Deriving
+ * both from the pad keeps that true at any size; at 1 MB they reduce to the
+ * shipped 4 and 125. Maintained by hand before: at a 3 MB pad the line read
+ * (% 117) + 12, and 3145728/12 is also exactly 262144. FINDINGS.md F4, F22. */
 #define CN_V8_SALT_STEP  (CN_SCRATCHPAD_MEMORY / CN_SALT_MEMORY)
 #define CN_V8_STRIDE_MOD (129 - CN_V8_SALT_STEP)
 
-/* Pin the invariant at compile time. A pad that breaks any of these does not
- * produce a slower hash, it produces an out-of-bounds salt read, so it must
- * not be possible to build one by editing a constant. */
+/* A pad that breaks any of these produces an out-of-bounds salt read, not a
+ * slower hash, so it must not be reachable by editing a constant. */
 _Static_assert(CN_SCRATCHPAD_MEMORY % CN_SALT_MEMORY == 0,
-               "v8 pad must be a whole multiple of the salt, or the sweep leaves salt bytes unused or runs past the end");
+               "v8 pad must be a whole multiple of the salt");
 _Static_assert(CN_V8_SALT_STEP >= 1 && CN_V8_SALT_STEP <= 128,
                "v8 pad implies a salt stride outside [1,128]; the sweep's maximum stride is 128");
 _Static_assert(CN_SCRATCHPAD_MEMORY % 128 == 0,
-               "v8 pad must be a multiple of 128: expand_key and finalize_hash walk it in init_size_byte blocks of up to 128, and a tail no AES fill writes would be hashed as whatever the allocator left there");
-/* The derivation has to reproduce the shipped constants at the shipped size,
- * or this stopped being a generalisation of v8 and became a change to it. */
+               "v8 pad must be a multiple of 128, or the AES fill leaves an unwritten tail");
 _Static_assert(CN_SCRATCHPAD_MEMORY != 1048576
                || (CN_V8_SALT_STEP == 4 && CN_V8_STRIDE_MOD == 125),
                "at a 1 MB pad the derived stride must be exactly the shipped (% 125) + 4");
 
+/* CNA v8's salt_pad: the macro above with `a % 3` changed to `a & 3`, so the
+ * selector reaches all four extra_hashes entries and Skein stops being dead
+ * weight in the table.
+ *
+ * A copy rather than a parameterised salt_pad, because salt_pad is expanded by
+ * cn_slow_hash_v10 and v11, which validate heights 341,000 to 4,320,000: a
+ * reviewer should diff one token, not prove a refactor left them alone.
+ *
+ * `& 3` matches finalize_hash's selector and is exactly uniform, where `% 3`
+ * leans slightly toward Blake. */
 #define salt_pad_v8(salt, salt_hash, a, b, c, d)       \
     extra_hashes[a & 3](salt, 200, salt_hash);         \
     temp_1 = (uint16_t)(iters ^ (b ^ c));              \
@@ -211,10 +180,9 @@ _Static_assert(CN_SCRATCHPAD_MEMORY != 1048576
     for (j = offset_1; j < CN_SCRATCHPAD_MEMORY; j += offset_2)      \
         hp_state[j] ^= (salt)[x++];
 
-/* v8's pad init. The shipped randomize_scratchpad_256k steps the salt once per
- * 4 pad bytes, which consumes exactly CN_SALT_MEMORY at 1 MB and overruns it at
- * anything larger; step with the pad instead, for the same reason as above. At
- * 1 MB CN_V8_SALT_STEP is 4 and this is the shipped macro. */
+/* v8's pad init. The shipped macro steps once per 4 pad bytes, exact at 1 MB
+ * and an overrun above it. Stepping with the pad also consumes the whole salt
+ * at every size, which is what keeps chain binding intact. FINDINGS.md F23. */
 #define randomize_scratchpad_256k_v8(r, salt, scratchpad)                   \
     uint32_t x = 0;                                                         \
     for (uint32_t i = 0; i < CN_SCRATCHPAD_MEMORY; i += CN_V8_SALT_STEP)    \

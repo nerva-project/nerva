@@ -81,63 +81,6 @@ void cn_slow_hash_v11(cn_hash_context_t *context, const void *data, size_t lengt
     finalize_hash();
 }
 
-/* CNA v8. Line for line cn_slow_hash_v11 above, with salt_pad_v8 in place of
- * salt_pad; see that macro for what the one changed token does.
- *
- * It is a separate function rather than a flag on v11 because v11 still
- * validates major_version 11 and 12, so its output has to stay bit-identical
- * forever. Nothing calls this yet: get_block_longhash is wired to it in
- * Phase 4, once the pad size is settled, so this phase adds no consensus
- * behaviour and reverts cleanly.
- *
- * Note r2 aliases &c here and &b in the software arm below. That is not a
- * transcription slip. The software path shipped disagreeing with this one
- * until commit 4d87b5f fixed it in April 2019, and the fix was exactly that
- * change of source register. Copy each arm from its own arm. */
-void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
-{
-    uint8_t * const hp_state = context->scratchpad;
-    char * const salt = context->salt;
-    char salt_hash[HASH_SIZE];
-    init_hash();
-    expand_key();
-    randomize_scratchpad_256k_v8(context->random_values, salt, hp_state);
-    xor_u64();
-
-    _b = _mm_load_si128(R128(b));
-
-    uint16_t temp_1 = 0;
-    uint32_t offset_1 = 0;
-    uint32_t offset_2 = 0;
-
-    uint16_t k = 1, l = 1;
-    uint16_t *r2 = (uint16_t *)&c;
-    for (k = 1; k < xx; k++)
-    {
-        pre_aes();
-        _c = _mm_aesenc_si128(_c, _a);
-        post_aes_variant();
-        salt_pad_v8(salt, salt_hash, r2[0], r2[2], r2[4], r2[6]);
-
-        for (l = 1; l < yy; l++)
-        {
-            pre_aes();
-            _c = _mm_aesenc_si128(_c, _a);
-            post_aes_variant();
-            salt_pad_v8(salt, salt_hash, r2[1], r2[3], r2[5], r2[7]);
-        }
-    }
-
-    for (i = 0; i < iters; i++)
-    {
-        pre_aes();
-        _c = _mm_aesenc_si128(_c, _a);
-        post_aes_variant();
-    }
-
-    finalize_hash();
-}
-
 void cn_slow_hash_v10(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww)
 {
     uint8_t * const hp_state = context->scratchpad;
@@ -418,50 +361,6 @@ void cn_slow_hash_v11(cn_hash_context_t *context, const void *data, size_t lengt
         {
             aes_sw_variant();
             salt_pad(salt, salt_hash, r2[1], r2[3], r2[5], r2[7]);
-        }
-    }
-
-    for (i = 0; i < iters; i++) {
-        aes_sw_variant();
-    }
-
-    finalize_hash();
-}
-
-/* CNA v8, software-AES arm. Copied from cn_slow_hash_v11 directly above, not
- * from the hardware arm: r2 aliases &b here and &c there, and that difference
- * is load-bearing. It is what commit 4d87b5f ("Fix for non-AES pathway not
- * syncing") changed in April 2019 to make the two paths agree, after they had
- * shipped disagreeing for about a month. Reconciling them forks the machines
- * without AES-NI, which is where such a fault surfaces last.
- *
- * cn_slow_hash_self_test covers this pair; that test is the only thing
- * standing between a mistake here and a chain split. */
-void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
-{
-    uint8_t * const hp_state = context->scratchpad;
-    char * const salt = context->salt;
-    char salt_hash[HASH_SIZE];
-    init_hash();
-    expand_key();
-    randomize_scratchpad_256k_v8(context->random_values, salt, hp_state);
-    xor_u64();
-
-    uint16_t temp_1 = 0;
-    uint32_t offset_1 = 0;
-    uint32_t offset_2 = 0;
-
-    uint16_t k = 1, l = 1;
-    uint16_t *r2 = (uint16_t *)&b;
-    for (k = 1; k < xx; k++)
-    {
-        aes_sw_variant();
-        salt_pad_v8(salt, salt_hash, r2[0], r2[2], r2[4], r2[6]);
-
-        for (l = 1; l < yy; l++)
-        {
-            aes_sw_variant();
-            salt_pad_v8(salt, salt_hash, r2[1], r2[3], r2[5], r2[7]);
         }
     }
 
