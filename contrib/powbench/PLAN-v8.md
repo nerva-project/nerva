@@ -20,6 +20,20 @@ consequences shape this whole document:
    (type 7 only) and ring size 16. Those are orthogonal to
    `get_block_longhash` and are untouched by everything below. The PoW work
    can fail without taking them down with it.
+3. **Cost uniformity is now a fifth target.** In v6, a nonce's cost is
+   estimable from its VM program alone, more cheaply than the nonce can be
+   hashed, at a measured correlation of 0.88 to 0.95 between estimate and real
+   cost. Measured end to end, including what the estimate costs and the chain
+   fill, screening alone is worth about **1.3 to 1.4x** throughput at its best
+   (FINDINGS.md F6, F6b). That is screening in isolation and not a verdict on
+   the larger optimisation work it was reported alongside, which bundles
+   several unrelated and legitimate miner improvements that were not tested.
+   Worth designing out of v8, since even 1.3x to whoever implements it is a
+   fairness problem, but not a reason to slow HF14 down.
+
+Everything this plan asserts about the existing code is recorded, with how it
+was checked, in `FINDINGS.md`. Read that before trusting a comment in this
+tree: several of them describe behaviour the adjacent code does not have.
 
 ## Targets, measured against v6 8MB as it ships today
 
@@ -29,9 +43,23 @@ consequences shape this whole document:
 | verify, i7-7700HQ 1T | 27.51 ms | **< 15 ms** | the weakest machine is what gates fairness |
 | cross-CPU spread (4 CPUs) | 2.91x | **< 2.2x** | v5 4MB already reaches 2.15x |
 | GPU:CPU, worst of 4 | 0.05x | **<= 0.05x** | do not regress what v6 does well |
+| cost estimable ahead of time | r = 0.88-0.95 | **r < 0.1** | FINDINGS.md F6; gate is `screen.c` |
 
-If a change cannot hold all four, it does not ship. v7 failed because it was
+If a change cannot hold all five, it does not ship. v7 failed because it was
 allowed to trade verification cost away for a benefit that never materialised.
+
+The fifth row is the one to keep in view while reading the phases below,
+because it constrains the *shape* of v8 rather than its speed, and a
+construction can satisfy the other four while failing it outright.
+
+**Which v6 number the first four rows use.** RESULTS.md carries two, measured
+differently: 6.95 ms for the shipped function through `hf14checks`, and 10.11
+ms for the powbench port, which omits the Keccak framing and the four
+finalisation hashes. The table above uses the port's 10.11, because the
+cross-machine rows it compares against are also the port. A direct timing of
+the shipped `cn_slow_hash_v13` lands at 7.70 ms, agreeing with `hf14checks`.
+Keep port against port and function against function; reconcile the two before
+these targets are used to accept or reject a candidate (FINDINGS.md F17).
 
 ## Starting point
 
@@ -72,6 +100,62 @@ So: every algorithm change lands as a **new macro and a new entry point**,
 with `cn_slow_hash_v10` and `cn_slow_hash_v11` left byte-identical. The diff
 that touches a live function is the one-line dispatcher change at the fork
 version, and nothing else.
+
+This has already been close. HF14 appended v7's `seg_hops` generation to
+`cn_vm_generate_program`, a function live HF13 consensus calls on mainnet
+today. It is correct only because those draws land after the 512-instruction
+loop, leaving v6's instructions untouched. Note also that `git diff` reported
+it as pure insertion, 255 added and 0 removed, which reads as safe and is not:
+an insertion *inside* a live function changes that function. See FINDINGS.md
+F9.
+
+## The second rule: a nonce's cost must not be knowable in advance
+
+A PoW is easiest to reason about when every nonce costs the same. Where cost
+varies, it should at least not be estimable more cheaply than the nonce can be
+hashed, or the work a hash represents stops being uniform.
+
+v6 does not hold this. FINDINGS.md F6 measures an estimate built from the
+program alone, no registers and no memory, that tracks real cost at r = 0.88
+to 0.95. Five design rules follow, and they bind every phase below.
+
+1. **Control flow must depend on values loaded from the pad.** v6's
+   `CN_OP_CBRANCH` tests `regs[dst] & (imm | 1)` against a mask with ~16.5 set
+   bits, so it is taken except about once in 2^16.5. A condition that one-sided
+   is not a branch, it is a fixed jump, and the trace becomes a property of the
+   program rather than of the data. Use a balanced condition (a single-bit
+   test, or a mask with few set bits) on a register that a pad load has
+   written.
+
+2. **Do not reset control state between passes.** `cn_vm_execute` sets `pc = 0`
+   and `chain = 0` on entry and is called 2048 times with one program, so every
+   pass restarts the same walk. Carry them so later passes diverge. Rules 1 and
+   2 have to land together: carrying `pc` alone changes nothing while the
+   branch stays one-sided.
+
+3. **Derive per-nonce parameters only from state that requires the whole
+   prologue.** This is where v5 is already correct, and for a stronger reason
+   than statement order. `get_cna_v5_data` re-seeds its own HC128 state from
+   bytes it has already written, so the state that yields `xx`, `yy`,
+   `init_size_blk` and `iters_divisor` depends on the salt's content. The
+   keystream cannot be fast-forwarded; the salt has to be produced, which needs
+   the block cache, which needs a full node (FINDINGS.md F5). Keep that
+   feedback. Contrast v6, whose seed reads only `salt[0..32)`, available after
+   about one of 4096 fill iterations (F8).
+
+4. **Prefer constant work per nonce.** v7 gets this right and it is the one
+   piece of it worth carrying forward: `seg_hops` sums to exactly `CN_V7_HOPS`
+   by construction, so every nonce issues the same number of accesses while the
+   rhythm still differs. v5 varies 4.7x through `(xx-1) * yy` in [12, 56], safe
+   today only because of rule 3, which makes rule 3 load-bearing rather than
+   incidental.
+
+5. **Test it before shipping, on the candidate, not on the argument.**
+   `contrib/powbench/screen.c` is the harness. Pass condition is r near zero.
+
+If Phase 2 adds a floating-point stage, rules 1 and 2 apply to it as well. FP
+that never feeds control flow is untouched by this; FP-driven branches
+reintroduce the problem unless the operands come from pad loads.
 
 ## Phase 1: the fourth hash function
 
@@ -121,6 +205,16 @@ v13 = v6, v14 = v7). Copy the `v11` body twice, once per arm, swapping
 | `slow-hash-hw.c`, `slow-hash-sw.c` | `#define cn_slow_hash_v15 cn_slow_hash_v15_hw` / `_sw` |
 | `slow-hash.c` | externs plus the `CN_DISPATCH` wrapper |
 | `hash-ops.h`, `hash.h` | declaration and C++ inline |
+
+**The two bodies are not the same body, and the difference is deliberate.**
+`slow-hash-impl.h:57` reads `uint16_t *r2 = (uint16_t *)&c;` in the HW arm and
+`:354` reads `(uint16_t *)&b;` in the SW arm. That asymmetry looks like a
+copy-paste error and is the fix for one: commit `4d87b5f` changed the SW path
+to `&b` in April 2019 under the message "Fix for non-AES pathway not syncing",
+after it had shipped disagreeing with the HW path for about a month. Copy each
+arm from its own arm and do not reconcile them. Reconciling them forks HW from
+SW, and only on machines without AES-NI, which is where it will be found late.
+See FINDINGS.md F3.
 
 **No `get_block_longhash_v15` and no dispatcher change in Phase 1.** This
 phase is measurement. The consensus diff stays at zero and the whole phase
@@ -221,6 +315,18 @@ data-dependent:
   it is load-bearing and cannot be skipped.
 - Change the rounding mode from data periodically, RandomX's `CFROUND`. This
   is what defeats a fixed-function FP pipeline.
+- If the FP result reaches control flow at all, its operands must come from
+  pad loads, per rule 1 above. FP that only feeds the integer state is outside
+  that concern entirely, and is the safer default.
+
+"Load-bearing" needs measuring, not asserting. The one v7 lesson worth keeping
+is that a construction can look strong while almost none of its randomness
+matters: v7's chase drew its address from a fixed five-operation loop, and the
+per-nonce program was later found to govern a small fraction of the hash. That
+figure comes from a commit message and has not been reproduced here (FINDINGS.md
+open question 3), but the failure mode is real and cheap to check: ablate the
+FP stage and confirm the hash changes for every nonce, and that removing it
+does not leave a shortcut that reproduces the result.
 
 ### 2b. Determinism, which is the real risk
 
@@ -257,18 +363,52 @@ Only after phases 1 and 2 are measured.
 
 - Sweep the pad from 2 to 8 MB on all four machines and pick the knee where
   cross-CPU spread and verification both stay inside target.
-- Review whether `xx`/`yy` ranges [4,8] and `iters` [0,63] should widen. More
-  variance in work per nonce is ASIC-hostile but raises verification variance,
-  which matters for block propagation.
-- **Lift the three pad-size assumptions into shipping code.**
-  `randomize_scratchpad_256k` and the `salt_pad` sweep each step the salt once
-  per pad step and stay in bounds only because a 1 MB pad yields exactly
-  `CN_SALT_MEMORY` steps; at 4 MB they read past the salt. `state_index`
-  masks with `(pad / 16 - 1)`, which addresses the whole pad only when
-  `pad / 16` is a power of two. All three are documented in
-  `contrib/hf14checks/v5pad.inc`, which fixes them for the bench only. They
-  are not live bugs at 1 MB and are hard bugs at any other size. The wrap must
-  be the AND, not a compare and branch: written as a branch it cost 29%.
+
+- **Answer HF13's reasoning rather than passing over it.** Moving to 4 MB
+  reverses a deliberate decision. HF13 went 4 MB to 8 MB arguing that 8 MB per
+  thread overflows L3-per-core on nearly every machine class, so they all fall
+  back to DRAM latency and even out, while 16 or 32 MB would push verify and
+  sync past what the sliding-window work protects. This plan wants 4 MB for
+  the opposite reason, that 8 MB punishes the 6 MB-L3 laptop. Both cannot be
+  right about the same machines. The measured cross-CPU spread decides it, and
+  the answer belongs in RESULTS.md next to the numbers. Worth knowing that pad
+  size has been argued four times in this project's history, in both
+  directions, and reverted twice (FINDINGS.md F11).
+
+- **Rescale the salt stride; do not wrap it.** `contrib/hf14checks/v5pad.inc`
+  describes the salt-index bound as a latent bug that holds only at 1 MB. It
+  is a maintained invariant. When the pad was briefly 3 MB in December 2018 the
+  stride line read `(offset_2 % 117) + 12`, minimum 12; when it was reverted to
+  1 MB the line became today's `((temp_1 * offset_1) % 125) + 4`, minimum 4.
+  The salt was 262144 bytes in both trees, and `3145728 / 12` and
+  `1048576 / 4` are both exactly 262144. Maximum stride is 128 in both. The
+  same invariant is in the macro names: `randomize_scratchpad_256k` steps 4
+  over 1 MB, which is 262144 salt bytes (FINDINGS.md F4).
+
+  So the AND-wrap that `v5pad.inc` uses is right for a benchmark and wrong for
+  consensus: at 4 MB it makes the salt repeat four times per sweep, which is a
+  different algorithm with less entropy per pad byte, not a resized one. Do
+  what the original author did and rescale the minimum stride with the pad:
+  4 MB wants `((temp_1 * offset_1) % 113) + 16`, and
+  `randomize_scratchpad_256k` wants a step of 16. Measure both variants rather
+  than assume, since they have different costs, but the rescale is what the
+  design intends. If a wrap is used anywhere it must be the AND and not a
+  compare and branch: as a branch it cost 29%.
+
+- `state_index` masks with `(pad / 16 - 1)`, which addresses the whole pad only
+  when `pad / 16` is a power of two. At 4 MB the mask is fine; it is the odd
+  sizes that need the modulo. Keep that in mind if the sweep picks a non-power
+  of two.
+
+- **Widening `xx`/`yy` and `iters` is now constrained, not just a tradeoff.**
+  More variance in work per nonce is ASIC-hostile and raises verification
+  variance, which matters for block propagation. But it is also the axis the
+  fifth target governs: v5's existing 4.7x spread is acceptable only because
+  its parameters cannot be learned without doing the full chain fill first
+  (rule 3). Widening the ranges widens what an estimate would be worth, so any
+  widening has to keep that feedback intact and be re-checked with `screen.c`.
+  Narrowing toward constant work per nonce, v7's `seg_hops` shape, is the
+  safer direction and should be considered on its own merits.
 
 ## Phase 4: plumbing
 
@@ -310,6 +450,15 @@ Only after phases 1 and 2 are measured.
 - Extend `contrib/powbench` with a v8 kernel and C reference. **The checksum
   gate must pass**; a row that does not verify gets no ratio.
 - Run all four machines at identical `vram` and `launch cap`.
+- **Run `contrib/powbench/screen.c` against v8 and require r near zero.** It
+  reports v6 at 0.88 to 0.95 today, so it is known to detect the thing it is
+  looking for rather than returning zero by construction. Keep its control
+  gate, which proves the instrumented interpreter still matches the shipped
+  one before printing anything; it caught a wrong `mix64` on its first run and
+  refused to report. Adapting it to a v8 with no VM means replacing the
+  estimator with the cheapest predictor that v8's structure allows, and the
+  choice of estimator is the whole test, so it deserves review rather than
+  being picked by whoever writes the patch.
 - Reverify a range of historical blocks with `--fast-block-sync 0` across the
   v10, v11 and v13 height ranges, and confirm the hashes are bit-identical to
   a build from master. This is the direct test of the rule above, and it is a
@@ -334,6 +483,16 @@ Only after phases 1 and 2 are measured.
 4. **Nerva's CPU miner is itself an interpreter** (`cn_vm_execute`). If v8 ends
    up with a VM-like FP stage, JIT-ing the CPU miner is a cheaper way to widen
    the CPU/GPU gap than another algorithm change.
+5. ~~F6 is measured in operation counts, not time.~~ Measured: the VM is 67%
+   of a v6 hash and the cost spread is worth about 1.5x net of screening cost
+   (FINDINGS.md F6b). Two further gaps remain: the figure omits the partial
+   chain fill a miner still owes per screened nonce, and it is one machine,
+   single-threaded.
+6. **Nobody has recorded why RandomX was dropped.** It was integrated in June
+   2019, worked through to January 2020 and then removed with no stated reason
+   (FINDINGS.md F13). This plan measures v8 against RandomX repeatedly, and
+   Phase 2 reimplements a piece of it. Worth asking someone who was there
+   before that work starts.
 
 ## What not to do
 
@@ -348,3 +507,10 @@ Only after phases 1 and 2 are measured.
   machine in the set, not the fastest.
 - Do not add a hard-fork version for v8. It inherits HF14, which has never
   activated. Adding one forces users through a second upgrade for no reason.
+- Do not let a nonce's cost be estimable ahead of time. This is the fifth
+  target and the second rule; it is the one property v6 does not have, and it
+  is easy to reintroduce by accident with a one-sided branch or a cheap seed.
+- Do not reconcile the HW and SW `r2` difference. It is the fix, not the bug.
+- Do not trust a comment in `src/crypto` or a figure in a commit message
+  without checking the code. Several comments here describe behaviour the
+  adjacent code does not have, and FINDINGS.md exists because of that.
