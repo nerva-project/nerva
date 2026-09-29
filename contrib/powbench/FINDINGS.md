@@ -295,17 +295,44 @@ reason was, it is not in the repository.
 `contrib/powbench/v8bench.c`, interleaved pairs (one v5 nonce then one v8 nonce
 on identical parameters), 2000 samples at 1 MB and 600 at 4 MB.
 
+Figures below are from the **fixed** harness (F20); the pre-fix run is kept
+underneath because one number moved.
+
 | machine | control | v8 vs v5, 1 MB | v8 vs v5, 4 MB | verdict |
 |---|---|---|---|---|
-| Ryzen 9 7950X (Zen 4) | 1.46% | **-0.75%** | +0.07% | PASS |
-| Ryzen 7 9700X (Zen 5) | 1.12% | **-0.63%** | -0.31% | PASS |
-| Ryzen 5 5600X (Zen 3) | 5.88% | **-0.79%** | +0.15% | control flagged, see F20 |
-| Core i7-7700HQ (Kaby Lake) | 1.07% | **-0.58%** | +0.09% | PASS |
+| Ryzen 9 7950X (Zen 4) | 0.65% | **-1.00%** | **-0.79%** | PASS |
+| Ryzen 7 9700X (Zen 5) | 2.13% | **-0.90%** | **-1.19%** | PASS |
+| Ryzen 5 5600X (Zen 3) | 4.55% | **-0.98%** | **-0.85%** | control flagged, see F21 |
+| Core i7-7700HQ (Kaby Lake) | 2.85% | **-0.67%** | **-0.54%** | PASS |
 
-Negative is v8 cheaper. Four CPUs across four microarchitectures and three
-generations of core, and the 1 MB figure lands between -0.58% and -0.79% on
-every one of them, mean about -0.69%. At 4 MB it is between -0.31% and +0.15%,
-which is zero.
+Negative is v8 cheaper. Four CPUs across four microarchitectures, and v8 is
+cheaper on every one at both pad sizes: 1 MB between -0.67% and -1.00% (mean
+-0.89%), 4 MB between -0.54% and -1.19% (mean -0.84%).
+
+Pre-fix, for the record, the 4 MB column read +0.07%, -0.31%, +0.15% and
++0.09%. The 4 MB pair was already interleaved, so the only change was the
+per-sample order rotation; that it moved by most of a percentage point says
+the old fixed order was biasing in favour of whichever variant ran first.
+Trust the fixed numbers.
+
+### F18b. The 4 MB saving does not dilute, and the model says it should
+
+Predicted from hash costs alone: the extra-hash saving is a fixed ~6.6 us per
+nonce whatever the pad, so against a 0.75 ms nonce at 1 MB it is about -0.88%,
+and against a 3.16 ms nonce at 4 MB it should fall to about **-0.21%**. The
+1 MB prediction is almost exact. The 4 MB one is out by 4x: measured -0.84%.
+
+So something makes the swap worth *more* under a larger pad, not less. The
+likely mechanism, untested: Groestl carries ~16 KB of lookup tables while
+Skein carries none, so under 4 MB of pad pressure Groestl's tables are evicted
+more often and it costs more than its standalone 1758 ns suggests. Dropping
+its share from a third to a quarter would then save more at 4 MB than at 1 MB,
+which is the direction observed.
+
+*Why it matters:* the plan wants v8 at 4 MB, and this says Phase 1 is at least
+as valuable there as at 1 MB rather than fading out. Worth confirming before
+being relied on, by timing the four hashes again with a 4 MB working set
+thrashing cache alongside them.
 
 This agrees with an independent prediction made from the hash costs alone,
 before these runs. Measured on 200-byte inputs: blake 765 ns, groestl 1758 ns,
@@ -357,10 +384,40 @@ in F18 were always sound, since those were interleaved from the start; it was
 only the control, and therefore the gate scaled to it, that was inflated. The
 5600X row is good data and its UNUSABLE verdict was a false alarm.
 
-One figure did move after the fix: 4 MB went from +0.07% to -0.79% on the
-7950X. The 4 MB pair was already interleaved, so the only change was the order
-rotation, which is consistent with it having removed a bias favouring whichever
-variant ran first. It is one run and worth re-measuring across the set.
+One figure did move after the fix: the 4 MB column, on all four machines, from
+about zero to about -0.8%. The 4 MB pair was already interleaved, so the only
+change was the order rotation, and it moving consistently on every machine
+confirms the old fixed order was biasing toward whichever variant ran first.
+
+### F21. After the fix, the control measures something real, so the guard is now wrong in a new way
+
+Post-fix the control is 0.65%, 2.13%, 2.85% and 4.55% across the four machines,
+and the 5600X still trips the "UNUSABLE above 4%" guard. But `ref` and `ctl`
+are now interleaved, so drift is no longer what that number contains. It is a
+**genuine difference between two builds of the same algorithm**, and it varies
+by machine rather than by run.
+
+The cause is understood: `ctl` comes from `v5pad.inc`, which wraps the salt
+index with `V5PAD_SALT_WRAP`. At 1 MB the wrap is a provable no-op, but it
+still costs an AND inside the innermost loop of the hash, which runs on the
+order of 10^5 times per `salt_pad` call and ~30 calls per nonce. Narrower cores
+pay more for it, which is why the 5600X and the laptop show more than the
+7950X.
+
+So the guard now fires on a real, understood, and irrelevant difference. The
+comparison that matters is like against like, and both forms agree:
+
+    machine   v8 vs v5 using ref (no wrap)   using ctl (wrap)
+    7950X              -0.48%                    -1.00%
+    9700X              -0.68%                    -0.90%
+    5600X              -0.52%                    -0.98%
+    7700HQ             -0.57%                    -0.67%
+
+*To do:* stop scaling the gate by the control and stop failing on it. Report it
+as "pad-machinery overhead" rather than "noise floor", keep a fixed gate now
+that interleaving handles drift, and fail only when a variant pair disagrees
+between its ref and ctl forms, which is the condition that would actually
+invalidate a conclusion.
 
 ### F19. Interleaving is what made Phase 1 measurable
 
