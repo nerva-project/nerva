@@ -328,71 +328,120 @@ trimmed, stays an engineering estimate under open item 3.
 - RESULTS.md carries the four-machine table, and this section records the
   measured figure, not the predicted one
 
-## Phase 2: floating point (the substantive work)
+## Phase 2: floating point  [NEXT, not started]
 
-This is the only lever identified that is asymmetric: a CPU runs IEEE-754
-double precision at the same rate as integer, it costs **no extra memory** so
-it does not hurt small-cache machines, and it barely touches verification. An
-ASIC must implement full IEEE-754 with four rounding modes, denormals and NaN
-handling, which is large silicon that cannot be simplified without breaking
-consensus. It is the biggest single gap between both v5 and v6 and RandomX.
+### Why, revised
 
-Phase 2 extends `cn_slow_hash_v14` in place. It does not need another entry
-point, because nothing routes to it until Phase 4.
+The original justification was ASIC resistance. That is gone: at this chain's
+size an ASIC is not a credible economic threat. Two better reasons replace it.
 
-### 2a. Design
+**GPU resistance via FP64 rate limits.** Consumer GPUs deliberately cripple
+double precision, roughly 1/64 of FP32 on GeForce and 1/16 on RX 580, while a
+CPU runs FP64 at integer speed. That is the largest hardware asymmetry available
+that costs no memory. Note a pro card is the exception: the Vega FE in the test
+set runs FP64 at 1/2 rate and would suffer least.
 
-v5 has no VM, so there is no instruction stream to add FP opcodes to. Add an
-FP stage to the main loop instead, fed from live AES state so it stays
-data-dependent:
+**Cross-CPU fairness, which v8 measured and missed** at 2.39x against a 2.2x
+target. FP adds work without adding memory, so unlike a larger pad it does not
+punish small-cache machines. It is the only lever left after Phase 3.
 
-- Carry 4 double-precision registers alongside the existing integer state.
-- Each main-loop iteration: convert part of the AES output to doubles, apply
-  add / sub / mul / div / sqrt, fold the result back into the integer state so
-  it is load-bearing and cannot be skipped.
-- Change the rounding mode from data periodically, RandomX's `CFROUND`. This
-  is what defeats a fixed-function FP pipeline.
-- If the FP result reaches control flow at all, its operands must come from
-  pad loads, per rule 1 above. FP that only feeds the integer state is outside
-  that concern entirely, and is the safer default.
+### What RandomX actually does, reviewed against the source
 
-"Load-bearing" needs measuring, not asserting. The one v7 lesson worth keeping
-is that a construction can look strong while almost none of its randomness
-matters: v7's chase drew its address from a fixed five-operation loop, and the
-per-nonce program was later found to govern a small fraction of the hash. That
-figure comes from a commit message and has not been reproduced here (FINDINGS.md
-open question 3), but the failure mode is real and cheap to check: ablate the
-FP stage and confirm the hash changes for every nonce, and that removing it
-does not leave a shortcut that reproduces the result.
+Monero vendors `tevador/RandomX`; there is no separate Monero variant. Reviewed
+`doc/specs.md`, `src/intrin_portable.h` and `src/common.hpp`.
 
-### 2b. Determinism, which is the real risk
+**The central lesson: RandomX does not normalise platform FP behaviour, it
+constrains values so the divergent cases are unreachable.**
 
-Cross-platform FP determinism is a consensus-critical hazard and it is the
-largest one in this document. A single ULP of disagreement between x86 and
-ARM, or between two compilers, forks the chain. Non-negotiable rules:
+    x86:   rx_mxcsr_default = 0x9FC0   // flush to zero, denormals are zero
+    ARM64: RANDOMX_DEFAULT_FENV        // default environment, no explicit FTZ/DAZ
 
-1. **Only add, sub, mul, div, sqrt.** All are IEEE-754 exact and correctly
-   rounded. No transcendentals, no FMA (contraction changes results), no x87.
-2. **SSE2 only on x86**, compiled with `-mfpmath=sse -ffp-contract=off`. Verify
-   the generated code contains no `fma`.
-3. **Constrain register values** the way RandomX does for its E group: force
-   the sign bit to 0 and pin the high exponent bits, so values stay in a
-   bounded positive range and denormals, infinities and NaN are unreachable.
-4. **Set and restore MXCSR explicitly.** Do not inherit FTZ/DAZ from whatever
-   the caller left behind.
-5. **Cross-platform test is a merge blocker**: identical hashes on x86-64 and
-   ARM64, HW-AES and SW-AES paths, GCC and Clang, debug and release.
+Those are different settings on the two platforms, and it is harmless, because
+the spec guarantees "no operation results in NaN or a denormal number". The
+flags never fire.
 
-If rule 5 cannot be satisfied, phase 2 does not ship. An algorithm that hashes
-differently on two machines is worse than no change at all. Failing it is now
-cheap: Phase 1 alone can take the HF14 slot and Phase 2 can wait for a later
-fork.
+**This supersedes what an earlier version of this plan said** ("set and restore
+MXCSR explicitly, do not inherit FTZ/DAZ"). That is normalisation thinking: it
+requires every platform to agree about denormal handling, forever. Constraint
+requires them to agree only about correctly-rounded arithmetic, which IEEE-754
+already mandates.
 
-### 2c. Measure after
+**The constraint, with real constants** (`src/common.hpp`):
 
-Re-run the four targets. FP should cost near zero on verification. If it
-costs more than ~5%, the FP stage is too heavy; reduce the op count per
-iteration rather than dropping the phase.
+    mantissaSize = 52, exponentSize = 11, exponentBias = 1023
+    constExponentBits = 0x300      // top three exponent bits forced to 011
+    dynamicExponentBits = 4, staticExponentBits = 4
+
+Sign forced to 0, top three exponent bits forced to `011`, which pins the 11-bit
+exponent field into [0x300, 0x3FF]: structurally unreachable from 0 (denormal)
+and 2047 (infinity, NaN). Four more exponent bits and the low 22 fraction bits
+come from per-program masks, varying magnitude without leaving the safe band.
+
+**Three register groups, because the constraints differ:**
+
+| group | role | constraint |
+|---|---|---|
+| F | additive | abs value stays under ~3.0e+14 |
+| E | multiplicative | always positive, masked as above; only group taking div and sqrt |
+| A | read-only constants | restricted to [1, 4294967296) |
+
+Only E needs to be positive, because only E is square-rooted.
+
+**Instruction set:** FADD_R/M, FSUB_R/M, FMUL_R, FDIV_M, FSQRT_R, plus FSCAL_R
+and FSWAP_R which are bit manipulation rather than arithmetic. Exactly the five
+correctly-rounded IEEE-754 operations, nothing else.
+
+**Why the spec never mentions FMA.** The interpreter does one operation per
+instruction and stores to a register each time, so a compiler never sees
+`a*b+c` as a single expression and contraction cannot happen. That is structural
+and more robust than a compiler flag. Do both.
+
+**Rounding changes are deliberately rare.** `CFROUND` rotates a register right
+by imm32 and takes 2 bits; in v2 it only applies when bits 2-5 are zero, so
+about one time in sixteen. Setting the mode is a register write on x86 and a
+libc call on ARM, and in a hot loop that cost is real.
+
+**Int to double conversion is exact by construction:** 8 bytes are read as two
+32-bit signed integers, which need only 30 significand bits, so the conversion
+needs no rounding and introduces no platform dependence.
+
+### Design constraints for Nerva
+
+v8 has no VM, so RandomX's instruction set cannot be copied directly. The FP
+stage goes in v5's main loop instead. What carries over:
+
+1. Only add, sub, mul, div, sqrt.
+2. Constrain every FP register write with the group-E mask. Do not rely on
+   FTZ/DAZ or on platforms agreeing about denormals.
+3. One operation per statement, result stored before the next reads it, so FMA
+   contraction is structurally impossible. Set `-ffp-contract=off` as well and
+   verify the disassembly.
+4. Change rounding mode from data, but rarely, roughly 1 in 16.
+5. Convert integers to doubles by a route that needs no rounding.
+6. Fold the FP result back into the integer state so it is load-bearing and
+   cannot be skipped. Ablate and confirm the hash changes for every nonce; a
+   construction can look strong while almost none of its randomness matters.
+
+### The gate
+
+`contrib/powbench/t_fp_determinism.c` tests the primitives under these
+constraints and prints four checksums. Build and run on x86-64 and on ARM64
+(a Pixel 7a under Termux is available); **all four must match exactly.** It
+also carries an FMA-contraction canary that fails on a single machine if the
+build flags are wrong.
+
+If the determinism gate cannot be met, Phase 2 does not ship and v8 goes out as
+it stands at 2.39x. That is an acceptable outcome, not a failure: v8 already
+beats v6 on every measured axis.
+
+### Measure before committing to ship
+
+Prototype, then measure three things, and only then decide:
+
+1. cross-CPU spread: does 2.39x actually move toward 2.2x?
+2. verify cost: there is an order of magnitude of headroom, so this is unlikely
+   to bind
+3. the determinism gate, which is pass/fail
 
 ## Phase 3: pad and parameter tuning  [DONE]
 
