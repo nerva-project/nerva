@@ -730,6 +730,56 @@ loop, leaving the pad, salt and registers in VRAM between launches. Occupancy
 stays full while launch duration becomes independent of it, which is how miners
 run on display-attached cards under Windows.
 
+## Phase 2
+
+### F29. FP determinism holds between x86-64 and aarch64 under the Phase 2 constraints
+
+`t_fp_determinism.c` exercises the five permitted operations (add, sub, mul,
+div, sqrt) under the group-E operand constraint and data-driven rounding, and
+prints four checksums of raw bit patterns. All four agree between the x86-64
+baseline and a Pixel 7a:
+
+      basic add/sub/mul/div : 8ae92fac4343e627
+      sqrt and div          : 0de4d9f1333e87b7
+      fma contraction canary: 04c3614dff6aed8c
+      data-driven rounding  : d6e736346922def8
+
+The checkpoint that mattered most is the fourth. Rounding mode changed from data
+is the most likely place for the two platforms to diverge, because x86 goes
+through MXCSR and ARM64 through FPCR, and `fesetround()` is the only part of the
+probe that is a libc call rather than an instruction. It agreed bit for bit.
+
+This clears the gate: **an FP stage cannot be ruled out on determinism grounds**,
+which is what Phase 2 was blocked on.
+
+*Checked:* built and run on the device, not inferred. `clang -O2
+-ffp-contract=off t_fp_determinism.c -o t_fp -lm` under Termux on a Pixel 7a,
+banner reporting `arch: aarch64`, `FLT_EVAL_METHOD=0`, 128-bit long double,
+against the x86-64 baseline in commit fb5f781. The clang version was not
+recorded, which is the one gap in this entry.
+
+### F30. The FMA canary fired on the first ARM run, and that is the real warning
+
+The first Pixel run omitted `-ffp-contract=off`. Three of the four checksums
+still matched; the canary did not, reporting contraction on **4674 of 200000
+cases** and a checksum of `e718b7f22e56abca` against the baseline's
+`04c3614dff6aed8c`. Clang defaults to contraction on and aarch64 has `fmadd`, so
+the compiler fused `a*b+c` sites and moved the result.
+
+The canary worked as designed, but the lesson is about what ships rather than
+about this probe. **A passing canary means the build flag was set, not that the
+risk is absent.** Anyone rebuilding the daemon without `-ffp-contract=off` would
+produce a binary that disagrees with the network, and the failure mode is a
+chain fork rather than a build error.
+
+The RandomX review already recorded the better answer, and F29 does not
+supersede it: the interpreter stores each result before the next operation reads
+it, so contraction cannot occur structurally and no flag has to be trusted. If
+an FP stage ships, it must be built that way.
+
+*Checked:* observed directly on the device on the first run, before the flag was
+added; the second run with the flag produced F29's matching value.
+
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell
