@@ -101,7 +101,7 @@ void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t lengt
     char salt_hash[HASH_SIZE];
     init_hash();
     expand_key();
-    randomize_scratchpad_256k(context->random_values, salt, hp_state);
+    randomize_scratchpad_256k_v8(context->random_values, salt, hp_state);
     xor_u64();
 
     _b = _mm_load_si128(R128(b));
@@ -444,7 +444,7 @@ void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t lengt
     char salt_hash[HASH_SIZE];
     init_hash();
     expand_key();
-    randomize_scratchpad_256k(context->random_values, salt, hp_state);
+    randomize_scratchpad_256k_v8(context->random_values, salt, hp_state);
     xor_u64();
 
     uint16_t temp_1 = 0;

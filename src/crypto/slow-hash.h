@@ -157,6 +157,48 @@ static BOOL SetLockPagesPrivilege(HANDLE hProcess, BOOL bEnable)
  * identical on unsigned. It is also the more uniform of the two: `a` is
  * uint16_t and 65536 divides by 4 exactly, where `% 3` leans very slightly
  * toward Blake. */
+/* Pad size and salt stride are coupled, and the coupling is deliberate even
+ * though nothing in the tree says so. The sweep below steps the salt once per
+ * offset_2 pad bytes, so the worst case consumes CN_SCRATCHPAD_MEMORY divided
+ * by the SMALLEST stride, and that has to land on CN_SALT_MEMORY exactly or
+ * the sweep reads past the salt.
+ *
+ * The project has already done this once by hand. When the pad was briefly
+ * 3 MB in December 2018 the line read `(offset_2 % 117) + 12`, minimum stride
+ * 12; when it was reverted to 1 MB it became `((temp_1 * offset_1) % 125) + 4`,
+ * minimum 4. The salt was 262144 bytes in both trees, and 3145728/12 and
+ * 1048576/4 are both exactly 262144. The maximum stayed at 128 in both. The
+ * macro names carry the same invariant: randomize_scratchpad_256k steps 4 over
+ * a 1 MB pad, which is 262144 salt bytes, and the _4k variant steps 256.
+ *
+ * So the minimum stride scales with the pad and the modulus follows from it.
+ * Deriving both here rather than hardcoding them means a pad change cannot
+ * silently reintroduce the out-of-bounds read, and at 1 MB these reduce to the
+ * shipped constants 4 and 125, so v8 at 1 MB is unchanged.
+ *
+ * Wrapping the salt index instead would also stay in bounds and is what
+ * contrib/hf14checks/v5pad.inc does, correctly, for a benchmark. It is the
+ * wrong answer for consensus: at 4 MB it makes the salt repeat four times per
+ * sweep, which is a different algorithm with less entropy per pad byte rather
+ * than the same one resized. */
+#define CN_V8_SALT_STEP  (CN_SCRATCHPAD_MEMORY / CN_SALT_MEMORY)
+#define CN_V8_STRIDE_MOD (129 - CN_V8_SALT_STEP)
+
+/* Pin the invariant at compile time. A pad that breaks any of these does not
+ * produce a slower hash, it produces an out-of-bounds salt read, so it must
+ * not be possible to build one by editing a constant. */
+_Static_assert(CN_SCRATCHPAD_MEMORY % CN_SALT_MEMORY == 0,
+               "v8 pad must be a whole multiple of the salt, or the sweep leaves salt bytes unused or runs past the end");
+_Static_assert(CN_V8_SALT_STEP >= 1 && CN_V8_SALT_STEP <= 128,
+               "v8 pad implies a salt stride outside [1,128]; the sweep's maximum stride is 128");
+_Static_assert(CN_SCRATCHPAD_MEMORY % 128 == 0,
+               "v8 pad must be a multiple of 128: expand_key and finalize_hash walk it in init_size_byte blocks of up to 128, and a tail no AES fill writes would be hashed as whatever the allocator left there");
+/* The derivation has to reproduce the shipped constants at the shipped size,
+ * or this stopped being a generalisation of v8 and became a change to it. */
+_Static_assert(CN_SCRATCHPAD_MEMORY != 1048576
+               || (CN_V8_SALT_STEP == 4 && CN_V8_STRIDE_MOD == 125),
+               "at a 1 MB pad the derived stride must be exactly the shipped (% 125) + 4");
+
 #define salt_pad_v8(salt, salt_hash, a, b, c, d)       \
     extra_hashes[a & 3](salt, 200, salt_hash);         \
     temp_1 = (uint16_t)(iters ^ (b ^ c));              \
@@ -165,9 +207,19 @@ static BOOL SetLockPagesPrivilege(HANDLE hProcess, BOOL bEnable)
         (salt)[offset_1 + j] ^= (salt_hash)[j];        \
     x = 0;                                             \
     offset_1 = (d % 64) + 1;                           \
-    offset_2 = ((temp_1 * offset_1) % 125) + 4;        \
+    offset_2 = ((temp_1 * offset_1) % CN_V8_STRIDE_MOD) + CN_V8_SALT_STEP;  \
     for (j = offset_1; j < CN_SCRATCHPAD_MEMORY; j += offset_2)      \
         hp_state[j] ^= (salt)[x++];
+
+/* v8's pad init. The shipped randomize_scratchpad_256k steps the salt once per
+ * 4 pad bytes, which consumes exactly CN_SALT_MEMORY at 1 MB and overruns it at
+ * anything larger; step with the pad instead, for the same reason as above. At
+ * 1 MB CN_V8_SALT_STEP is 4 and this is the shipped macro. */
+#define randomize_scratchpad_256k_v8(r, salt, scratchpad)                   \
+    uint32_t x = 0;                                                         \
+    for (uint32_t i = 0; i < CN_SCRATCHPAD_MEMORY; i += CN_V8_SALT_STEP)    \
+        scratchpad[i] ^= salt[x++];                                         \
+    randomize_scratchpad(r, scratchpad);
 
 #define randomize_scratchpad(r, scratchpad)            \
     for (int i = 0; i < CN_RANDOM_VALUES; i++)         \

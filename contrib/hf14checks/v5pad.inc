@@ -87,7 +87,23 @@ _Static_assert((CN_SALT_MEMORY & (CN_SALT_MEMORY - 1)) == 0,
 #endif
 
 #define V5PAD_BLOCKS (CN_SCRATCHPAD_MEMORY / AES_BLOCK_SIZE)
+
+/* The wrap exists so v5, whose salt stride is hardcoded for a 1 MB pad, can be
+   benchmarked at larger sizes without reading past the salt. At exactly 1 MB it
+   is a provable no-op: the index never reaches the mask.
+
+   It is identity there rather than a redundant AND, and that is not a
+   micro-optimisation. The 1 MB "ctl" row is the control for the whole
+   comparison, and it is only a control if it is the same code as the shipped
+   function. Once v8 became pad-aware and stopped needing the wrap at all, a
+   wrap left on v5 alone turned the 1 MB v5-against-v8 comparison into wrapped
+   against unwrapped, which overstated v8 by 3 to 5 points on the two narrower
+   cores and tripped the harness's own consistency check. */
+#if CN_SCRATCHPAD_MEMORY == 1048576
+#define V5PAD_SALT_WRAP(i) (i)
+#else
 #define V5PAD_SALT_WRAP(i) ((i) & (uint32_t)(CN_SALT_MEMORY - 1))
+#endif
 
 #if defined(V5PAD_MOD)
 #undef state_index
@@ -118,25 +134,17 @@ _Static_assert((V5PAD_BLOCKS & (V5PAD_BLOCKS - 1)) == 0,
     for (j = offset_1; j < CN_SCRATCHPAD_MEMORY; j += offset_2) \
         hp_state[j] ^= (salt)[V5PAD_SALT_WRAP(x++)];
 
-/* CNA v8's salt_pad needs the same wrap for the same reason. Without this the
- * v14 compilations would keep the unwrapped macro from slow-hash.h and read
- * past the salt at any pad above 1 MB: the sweep steps the salt once per
- * offset_2 pad bytes, and offset_2's minimum of 4 is what makes 1 MB consume
- * exactly CN_SALT_MEMORY and no more. At 4 MB it would index four times that.
+/* v8 needs no override here. Its macros in slow-hash.h derive the salt stride
+ * and the pad-init step from CN_SCRATCHPAD_MEMORY, which this file has already
+ * redefined to V5PAD_BYTES above, so the resized v8 compilations pick up the
+ * correct stride for their pad on their own.
  *
- * Only the selector differs from the macro above, `a & 3` against `a % 3`,
- * which is the whole of CNA v8 and the thing these rows exist to measure. */
-#undef salt_pad_v8
-#define salt_pad_v8(salt, salt_hash, a, b, c, d)                \
-    extra_hashes[a & 3](salt, 200, salt_hash);                  \
-    temp_1 = (uint16_t)(iters ^ (b ^ c));                       \
-    offset_1 = temp_1 * ((d % 3) + 1);                          \
-    for (j = 0; j < 32; j++)                                    \
-        (salt)[offset_1 + j] ^= (salt_hash)[j];                 \
-    x = 0;                                                      \
-    offset_1 = (d % 64) + 1;                                    \
-    offset_2 = ((temp_1 * offset_1) % 125) + 4;                 \
-    for (j = offset_1; j < CN_SCRATCHPAD_MEMORY; j += offset_2) \
-        hp_state[j] ^= (salt)[V5PAD_SALT_WRAP(x++)];
+ * That is the point: v5 needs the wrap below because its stride is hardcoded
+ * for a 1 MB pad, while v8 is pad-aware, so these rows measure exactly the
+ * algorithm that ships rather than a wrapped approximation of it. If a
+ * salt_pad_v8 override ever reappears here, the benchmark and the daemon have
+ * diverged.
+ */
+
 
 #include "crypto/slow-hash-impl.h"
