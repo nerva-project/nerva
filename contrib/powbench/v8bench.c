@@ -60,6 +60,12 @@
  *   see build-v8bench.sh next to this file
  */
 
+/* before any system header: sched_getcpu() is a GNU extension, and glibc and
+ * bionic both hide it without this */
+#if !defined(_GNU_SOURCE)
+#  define _GNU_SOURCE 1
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,6 +80,7 @@
 #include <unistd.h>
 #if !defined(_WIN32)
 #  include <sys/ioctl.h>
+#  include <sched.h>
 #endif
 #if defined(__ANDROID__)
 #  include <sys/system_properties.h>
@@ -520,9 +527,16 @@ static void detect_narrow(void)
 
 #if defined(TIOCGWINSZ)
     {
+        /* Try stderr and stdin as well as stdout. The first version asked only
+         * about stdout, so piping into grep, which is exactly what the pinned
+         * run script does, made the width unknown and silently produced the
+         * wide layout on a phone. stderr is still the terminal in that case. */
+        static const int fds[3] = { 1, 2, 0 };
         struct winsize ws;
-        if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
-            cols = (unsigned)ws.ws_col;
+        int i;
+        for (i = 0; i < 3 && cols == 0; i++)
+            if (ioctl(fds[i], TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
+                cols = (unsigned)ws.ws_col;
     }
 #endif
     if (cols == 0) {
@@ -532,6 +546,42 @@ static void detect_narrow(void)
     /* An unknown width is assumed wide: a desktop redirecting to a file is far
      * more common than a phone that reports nothing. */
     g_narrow = (cols > 0 && cols < 60);
+}
+
+/* Report the affinity mask and the core actually in use, because a pinned run
+ * that was not really pinned is worse than no pinned run: it produces numbers
+ * that look like core-type measurements and are not. Android confines apps to a
+ * cpuset, so a taskset request can be rejected or silently overridden, and the
+ * first pinned run on a phone returned an ordering by core class that is not
+ * physically possible. This is how that gets caught rather than interpreted. */
+static void print_affinity(void)
+{
+#if defined(__linux__) || defined(__ANDROID__)
+    FILE *f = fopen("/proc/self/status", "r");
+    char line[256];
+
+    if (f == NULL) return;
+    while (fgets(line, sizeof(line), f) != NULL) {
+        if (strncmp(line, "Cpus_allowed_list:", 18) == 0) {
+            char *v = line + 18;
+            while (*v == ' ' || *v == '\t') v++;
+            v[strcspn(v, "\r\n")] = '\0';
+            printf("cpus allowed: %s\n", v);
+            break;
+        }
+    }
+    fclose(f);
+#endif
+}
+
+/* Which core the work is on right now. Called after the timed groups so it
+ * reports where the benchmark ran, not where main() started. */
+static void print_running_cpu(void)
+{
+#if (defined(__linux__) || defined(__ANDROID__)) && defined(_GNU_SOURCE)
+    const int c = sched_getcpu();
+    if (c >= 0) printf("  ran on cpu%d\n", c);
+#endif
 }
 
 /* The SWEEP and SCALE lines are meant to be transcribed, so the narrow form
@@ -590,6 +640,7 @@ int main(int argc, char **argv)
         printf(g_narrow ? "CNA v8 vs CNA v5\n"
                         : "CNA v8 (Skein in salt_pad) against CNA v5\n");
         printf("CPU: %s\n", brand);
+        print_affinity();
 
         /* Both stamps, because results come back as screenshots from several
          * machines over several days. The run time says when a number was
@@ -748,6 +799,7 @@ int main(int argc, char **argv)
             cpu_brand(brand);
             for (p = brand; *p; p++) if (*p == ' ') *p = '_';
             tag_line("SWEEP", brand, "", "ms", v8ms, 4);
+            print_running_cpu();
         }
 
         /* Thread scaling. Sized from the single-thread times just measured, so
@@ -776,7 +828,13 @@ int main(int argc, char **argv)
              * SMT, which holds for all four machines in the set.
              *
              * Override with a third argument, e.g. v8bench 2000 600 1,6,12,14,16 */
-            if (argc > 3) {
+            /* A thread count of 0 means skip this section. When the run is
+             * pinned to one core there is nothing to scale, and skipping it
+             * keeps the output short enough to read on a phone without a grep
+             * filter deciding which numbers survive. */
+            if (argc > 3 && argv[3][0] == '0' && argv[3][1] == '\0') {
+                ntc = 0;
+            } else if (argc > 3) {
                 const char *q = argv[3];
                 while (*q && ntc < 12) {
                     unsigned v = (unsigned)atoi(q);
@@ -809,7 +867,10 @@ int main(int argc, char **argv)
              * background load, and why OS thread placement muddies a multi-CCD
              * part, is in the comment above bench_threads rather than reprinted
              * on every run. */
-            if (g_narrow) {
+            if (ntc == 0) {
+                /* nothing to scale; v8ms still holds single-thread ms, which
+                 * would make the SCALE line lie, so it is not printed either */
+            } else if (g_narrow) {
                 printf("\n  thread scaling, total H/s, %u CPUs\n", hw);
                 printf("  (peak matters; tail is noisy)\n");
             } else {
@@ -819,7 +880,7 @@ int main(int argc, char **argv)
                 printf("  %s\n", "peak");
             }
 
-            for (si = 0; si < 4; si++)
+            for (si = 0; si < 4 && ntc > 0; si++)
             {
                 double best = 0.0, one = 0.0;
                 unsigned n, best_t = 0;
@@ -856,7 +917,7 @@ int main(int argc, char **argv)
                 v8ms[si] = best;   /* reuse the slot to carry peak H/s to the SCALE line */
             }
 
-            {
+            if (ntc > 0) {
                 char brand[49]; char *p; char extra[24];
                 cpu_brand(brand);
                 for (p = brand; *p; p++) if (*p == ' ') *p = '_';
