@@ -702,6 +702,59 @@ namespace cryptonote
   }
   //---------------------------------------------------------------
   //---------------------------------------------------------------
+  bool get_block_longhash_v14(crypto::cn_hash_context_t *context, BlockchainDB &db, const blobdata &blob, crypto::hash &res, uint64_t height)
+  {
+    // CryptoNight-Adaptive v8: v5 at v5's pad, with salt_pad's extra-hash
+    // selector widened from three entries to four. Mirrors
+    // get_block_longhash_v11 except for the chain fill, which is v6's.
+    if (height < CN_SEED_MIN_HEIGHT)
+      return false;
+    const uint64_t stable_height = height - 256;
+
+    // Fetch with v8's bound every call, never via cached_height: that cache is
+    // shared with v13, whose bound is 8 MB, and around the fork one context can
+    // hash both versions at the same height on competing chains. A stale
+    // v13-bounded set would index past this pad and split the chain. Invalidate
+    // it too, so a following v13 hash refetches with its own bound.
+    db.get_cna_v2_data(&context->random_values, stable_height, CN_SCRATCHPAD_MEMORY_V8);
+    context->cached_height = (uint64_t)-1;
+
+    // Make the hashing context unique per nonce by seeding it with a hash
+    // of the hashing blob for a given nonce.
+    crypto::hash h;
+    get_blob_hash(blob, h);
+
+    HC128_State rng_state;
+    HC128_Init(&rng_state, (unsigned char*)h.data, (unsigned char*)h.data+16);
+
+    // v6's windowed fill: ~95% of block reads come from the most recent
+    // CNA_V6_WINDOW_BLOCKS so they stay cache-resident, which stops per-nonce
+    // cost growing with chain length. The other ~5% still draw from the whole
+    // history, so a miner still needs the full block cache. That was a sync
+    // fix, independent of which hash follows it.
+    db.get_cna_v6_data(context->salt, &rng_state, stable_height);
+
+    // Drawn AFTER the fill, and that ordering is load-bearing: get_cna_v6_data
+    // re-seeds its HC128 state from bytes it has written, so these depend on the
+    // salt's content and cannot be reached by fast-forwarding the keystream.
+    // That is what makes v5's variable work per nonce safe. FINDINGS.md F5.
+    HC128_NextKeys(&rng_state);
+    size_t rng_key_idx = 0;
+    // xx: [4, 8]
+    const uint32_t xx = (uint32_t)4U + HC128_U32(&rng_state, &rng_key_idx, 5U);
+    // yy: [4, 8]
+    const uint32_t yy = (uint32_t)4U + HC128_U32(&rng_state, &rng_key_idx, 5U);
+    // init_size_blk: 2, 4, or 8  (2 << [0, 2])
+    const uint8_t init_size_blk = (uint8_t)2U << ((uint8_t)HC128_U32(&rng_state, &rng_key_idx, 3U));
+    // iters_divisor: [1, 64]
+    const uint32_t iters_divisor = (uint32_t)1U + HC128_U32(&rng_state, &rng_key_idx, 64U);
+    const uint32_t iters = ((height + 1) % iters_divisor);
+
+    crypto::cn_slow_hash_v14(context, blob.data(), blob.size(), res, iters, init_size_blk, xx, yy);
+
+    return true;
+  }
+  //---------------------------------------------------------------
   bool get_block_longhash(crypto::cn_hash_context_t *context, BlockchainDB &db, const uint8_t major_version, const blobdata &blob, crypto::hash &res, const uint64_t height)
   {
     if (major_version < 7)
@@ -725,11 +778,13 @@ namespace cryptonote
       case 11:
       case 12:
         return get_block_longhash_v11(context, db, blob, res, height);
-      default:
-        // >= 13: CryptoNight-Adaptive v6. CNA v7 was written for HF14 but was
-        // never released: it did not perform, so it was removed rather than
-        // shipped. HF14 stays on v6 until its replacement lands.
+      case 13:
         return get_block_longhash_v13(context, db, blob, res, height);
+      default:
+        // >= 14: CryptoNight-Adaptive v8. CNA v7 was written for this same fork
+        // but was never released: it did not perform, so it was removed rather
+        // than shipped, and v8 took its slot.
+        return get_block_longhash_v14(context, db, blob, res, height);
     }
   }
   //---------------------------------------------------------------
