@@ -1,8 +1,23 @@
 #!/bin/sh
 # Build v8bench as a single executable that runs on a machine with no toolchain
-# and no nerva build tree. Run from the repo root:
+# and no nerva build tree. Run it from anywhere:
 #
 #   sh contrib/powbench/build-v8bench.sh
+#
+# Every source path below is relative to the repo root, so the script puts
+# itself there rather than requiring you to be there. Running it from its own
+# directory used to fail with two dozen "no such file or directory" lines, which
+# is a poor greeting on a machine where someone has just cloned the tree.
+#
+# Prerequisites: a C compiler and Boost's headers. Boost is not optional even
+# though nothing here uses Boost: hash-ops.h includes epee's warnings.h, which
+# includes boost/preprocessor/stringize.hpp, and every source below includes
+# hash-ops.h. On Termux that is:
+#
+#   pkg install clang boost-headers
+#
+# Distributions usually call it libboost-dev or boost-devel. Headers only;
+# nothing is linked against Boost.
 #
 # Two flags are not optional and the binary is wrong without them:
 #
@@ -29,6 +44,8 @@
 # Everything else is deliberately identical, because the point of this harness
 # is that both architectures run the same measured function.
 set -e
+
+cd "$(dirname "$0")/../.." || exit 1
 
 case "${ARCH:-$(uname -m)}" in
     aarch64 | arm64)
