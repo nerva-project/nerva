@@ -340,14 +340,27 @@ machine gives a different control figure run to run (7950X 1.46% then 2.21%,
 laptop 2.73% then 1.07%). A systematic difference between two builds of the
 same source would not move like that.
 
-*How to fix it:* interleave `ref` and `ctl` the same way the variants are
-interleaved, so the control measures what it claims to. Until then read the
-control as an upper bound on drift and treat the paired v5/v8 numbers as sound
-even when it trips. The 5600X row above is good data.
+*Fixed:* `bench_pair` became `bench_group`, taking k variants and interleaving
+all of them within each sample on identical parameters. All four 1 MB variants
+now go through one pass together, so the control is measured the same way as
+the comparison it is the control for. At 1 MB the resized build reads the same
+context scratchpad as the shipped one, so no separate pad is needed and the
+four genuinely can share the loop. The running order also rotates per sample,
+so no variant is always first against a cold pad.
 
-*Kept as a finding rather than silently patched* because the harness has
-already been distributed and its output is in three screenshots; anyone
-re-reading those needs to know which number to believe.
+Same machine, same binary otherwise, 7950X:
+
+    control  before 1.46% and 2.21% (two runs)   after 0.65%
+
+*Read the pre-fix numbers with this in mind.* The paired v5-against-v8 figures
+in F18 were always sound, since those were interleaved from the start; it was
+only the control, and therefore the gate scaled to it, that was inflated. The
+5600X row is good data and its UNUSABLE verdict was a false alarm.
+
+One figure did move after the fix: 4 MB went from +0.07% to -0.79% on the
+7950X. The 4 MB pair was already interleaved, so the only change was the order
+rotation, which is consistent with it having removed a bias favouring whichever
+variant ran first. It is one run and worth re-measuring across the set.
 
 ### F19. Interleaving is what made Phase 1 measurable
 

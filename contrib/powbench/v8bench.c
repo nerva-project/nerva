@@ -156,10 +156,21 @@ static struct params draw(void)
 
 struct result { double mean_ms, min_ms, max_ms; };
 
-/* One interleaved pass: for each sample, the same parameters are handed to a
- * and then to b, and both times are recorded. */
-static void bench_pair(hashfn fa, hashfn fb, size_t pad_bytes, unsigned n,
-                       struct result *ra, struct result *rb, int *ok)
+/* One interleaved pass over k variants: each sample draws its parameters once
+ * and hands the same ones to every variant in turn, recording each.
+ *
+ * Everything compared here has to go through this together. An earlier version
+ * interleaved v5 against v8 but measured ref against ctl in separate passes,
+ * so drift cancelled in the first comparison and not in the second. The
+ * control then read as noise the paired figures did not have, and on one
+ * machine tripped a "too noisy to use" guard while its paired numbers were
+ * in line with every other box. The control has to be measured the same way
+ * as the thing it is the control for.
+ *
+ * The starting variant rotates each sample, so no variant always runs first
+ * against a cold pad or last against a warm one. */
+static void bench_group(hashfn *fns, struct result *res, unsigned k,
+                        size_t pad_bytes, unsigned n, int *ok)
 {
     cn_hash_context_t *ctx = cn_hash_context_create();
     uint8_t *own = NULL, *saved = NULL;
@@ -185,32 +196,30 @@ static void bench_pair(hashfn fa, hashfn fb, size_t pad_bytes, unsigned n,
         ctx->scratchpad = own;
     }
 
-    ra->mean_ms = rb->mean_ms = 0.0;
-    ra->min_ms = rb->min_ms = 1e30;
-    ra->max_ms = rb->max_ms = 0.0;
+    for (i = 0; i < k; i++) {
+        res[i].mean_ms = 0.0;
+        res[i].min_ms  = 1e30;
+        res[i].max_ms  = 0.0;
+    }
 
     for (i = 0; i < n; i++)
     {
         const struct params p = draw();
-        double t0, ms;
+        unsigned j;
 
-        t0 = now_sec();
-        fa(ctx, blob, sizeof(blob) - 1, out, p.iters, p.blk, p.xx, p.yy);
-        ms = (now_sec() - t0) * 1e3;
-        ra->mean_ms += ms;
-        if (ms < ra->min_ms) ra->min_ms = ms;
-        if (ms > ra->max_ms) ra->max_ms = ms;
-
-        t0 = now_sec();
-        fb(ctx, blob, sizeof(blob) - 1, out, p.iters, p.blk, p.xx, p.yy);
-        ms = (now_sec() - t0) * 1e3;
-        rb->mean_ms += ms;
-        if (ms < rb->min_ms) rb->min_ms = ms;
-        if (ms > rb->max_ms) rb->max_ms = ms;
+        for (j = 0; j < k; j++)
+        {
+            const unsigned v = (i + j) % k;   /* rotate the running order */
+            double t0 = now_sec(), ms;
+            fns[v](ctx, blob, sizeof(blob) - 1, out, p.iters, p.blk, p.xx, p.yy);
+            ms = (now_sec() - t0) * 1e3;
+            res[v].mean_ms += ms;
+            if (ms < res[v].min_ms) res[v].min_ms = ms;
+            if (ms > res[v].max_ms) res[v].max_ms = ms;
+        }
     }
 
-    ra->mean_ms /= n;
-    rb->mean_ms /= n;
+    for (i = 0; i < k; i++) res[i].mean_ms /= n;
 
     if (pad_bytes) { ctx->scratchpad = saved; free(own); }
     cn_hash_context_free(ctx);
@@ -228,7 +237,7 @@ int main(int argc, char **argv)
     const unsigned n1 = argc > 1 ? (unsigned)atoi(argv[1]) : 2000;
     const unsigned n4 = argc > 2 ? (unsigned)atoi(argv[2]) : 600;
     struct result v5ref, v8ref, v5ctl, v8ctl, v5p4, v8p4;
-    int ok1, ok2, ok3;
+    int ok1, ok2;
     double ctl_noise, d1, d4, gate;
 
     {
@@ -248,14 +257,28 @@ int main(int argc, char **argv)
     printf("samples: %u per variant at 1 MB, %u at 4 MB, interleaved\n\n", n1, n4);
     printf("Close other programs first. This measures single-thread verify cost.\n\n");
 
-    rng_state = 0x9E3779B9u;
-    bench_pair(cn_slow_hash_v11,    cn_slow_hash_v14,    0,            n1, &v5ref, &v8ref, &ok1);
-    rng_state = 0x9E3779B9u;
-    bench_pair(cn_slow_hash_v11_p1, cn_slow_hash_v14_p1, 1024ull*1024, n1, &v5ctl, &v8ctl, &ok2);
-    rng_state = 0x9E3779B9u;
-    bench_pair(cn_slow_hash_v11_p4, cn_slow_hash_v14_p4, 4096ull*1024, n4, &v5p4,  &v8p4,  &ok3);
+    /* All four 1 MB variants go through one interleaved pass, so the control
+     * (ref against ctl) is measured under the same conditions as the
+     * comparison it is the control for. At 1 MB the resized build reads the
+     * same context scratchpad the shipped one does, so no separate pad is
+     * needed and all four can share the loop. 4 MB has no shipped counterpart,
+     * so it stays a pair against its own buffer. */
+    {
+        hashfn one_mb[4] = { cn_slow_hash_v11,    cn_slow_hash_v14,
+                             cn_slow_hash_v11_p1, cn_slow_hash_v14_p1 };
+        hashfn four_mb[2] = { cn_slow_hash_v11_p4, cn_slow_hash_v14_p4 };
+        struct result r1[4], r4[2];
 
-    if (!ok1 || !ok2 || !ok3) { printf("setup failed (out of memory?)\n"); return 1; }
+        rng_state = 0x9E3779B9u;
+        bench_group(one_mb, r1, 4, 0, n1, &ok1);
+        rng_state = 0x9E3779B9u;
+        bench_group(four_mb, r4, 2, 4096ull*1024, n4, &ok2);
+
+        if (!ok1 || !ok2) { printf("setup failed (out of memory?)\n"); return 1; }
+
+        v5ref = r1[0]; v8ref = r1[1]; v5ctl = r1[2]; v8ctl = r1[3];
+        v5p4  = r4[0]; v8p4  = r4[1];
+    }
 
     printf("  %-14s %9s %9s %9s %10s\n", "VARIANT", "mean ms", "min ms", "max ms", "H/s (1T)");
     row("v5 1MB ref", &v5ref); row("v8 1MB ref", &v8ref);
