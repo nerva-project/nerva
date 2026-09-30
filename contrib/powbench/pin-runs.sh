@@ -62,7 +62,18 @@ echo "core groups:$cores"
 echo "this machine allows: $(grep Cpus_allowed_list /proc/self/status 2>/dev/null | awk '{print $2}')"
 echo
 
+# Android demotes a backgrounded app's cpuset, which moves a pinned run onto a
+# different core class partway through. A wake lock is the one thing that
+# reliably prevents it, and it is released again below.
+held_lock=""
+if command -v termux-wake-lock >/dev/null 2>&1; then
+    termux-wake-lock && held_lock=1
+    echo "holding a wake lock; keep Termux in the foreground"
+    trap 'termux-wake-unlock >/dev/null 2>&1 || true' EXIT INT TERM
+fi
+
 first=1
+tainted=""
 for entry in $cores; do
     n=${entry%:*}
     f=${entry#*:}
@@ -82,8 +93,22 @@ for entry in $cores; do
     # Thread count 0 skips the scaling pass, which measures nothing on one core.
     # No grep: the narrow layout is short enough to read whole, and filtering
     # here is what dropped the hash-rate tables last time.
-    taskset -c "$n" "$BENCH" 2000 600 0
+    #
+    # Exit 2 means the benchmark caught itself being moved to another core. That
+    # taints one block, not the run, so keep going rather than letting set -e
+    # abandon the cores that have not been measured yet.
+    rc=0
+    taskset -c "$n" "$BENCH" 2000 600 0 || rc=$?
+    if [ "$rc" != "0" ] && [ "$rc" != "2" ]; then
+        echo "benchmark failed on cpu$n (exit $rc)" >&2
+        exit "$rc"
+    fi
+    [ "$rc" = "2" ] && tainted="$tainted cpu$n"
     echo
 done
+
+if [ -n "$tainted" ]; then
+    echo "TAINTED, re-measure these:$tainted"
+fi
 
 echo "Send the whole output. One block per core type."

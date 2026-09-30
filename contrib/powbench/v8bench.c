@@ -548,40 +548,120 @@ static void detect_narrow(void)
     g_narrow = (cols > 0 && cols < 60);
 }
 
-/* Report the affinity mask and the core actually in use, because a pinned run
- * that was not really pinned is worse than no pinned run: it produces numbers
- * that look like core-type measurements and are not. Android confines apps to a
- * cpuset, so a taskset request can be rejected or silently overridden, and the
- * first pinned run on a phone returned an ordering by core class that is not
- * physically possible. This is how that gets caught rather than interpreted. */
-static void print_affinity(void)
-{
-#if defined(__linux__) || defined(__ANDROID__)
-    FILE *f = fopen("/proc/self/status", "r");
-    char line[256];
+/* Placement tracking.
+ *
+ * A pinned run that was not really pinned is worse than no pinned run: it
+ * produces numbers that look like core-type measurements and are not. Verifying
+ * the affinity before starting is not enough, because Android can change a
+ * task's cpuset mid-run. A Pixel 7a pinned to cpu0 produced a pad sweep reading
+ * 1MB=7.2695 2MB=13.2546 4MB=6.9353, cost falling as the pad quadrupled,
+ * because it started on an A55 and finished on a big core. Nothing in the
+ * output said so; it had to be caught by eye. This catches it instead. */
+static char g_aff_start[64];
+static int  g_cpu_start = -1;
+static int  g_pinned;
+static int  g_tainted;
+static char g_taint[192];
 
-    if (f == NULL) return;
-    while (fgets(line, sizeof(line), f) != NULL) {
-        if (strncmp(line, "Cpus_allowed_list:", 18) == 0) {
-            char *v = line + 18;
-            while (*v == ' ' || *v == '\t') v++;
-            v[strcspn(v, "\r\n")] = '\0';
-            printf("cpus allowed: %s\n", v);
-            break;
+static void read_affinity(char *out, size_t n)
+{
+    out[0] = '\0';
+#if defined(__linux__) || defined(__ANDROID__)
+    {
+        FILE *f = fopen("/proc/self/status", "r");
+        char line[256];
+        if (f == NULL) return;
+        while (fgets(line, sizeof(line), f) != NULL) {
+            if (strncmp(line, "Cpus_allowed_list:", 18) == 0) {
+                char *v = line + 18;
+                while (*v == ' ' || *v == '\t') v++;
+                v[strcspn(v, "\r\n")] = '\0';
+                snprintf(out, n, "%s", v);
+                break;
+            }
         }
+        fclose(f);
     }
-    fclose(f);
+#else
+    (void)n;
 #endif
 }
 
-/* Which core the work is on right now. Called after the timed groups so it
- * reports where the benchmark ran, not where main() started. */
-static void print_running_cpu(void)
+static int current_cpu(void)
 {
 #if (defined(__linux__) || defined(__ANDROID__)) && defined(_GNU_SOURCE)
-    const int c = sched_getcpu();
-    if (c >= 0) printf("  ran on cpu%d\n", c);
+    return sched_getcpu();
+#else
+    return -1;
 #endif
+}
+
+static void placement_baseline(void)
+{
+    read_affinity(g_aff_start, sizeof(g_aff_start));
+    /* "6" is pinned; "0-7" and "0,4" are not. An unpinned thread moving between
+     * cores is normal scheduling and must not be reported as a fault, so the
+     * core-moved test below applies only when the mask names one core. */
+    g_pinned = (g_aff_start[0] != '\0' &&
+                strchr(g_aff_start, '-') == NULL &&
+                strchr(g_aff_start, ',') == NULL);
+    g_cpu_start = current_cpu();
+
+    if (g_aff_start[0] != '\0') printf("cpus allowed: %s\n", g_aff_start);
+}
+
+static void placement_check(const char *where)
+{
+    char now[64];
+    const int cpu = current_cpu();
+
+    read_affinity(now, sizeof(now));
+
+    /* The mask changing under a running process is always wrong, pinned or not:
+     * nothing in this program asks for it. */
+    if (g_aff_start[0] != '\0' && now[0] != '\0' &&
+        strcmp(now, g_aff_start) != 0 && !g_tainted) {
+        snprintf(g_taint, sizeof(g_taint),
+                 "cpus allowed changed from %s to %s during %s",
+                 g_aff_start, now, where);
+        g_tainted = 1;
+    }
+    if (g_pinned && g_cpu_start >= 0 && cpu >= 0 && cpu != g_cpu_start &&
+        !g_tainted) {
+        snprintf(g_taint, sizeof(g_taint),
+                 "pinned to cpu%d but running on cpu%d by %s",
+                 g_cpu_start, cpu, where);
+        g_tainted = 1;
+    }
+}
+
+/* Cost must rise with the pad. A sweep that falls has measured more than one
+ * kind of core, whatever the affinity says, so it is checked on its own rather
+ * than trusting the placement probes to have noticed. */
+static void check_monotonic(const double ms[4])
+{
+    static const char *const names[4] = { "1 MB", "2 MB", "4 MB", "8 MB" };
+    int i;
+    for (i = 1; i < 4; i++) {
+        if (ms[i] > 0.0 && ms[i-1] > 0.0 && ms[i] < ms[i-1] && !g_tainted) {
+            snprintf(g_taint, sizeof(g_taint),
+                     "%s (%.4f ms) came out cheaper than %s (%.4f ms)",
+                     names[i], ms[i], names[i-1], ms[i-1]);
+            g_tainted = 1;
+        }
+    }
+}
+
+static int g_taint_printed;
+
+static void print_taint(void)
+{
+    if (!g_tainted || g_taint_printed) return;
+    g_taint_printed = 1;
+    printf("\n  *** TAINTED: %s\n", g_taint);
+    printf("  *** These numbers mix more than one core. Discard them.\n");
+    printf("  *** On Android, run termux-wake-lock and keep Termux\n");
+    printf("  *** in the foreground, then measure again.\n");
 }
 
 /* The SWEEP and SCALE lines are meant to be transcribed, so the narrow form
@@ -640,7 +720,7 @@ int main(int argc, char **argv)
         printf(g_narrow ? "CNA v8 vs CNA v5\n"
                         : "CNA v8 (Skein in salt_pad) against CNA v5\n");
         printf("CPU: %s\n", brand);
-        print_affinity();
+        placement_baseline();
 
         /* Both stamps, because results come back as screenshots from several
          * machines over several days. The run time says when a number was
@@ -787,7 +867,13 @@ int main(int argc, char **argv)
                        1000.0 / r[1].mean_ms,
                        (r[1].mean_ms - r[0].mean_ms) / r[0].mean_ms * 100.0,
                        sweep[si].n);
+
+            /* per row, not once at the end: this is what says which rows are
+             * still good when a run is moved partway through */
+            placement_check(sweep[si].name);
         }
+
+        check_monotonic(v8ms);
 
         /* Cross-CPU spread is slowest divided by fastest at each pad, so it
          * cannot be computed by any single run. Results come back from four
@@ -799,7 +885,11 @@ int main(int argc, char **argv)
             cpu_brand(brand);
             for (p = brand; *p; p++) if (*p == ' ') *p = '_';
             tag_line("SWEEP", brand, "", "ms", v8ms, 4);
-            print_running_cpu();
+            {
+                const int c = current_cpu();
+                if (c >= 0) printf("  ran on cpu%d\n", c);
+            }
+            print_taint();
         }
 
         /* Thread scaling. Sized from the single-thread times just measured, so
@@ -1009,9 +1099,14 @@ int main(int argc, char **argv)
                    v8_ship_vs_recomp);
     }
 
+    /* Checked again here, because the variant groups run after the sweep and a
+     * move during them would otherwise go unreported. */
+    placement_check("the variant groups");
+    print_taint();
+
     if (g_narrow)
         printf("\n  Report the SWEEP line plus these\n  verdict lines.\n");
     else
         printf("\n  Please report the SWEEP line above, plus these verdict lines.\n");
-    return 0;
+    return g_tainted ? 2 : 0;
 }
