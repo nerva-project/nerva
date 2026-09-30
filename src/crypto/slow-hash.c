@@ -61,6 +61,7 @@ extern void cn_slow_hash_v10_hw(cn_hash_context_t *context, const void *data, si
 extern void cn_slow_hash_v11_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 extern void cn_slow_hash_v13_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
 extern void cn_slow_hash_v14_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
+extern void cn_slow_hash_v15_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 #endif
 
 extern void cn_slow_hash_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters);
@@ -70,6 +71,7 @@ extern void cn_slow_hash_v10_sw(cn_hash_context_t *context, const void *data, si
 extern void cn_slow_hash_v11_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 extern void cn_slow_hash_v13_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
 extern void cn_slow_hash_v14_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
+extern void cn_slow_hash_v15_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 
 /* Runtime CPU detection. Cached in a function-static so the per-hash overhead
  * is one branch on a hot variable. Override with NERVA_FORCE_SOFTWARE_AES=1 to
@@ -173,6 +175,18 @@ void cn_slow_hash_v14(cn_hash_context_t *ctx, const void *data, size_t length, c
     cn_pads_require(ctx, 1, 0);
     CN_DISPATCH(cn_slow_hash_v14_hw(ctx, data, length, hash, iters, init_size_blk, xx, yy),
                 cn_slow_hash_v14_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy));
+}
+
+/* CNA v8 plus PLAN-v8 Phase 2's floating-point stage. A prototype: nothing in
+ * consensus routes here and get_block_longhash has no v15 branch. It exists so
+ * v8bench can measure it against v14 in the same process, on the same pad, with
+ * the same inputs, which is what decides whether Phase 2 ships at all. Same
+ * pads and signature as v14, since it is v14 with a stage appended. */
+void cn_slow_hash_v15(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
+{
+    cn_pads_require(ctx, 1, 0);
+    CN_DISPATCH(cn_slow_hash_v15_hw(ctx, data, length, hash, iters, init_size_blk, xx, yy),
+                cn_slow_hash_v15_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy));
 }
 
 void cn_slow_hash_v13(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, const uint8_t *seed)

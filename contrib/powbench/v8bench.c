@@ -226,6 +226,11 @@ void cn_slow_hash_v14_p2(cn_hash_context_t *, const void *, size_t, char *, size
 void cn_slow_hash_v14_p4(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v14_p8(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 
+/* PLAN-v8 Phase 2 prototype: v8 with the floating-point stage. Declared here
+ * rather than taken from hash-ops.h alongside the others only because it may
+ * not exist in an older tree someone builds this against. */
+void cn_slow_hash_v15(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
+
 static double now_sec(void)
 {
     struct timespec ts;
@@ -704,7 +709,7 @@ int main(int argc, char **argv)
 {
     const unsigned n1 = argc > 1 ? (unsigned)atoi(argv[1]) : 2000;
     const unsigned n4 = argc > 2 ? (unsigned)atoi(argv[2]) : 600;
-    struct result v5ref, v8ref, v5ctl, v8ctl, v5p4, v8p4;
+    struct result v5ref, v8ref, v5ctl, v8ctl, v5p4, v8p4, v15r;
     int ok1, ok2;
     double ctl_noise, d1, d4, gate;
 
@@ -786,22 +791,28 @@ int main(int argc, char **argv)
      * hugepage-backed, while the recompiled ones read a plain malloc buffer,
      * so a small difference is expected and is not a fault in either. */
     {
-        hashfn one_mb[4]  = { cn_slow_hash_v11,       /* shipped v5, 1 MB */
+        /* v15 joins the 1 MB group rather than getting its own pass, because
+         * the whole point of interleaving is that drift cannot land on one
+         * variant and not another. The Phase 2 decision is a difference of a
+         * few percent between v8 and v15 on the same machine, which a separate
+         * pass could manufacture or hide on its own. */
+        hashfn one_mb[5]  = { cn_slow_hash_v11,       /* shipped v5, 1 MB */
                               cn_slow_hash_v11_p1,    /* recompiled v5, 1 MB */
                               cn_slow_hash_v14_p1,    /* recompiled v8, 1 MB */
-                              cn_slow_hash_v14 };     /* shipped v8, 1 MB */
+                              cn_slow_hash_v14,       /* shipped v8, 1 MB */
+                              cn_slow_hash_v15 };     /* v8 + FP stage, 1 MB */
         hashfn four_mb[2] = { cn_slow_hash_v11_p4,    /* recompiled v5, 4 MB */
                               cn_slow_hash_v14_p4 };  /* recompiled v8, 4 MB */
-        struct result r1[4], r4[2];
+        struct result r1[5], r4[2];
 
         rng_state = 0x9E3779B9u;
-        bench_group(one_mb, r1, 4, 1024ull*1024, n1, &ok1);
+        bench_group(one_mb, r1, 5, 1024ull*1024, n1, &ok1);
         rng_state = 0x9E3779B9u;
         bench_group(four_mb, r4, 2, 4096ull*1024, n4, &ok2);
 
         if (!ok1 || !ok2) { printf("setup failed (out of memory?)\n"); return 1; }
 
-        v5ref = r1[0]; v5ctl = r1[1]; v8ctl = r1[2]; v8ref = r1[3];
+        v5ref = r1[0]; v5ctl = r1[1]; v8ctl = r1[2]; v8ref = r1[3]; v15r = r1[4];
         v5p4  = r4[0]; v8p4  = r4[1];
     }
 
@@ -1033,6 +1044,7 @@ int main(int argc, char **argv)
     row("v8 1MB SHIPPED", &v8ref);
     row("v5 4MB recomp",  &v5p4);
     row("v8 4MB recomp",  &v8p4);
+    row("v15 1MB FP",     &v15r);
 
     /* The verdict below was wrong three separate ways and all three are fixed
      * here, because each of them produced a confident and false statement.
@@ -1085,6 +1097,36 @@ int main(int argc, char **argv)
         printf("\n  1 MB: %s      4 MB: %s\n",
                d1 <= gate ? "PASS" : "SLOWER THAN GATE",
                d4 <= gate ? "PASS" : "SLOWER THAN GATE");
+
+        /* Phase 2's number. The gate above asks whether v8 costs more than v5;
+         * this asks what the FP stage costs on top of v8, which is the figure
+         * that goes into the spread arithmetic. It is not a pass or fail: the
+         * stage is meant to cost something, and whether that cost is worth it
+         * is decided across machines, not on one. */
+        {
+            const double dfp = (v15r.mean_ms - v8ref.mean_ms) / v8ref.mean_ms * 100.0;
+            char brand[49];
+            char *q;
+            cpu_brand(brand);
+            for (q = brand; *q; q++) if (*q == ' ') *q = '_';
+
+            if (g_narrow) {
+                printf("\n  FP stage costs %+.2f%% over v8\n", dfp);
+            } else {
+                printf("\n  v15 vs v8 at 1 MB (the FP stage)  = %+.2f%%\n", dfp);
+            }
+            if (g_narrow) {
+                printf("\n  FPSTAGE %s\n", brand);
+                printf("    v8=%.4f v15=%.4f\n",
+                       v8ref.mean_ms, v15r.mean_ms);
+            } else {
+                printf("\n  FPSTAGE %s v8=%.4f v15=%.4f\n",
+                       brand, v8ref.mean_ms, v15r.mean_ms);
+            }
+            printf("  ^ send this too; the spread is computed\n");
+            printf("  across machines, not here.\n");
+        }
+
 
         /* The two builds are already proven identical by output at startup, so
          * this figure is memory behaviour only. Some is expected: the shipped
