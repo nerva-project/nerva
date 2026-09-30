@@ -945,13 +945,15 @@ and needs its own pass before anything ships.
 and `cn_slow_hash_v15` produce identical output on three platforms spanning two
 architectures and three toolchains:
 
-| platform | toolchain | how |
-|---|---|---|
-| Windows x86-64 | MinGW gcc | by hand |
-| Linux x86-64 | gcc | by hand |
-| macOS aarch64 (Apple M1) | clang | by hand |
-| Android aarch64 (Pixel 7a) | Termux clang | by hand |
-| Linux armv7, 32-bit | gcc | CI under QEMU |
+| target | toolchain | how | FP | full hash |
+|---|---|---|---|---|
+| Windows x86-64 | MinGW gcc | by hand | match | match |
+| Linux x86-64 | gcc | by hand | match | match |
+| macOS aarch64 (Apple M1) | clang | by hand | match | match |
+| Android aarch64 (Pixel 7a) | Termux clang | by hand | match | match |
+| Linux armv7, 32-bit | cross gcc | CI, qemu-user | match | match |
+| Linux riscv64 | cross gcc | CI, qemu-user | match | match |
+| Linux s390x, big-endian | cross gcc | CI, qemu-user | **match** | differs, F36 |
 
     v14 16da28b8ec84c42cd776c908807ac204daf763503b24c396e6b0d6c4b015eba2
     v15 c7d123c1993299cbd07bb8a84cc4bb002e35f3cc1240b95b2e663d22318e5edd
@@ -960,18 +962,26 @@ This is what F29 could only claim for the primitives. The FP stage crosses the
 architecture boundary inside the real hash, which is the risk that could have
 ended Phase 2 outright.
 
-**Three architecture families.** armv7 was added by
-`.github/workflows/fp-portability.yml` under QEMU and matches exactly: all four
-`t_fp_determinism` checksums, and both v14 and v15 hashes. It is the 32-bit path
-nothing else exercised, and the one where `fesetround` reaching the VFP rounding
-bits was least certain. riscv64 is not yet resolved; QEMU emulates it slowly
-enough that the job has not completed.
+**The floating-point stage is deterministic on every target tested, including a
+big-endian one.** Seven targets, four instruction sets, five toolchains. On
+s390x the full hash differs, but every floating-point check passes there: all
+four `t_fp_determinism` checksums, the FP reference vector, the value scan, and
+the two AES arms. That divergence is `e2i`'s missing byte swap in the integer
+path and predates this work by every release (F36).
+
+That is the strongest available form of the claim. The risk that could have
+ended Phase 2 was that IEEE-754 double arithmetic would not reproduce across
+platforms. It reproduces across two word sizes, four instruction sets and both
+byte orders.
+
+armv7 and riscv64 matter most among the additions. armv7 is the 32-bit path
+nothing else exercises and the one where `fesetround` reaching the VFP rounding
+bits was least certain; riscv64 is a third instruction set with its own libc and
+compiler. Both match exactly on all four hashes.
 
 An earlier version of this entry claimed riscv64 and armv7 on the strength of
-job status icons in a run that was still in progress. That was wrong, and the
-armv7 half of it is now true for the right reason rather than by luck.
-
-Big-endian is a separate matter and is covered by F36.
+job status icons in a run still in progress. That was wrong; both are now true
+for the right reason.
 
 **Measured cost of the stage**, `contrib/powbench/t_fp_stage.c`, at the shipping
 count of 9,600 rounds. Every figure below is measured, none projected:

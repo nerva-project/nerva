@@ -476,9 +476,12 @@ above is single-thread latency, and SMT siblings share FP units.
 The stage exists (`src/crypto/slow-hash-fp.h`, built as `cn_slow_hash_v15`) and
 is not wired into consensus. What it has cleared so far, all in FINDINGS F34:
 
-- **Determinism on the real algorithm**, not the primitives: v14 and v15 give
-  identical output on Windows x86-64, Linux x86-64 and macOS aarch64, across
-  three toolchains. This was the risk that could have ended the phase.
+- **Determinism on the real algorithm**, not the primitives, and on every target
+  tested. Seven targets, four instruction sets, five toolchains, both word sizes
+  and both byte orders. The floating-point checks pass even on big-endian s390x,
+  where the full hash differs for an integer reason that predates this work
+  (F36). This was the risk that could have ended the phase, and it is closed.
+  `.github/workflows/fp-portability.yml` keeps it closed.
 - **Contraction immunity is structural**, verified by building with
   -ffp-contract=off and =fast and getting the same vector, because every FP
   write passes through integer bit manipulation and no a*b+c pattern exists to
