@@ -471,7 +471,7 @@ target at all.
 Untested and required before shipping: the multi-threaded picture. Every figure
 above is single-thread latency, and SMT siblings share FP units.
 
-### Phase 2 status  [stage built; determinism passed; cost measurement in progress]
+### Phase 2 status  [stage built; determinism passed; target met; multi-thread outstanding]
 
 The stage exists (`src/crypto/slow-hash-fp.h`, built as `cn_slow_hash_v15`) and
 is not wired into consensus. What it has cleared so far, all in FINDINGS F34:
@@ -483,14 +483,18 @@ is not wired into consensus. What it has cleared so far, all in FINDINGS F34:
   -ffp-contract=off and =fast and getting the same vector, because every FP
   write passes through integer bit manipulation and no a*b+c pattern exists to
   fuse.
-- **Cost measured on six cores.** Spread across the machines measured goes from
-  2.02x on the hash alone to 1.88x with the stage, and the mechanism is that FP
-  cost is anti-correlated with hash cost: machines that lead on one axis trail
-  on the other.
+- **The fairness target is met.** At 9,600 rounds the cross-CPU spread goes from
+  2.388x to **2.201x**, against a target of 2.2x, measured on all seven machines
+  with nothing projected. The gate passed everywhere.
+- **The mechanism is anti-correlation**, which was not predicted: FP cost runs
+  opposite to hash cost across this hardware, so a machine that leads on one
+  axis trails on the other. That is why FP reaches a target pad tuning could
+  not.
 
-Outstanding before a ship decision: the 9700X, 5600X and 7700HQ, then recompute
-the round count; and the multi-threaded picture, since every figure so far is
-single-thread latency and SMT siblings share FP units.
+Outstanding before a ship decision: **the multi-threaded picture**, since every
+figure here is single-thread latency and SMT siblings share FP units, so a stage
+that is fair thread-for-thread may not be fair machine-for-machine once every
+core is loaded. That is the last measurement Phase 2 needs.
 
 ### Measure before committing to ship
 

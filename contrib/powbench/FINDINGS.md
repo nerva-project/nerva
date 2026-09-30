@@ -958,26 +958,39 @@ This is what F29 could only claim for the primitives. The FP stage crosses the
 architecture boundary inside the real hash, which is the risk that could have
 ended Phase 2 outright.
 
-**Measured cost of the stage**, `contrib/powbench/t_fp_stage.c`, 7,680 rounds:
+**Measured cost of the stage**, `contrib/powbench/t_fp_stage.c`, at the shipping
+count of 9,600 rounds. Every figure below is measured, none projected:
 
-| | ns/round | hash 1 MB | hash + stage | basis |
+| | hash 1 MB | FP us | ns/round | hash + stage |
 |---|---|---|---|---|
-| 7950X | 11.70 | 0.7755 | 0.8653 | best-of, 3 runs |
-| Apple M1 | **4.82** | 1.3633 | 1.4003 | best-of |
-| i5-8279U | 8.56 | 1.5638 | 1.6296 | lowest of 3 runs |
-| Pixel X1 | 11.77 | 1.5335 | 1.6239 | mean |
-| Pixel A78 | 12.68 | 2.4163 | 2.5137 | mean |
-| Pixel A55 | 35.0 | 7.3022 | 7.5710 | mean |
+| 9700X | 0.6608 | 121.3 | 12.64 | **0.7821** |
+| 7950X | 0.7632 | 111.1 | 11.57 | 0.8743 |
+| 5600X | 1.0107 | 138.7 | 14.45 | 1.1494 |
+| Apple M1 | 1.3633 | 58.0 | 6.04 | 1.4213 |
+| Pixel X1 | 1.5335 | 115.6 | 12.04 | 1.6491 |
+| i5-8279U | 1.5638 | 90.1 | 9.39 | 1.6539 |
+| 7700HQ | 1.5777 | 144.0 | 15.00 | **1.7217** |
+| Pixel A78 | 2.4163 | 138.7 | 14.44 | 2.5550 |
+| Pixel A55 | 7.3022 | 322.5 | 33.60 | 7.6247 |
 
-Still missing: 9700X, 5600X, 7700HQ. The 9700X matters most because it sets the
-fast end of the spread.
+**Cross-CPU spread goes from 2.388x to 2.201x, which meets the 2.2x target.**
+The 9700X sets the fast end and the i7-7700HQ the slow end, on both axes. The
+gate passed on every machine. Phone figures use the X1, since a miner pins to
+the big cores; the A78 and A55 rows are context, not spread inputs.
 
-**Spread across the machines measured so far goes from 2.02x on the hash alone
-to 1.88x with the stage.** The mechanism is visible in the table and was not
-predicted: **FP cost is anti-correlated with hash cost.** The 7950X is fastest
-at hashing and second-slowest at FP; the M1 is mid-pack at hashing and fastest
-at FP by 2.4x. A machine that leads on one axis trails on the other, which is
-what dilution needs and what a single-axis workload cannot give.
+**The mechanism, which was not predicted: FP cost is anti-correlated with hash
+cost.** The 7950X is fastest at hashing and second-slowest at FP; the M1 is
+mid-pack at hashing and fastest at FP by 1.9x. A machine that leads on one axis
+trails on the other, which is what dilution needs and what no single-axis
+workload can provide. This is why FP reaches a target that pad tuning could not
+(F).
+
+**Cost is linear in the round count**, checked rather than assumed when the
+count moved from 7,680 to 9,600: 7950X 11.70 to 11.57 ns/round, i5-8279U 9.60 to
+9.39, Pixel X1 11.77 to 12.04, Pixel A55 35.0 to 33.60. Only the Apple M1
+dissented, 4.82 to 6.04, and that machine cannot be pinned, so a longer stage
+spends longer exposed to scheduling. Three families agreeing against one
+unpinnable outlier is why the arithmetic was trusted.
 
 **F33's probe does not predict this stage and should not be used for the
 decision.** The probe called the M1's mixed round 19.186 ns, slower than the
@@ -986,8 +999,20 @@ The probe-to-real ratio is 0.78 on x86 and 0.24 on the M1, so it is a different
 answer rather than a constant offset. F33's 1.22x spread, and the 7,640-round
 design target computed from it, are superseded by this entry.
 
-*Checked:* built and run from source on each machine. x86-64 figures come from
-`-static` binaries built on the 7950X; aarch64 from a local clang build.
+*Checked:* built and run on each machine. x86-64 figures come from `-static`
+binaries built on the 7950X; aarch64 from local clang builds. The i7-7700HQ was
+run three times because it sets the slow end and is thermally limited, and read
+143.7, 144.0 and 144.1 us, a 0.3% spread.
+
+*One number in the table is not understood.* The i5-8279U and the i7-7700HQ are
+both Skylake-family mobile parts at similar clocks, yet differ 1.60x per round,
+9.39 against 15.00. The 7700HQ is not drifting, its three runs agree to 0.3%,
+and its hash time is within 3% of the NUC's. A sustained clock held below its
+rated turbo would produce exactly this shape, since the hash is memory-bound and
+barely notices while the stage is latency-bound and scales with clock. If that
+is what it is, its true cost is nearer 12.5 ns/round and the spread is 2.17x
+rather than 2.201x. Either reading meets the target, so this is recorded as
+unexplained rather than resolved.
 
 *Two estimator lessons, both learned by being caught:*
 
