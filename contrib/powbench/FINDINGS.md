@@ -780,6 +780,89 @@ an FP stage ships, it must be built that way.
 *Checked:* observed directly on the device on the first run, before the flag was
 added; the second run with the flag produced F29's matching value.
 
+## ARM64
+
+### F31. On ARM, spread worsens monotonically with pad size, which settles the pad question
+
+v8 verify cost, single thread, pinned to one core of each type on a Pixel 7a
+(Tensor G2: 2x Cortex-X1 at 2.85 GHz, 2x A78 at 2.35, 4x A55 at 1.80):
+
+| core | 1 MB | 2 MB | 4 MB | 8 MB |
+|---|---|---|---|---|
+| X1 | 1.6215 | 3.3843 | 7.1943 | 15.8481 |
+| A78 | 2.4045 | 4.4923 | 8.3451 | 16.4419 |
+| A55 | 7.2288 | 13.3664 | 26.1062 | 69.5758 |
+
+Taking the X1 as the device's figure, because anyone mining pins to the big
+cores and nobody runs on an A55 while X1 cores sit idle, and folding it into the
+four-machine spread from F:
+
+| pad | x86 only | with the Pixel |
+|---|---|---|
+| 1 MB | 2.38x | **2.44x** |
+| 2 MB | 2.28x | 2.75x |
+| 4 MB | 2.27x | 3.14x |
+| 8 MB | 4.69x | 4.69x |
+
+At 1 MB the phone lands within 2.4% of the i7-7700HQ (1.6215 against 1.5827) and
+barely moves the spread. Every larger pad it moves substantially, and the damage
+grows with the pad.
+
+**This reverses the conclusion in F that fairness has a minimum around 2 to 4
+MB.** That was measured on four x86 desktops and laptops, every one of them with
+a large shared L3, and it is an artifact of that sample. With a phone in the set
+the spread worsens monotonically with pad size and 1 MB is the best pad, not the
+worst. The 1 MB decision previously rested on the threading argument alone; it
+now has direct single-thread evidence.
+
+Two further observations. The A55-to-X1 ratio is roughly flat across pads at
+4.46x, 3.95x, 3.63x and 4.39x, so pad size governs how unequal *devices* are
+against each other, not how unequal cores are *within* a device. And the gate
+passed on all three core types, with 1 MB deltas of +0.08%, -0.15% and -0.34%
+against controls of 0.11% to 0.60%, so v8 costs no more than v5 on any ARM core
+class measured.
+
+*Checked:* two pinned runs on the device, via `contrib/powbench/pin-runs.sh`,
+both self-verified for placement per F32. Reproducibility differs sharply by
+core: A78 agreed to 0.01% between runs (2.4045 against 2.4048) and A55 to 0.56%
+(7.2288 against 7.2695), but **X1 disagreed by 5.5%** (1.6215 against 1.5370),
+with the direction flipping across pads rather than running one way, which makes
+it scatter rather than drift and fits the core that boosts hardest and throttles
+first. The figure used here is the fully clean 1.6215; the 1.5370 came from a run
+reporting `ran on cpu7` against a pin of 6, both X1 cores, so it is probably
+sound but carries an asterisk. The X1 being the least reproducible core is worth
+remembering, since it is the one the fairness number depends on.
+
+### F32. A pinned run on Android can be moved to another core class mid-measurement
+
+`taskset` verified before the run does not stay true. With the screen allowed to
+sleep, a run pinned to cpu4 reported `cpus allowed changed from 4 to 0-5`, then
+ran on cpu5, and the following core was skipped because the pin would not take
+at all (`allowed: none`). Android rewrites a backgrounded app's cpuset, and the
+affinity goes with it.
+
+The failure is silent and produces numbers that look like core-type
+measurements. An earlier run pinned to an A55 gave a pad sweep of `1MB=7.2695
+2MB=13.2546 4MB=6.9353 8MB=14.3723`: cost falling as the pad quadrupled, because
+it began on the A55 and finished on a big core. Its 4 MB and 8 MB figures
+matched the X1 run's almost exactly, and its own variant table disagreed with
+its 4 MB sweep row by 3.7x, 25.8725 ms against 6.9353. None of that was
+reported; it had to be noticed.
+
+v8bench now re-reads the affinity mask after every pad row, compares the running
+core against the starting core when the mask names a single CPU, and requires
+the sweep to be monotonic. Any of the three prints `*** TAINTED` and exits 2.
+`pin-runs.sh` holds a wake lock, treats a tainted block as one bad core rather
+than a failed run, and lists what to re-measure.
+
+**Keeping the screen awake was sufficient.** The clean run differs from the
+tainted one only in that.
+
+*Checked:* observed on the device across two consecutive runs that differed only
+in whether the screen was allowed to sleep. The monotonic check was separately
+tested against both real sweeps: it fires on the A55 one and stays quiet on the
+X1 one.
+
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell
