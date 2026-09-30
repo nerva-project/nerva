@@ -45,6 +45,20 @@
 #define CN_V8_PAD(ctx) ((ctx)->scratchpad)
 #endif
 
+
+/* PLAN-v8 Phase 2's floating-point stage, compiled in only when CN_V8_FP is
+ * defined, which only slow-hash-v8fp-{hw,sw}.c do. Without that define these
+ * expand to nothing and cn_slow_hash_v14 is byte-identical to what it was
+ * before Phase 2 existed, which cn_slow_hash_self_test checks rather than
+ * assumes. The two builds run side by side so the spread can be measured on
+ * the candidate rather than argued about. */
+#if defined(CN_V8_FP)
+#include "slow-hash-fp.h"
+#define CN_FP_STAGE() cn_fp_stage(hp_state, a)
+#else
+#define CN_FP_STAGE() do { } while (0)
+#endif
+
 #if !defined(CN_USE_SOFTWARE_AES)
 
 /* CNA v8, hardware-AES arm. cn_slow_hash_v11 with salt_pad_v8 in place of
@@ -83,6 +97,8 @@ void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t lengt
             salt_pad_v8(salt, salt_hash, r2[1], r2[3], r2[5], r2[7]);
         }
     }
+
+    CN_FP_STAGE();
 
     for (i = 0; i < iters; i++)
     {
@@ -125,6 +141,8 @@ void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t lengt
             salt_pad_v8(salt, salt_hash, r2[1], r2[3], r2[5], r2[7]);
         }
     }
+
+    CN_FP_STAGE();
 
     for (i = 0; i < iters; i++) {
         aes_sw_variant();
