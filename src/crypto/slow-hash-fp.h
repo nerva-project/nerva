@@ -118,17 +118,27 @@
 #include <string.h>
 #include <stdint.h>
 
-/* Rounds per nonce. Derived in F33: about 7,640 rounds of the measured mixed
- * operation set brings the cross-CPU spread from 2.44x to the 2.2x target, at
- * +19.7% verify cost on the fastest machine in the set and +7.8% on the
- * slowest. Rounded to a multiple of 16 so the mode-change cadence divides it
- * exactly and every nonce performs exactly 480 of them.
+/* Rounds per nonce, from measuring this stage on seven machines (FINDINGS F34),
+ * not from the probe that preceded it.
  *
- * This figure came from a probe whose round differs from the one below: the
- * probe carried a PRNG draw per iteration and this does not. It is a starting
- * point to measure against, not a settled constant, and the number that decides
- * it is the spread after this stage exists. */
-#define CN_V8_FP_ROUNDS   7680
+ * The spread is set by the 9700X at the fast end and the i7-7700HQ at the slow
+ * end. Their measured per-round costs are 12.70 ns and 15.08 ns, and their
+ * hashes are 0.6679 ms and 1.5926 ms, which puts the untouched spread at
+ * 2.384x. Solving for the count that brings it to the 2.2x target gives about
+ * 9,580, and 9,600 is the next multiple of 16, so the mode-change cadence
+ * divides it exactly and every nonce performs exactly 600 of them.
+ *
+ * Cost at this count: +18.2% verify time on the fastest machine in the set and
+ * +9.1% on the slowest, against an order of magnitude of headroom.
+ *
+ * An earlier value of 7,680 came from t_fp_cost, a synthetic probe that turned
+ * out not to predict this stage: it ranked an Apple M1 slower than a Pixel X1
+ * where the real stage has the M1 2.4x faster. That number and the reasoning
+ * behind it are superseded; F34 supersedes F33 for this decision.
+ *
+ * This assumes cost is linear in the round count, which is what the stage's
+ * shape implies and is worth re-checking whenever this constant moves. */
+#define CN_V8_FP_ROUNDS   9600
 #define CN_V8_FP_ROUND_MASK 15
 #define CN_V8_FP_SELFTEST_VECTOR 0xde6e9e50908eab15ull
 

@@ -68,7 +68,7 @@ int  cn_slow_hash_v15_selftest(void);
 
 /* kept in step with CN_V8_FP_ROUNDS in slow-hash-fp.h, which this file
  * cannot include: that header needs the pad-size machinery set up first. */
-#define CN_V8_FP_ROUNDS_REPORTED 7680
+#define CN_V8_FP_ROUNDS_REPORTED 9600
 
 /* NONCE_POINTER is data + 35 read as a uint64_t (slow-hash.h) */
 #define CN_MIN_BLOB 43
