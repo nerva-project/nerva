@@ -33,6 +33,7 @@ typedef cl_int   cl_bool;
 #define CL_DEVICE_MAX_COMPUTE_UNITS      0x1002
 #define CL_DEVICE_MAX_CLOCK_FREQUENCY    0x100C
 #define CL_DEVICE_VERSION                0x102F
+#define CL_DEVICE_EXTENSIONS             0x1030
 #define CL_PLATFORM_NAME                 0x0903
 #define CL_MEM_READ_WRITE                (1 << 0)
 #define CL_MEM_HOST_NO_ACCESS            (1 << 9)

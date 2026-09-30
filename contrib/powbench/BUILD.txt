@@ -1,10 +1,23 @@
 Self-contained: no OpenCL SDK (clmin.h binds OpenCL.dll at runtime), no Nerva
 build tree. Static, so it runs on a machine with no toolchain.
 
-  g++ -O2 -std=c++14 -maes -msse4.1 -static -o nerva-gpubench.exe main.cpp hc128.c
+  g++ -O2 -std=c++14 -maes -msse4.1 -ffp-contract=off -static \
+      -o nerva-gpubench.exe main.cpp hc128.c
+
+-ffp-contract=off is REQUIRED, not optional. The CPU reference for the v8 FP
+stage has to agree bit for bit with the OpenCL kernel, and a fused multiply-add
+changes the result. The stage constrains every value between operations so
+there is no a*b+c for a compiler to fuse, which makes this structural rather
+than flag-dependent, but the flag says so too. If the v8+fp row ever reports no
+ok, check this first.
 
 Run:
-  nerva-gpubench.exe [vram%] [cooldown_s] [launch_cap_s]
+  nerva-gpubench.exe [vram%] [cooldown_s] [launch_cap_s] [all] [fpxN]
+
+  FOR THE FP QUESTION, RUN THIS:
+      nerva-gpubench.exe 50 10 60 fpx10
+  and compare machines only at the same settings.
+
   defaults: 50 15 25
     vram%       0 skips the GPU entirely
     cooldown_s  idle between GPU variants; lets a display-attached card shed
@@ -13,15 +26,68 @@ Run:
                 against GPU occupancy: too low and rows run starved (v7 read
                 0.08x at cap 10 and 0.33x at cap 25), too high and a display
                 GPU trips TDR. COMPARE MACHINES AT THE SAME CAP.
+    all         also run the pad sweep and the v6 and v7 rows. Off by default:
+                Phase 3 settled the pad (FINDINGS F24, F27, F28) and v7 is
+                being removed, so those rows only add heat, and a hot card
+                makes the rows that matter less accurate.
+    fpxN        run the FP stage at N times its real round count and divide the
+                measured cost back out. At the real count the stage costs a GPU
+                about 0.3% of a nonce, which is below this harness's own floor,
+                so all four rows read the same and the run says nothing. At
+                fpx10 the cost clears the floor on both sides. Cost is linear in
+                the round count, checked at 1x and 10x, so the scaled-back
+                numbers are the real ones. The checksum gate still runs, since
+                both sides use the same count. FINDINGS F37.
+                fpx1 is the real algorithm and is the one to trust for "ok".
   nerva-gpubench.exe 25     use 25% of VRAM (only if it hangs the desktop)
   nerva-gpubench.exe 0      skip the GPU, CPU columns only
 
 COMPARE MACHINES ONLY AT THE SAME vram= SETTING. The header records it.
 
+The default rows answer PLAN-v8's GPU question:
+  v5 1MB      control. Same GPU work as v8 1MB by a separate code path, so a
+              gap between them means the port, not the algorithm. Their CPU
+              columns differ on purpose: v8 inherits v6's windowed chain fill.
+  v5 1MB end  the control again, AFTER the FP rows. Three rows of identical GPU
+              work, bracketing rather than leading, so the floor covers drift
+              that accumulates across the run. Measured only between the first
+              two, the control once read 0.02% on a run whose FP rows were
+              visibly noise.
+  v8 1MB      baseline the FP rows are divided by
+  v8+fp rne   the FP stage with rounding fixed at nearest-even. Not the
+              algorithm; it isolates the arithmetic from the mode changes.
+  v8+fp       the stage as specified, rounding mode selected from data
+
+OpenCL cannot select a rounding mode at all (cl_khr_select_fprounding_mode was
+deprecated in OpenCL 1.1 and no vendor implements it), so v8+fp emulates all
+four in software. ok=yes on that row therefore means more than usual: the
+emulation is bit-exact against the CPU's real MXCSR.
+
+HOW TO READ THE SUMMARY. "FP cost x v8 base" is what the stage costs each side
+as a multiple of that side's own nonce. The CPU figure is per WHOLE nonce, chain
+fill included, because consensus reseeds the salt from the nonce and a miner
+pays the fill every time; F34's +14.5 to +18.2% is the stage against
+cn_slow_hash alone and is not comparable here. The "control" line is the largest
+gap among the rows that are identical GPU work, scaled the same way the costs
+are, so it is the floor under every GPU number in the run: an effect smaller
+than the control has not been measured. On a good run it is around 0.03%
+against an FP effect of 0.4%.
+
+LOAD. The header reports system CPU busy before the run and warns above 8%. A
+whole set of results was once taken on a machine mining on 12 threads with
+nothing in the output saying so, which depressed the CPU column by about 15%.
+Stop miners and close the browser first; a run taken under load is labelled as
+one and is not comparable with a clean run.
+
+A GPU row that produces nothing now says why, at every bail-out point, rather
+than printing a dash. An RX 580 reporting "3264 of 3264 nonces unwritten" is a
+known device failure, FINDINGS F37.
+
 Files:
   main.cpp         driver: allocation, thread/nonce sweeps, checksum gate, table
-  vm_kernels.cl.h  OpenCL ports of the v5/v6/v7 cores, plus cna_v6_alu (the
-                   ALU-only twin used to bound JIT headroom)
+  vm_kernels.cl.h  OpenCL ports of the v5/v6/v7 cores, the v8 core and its FP
+                   stage, plus cna_v6_alu (the ALU-only twin used to bound JIT
+                   headroom)
   vm_ref.h         matching C reference; the checksum gate compares the two
   chain_fill.h     per-nonce chain salt, ported from get_cna_v5_data/_v6_data
   hc128.c/.h       copied verbatim from src/crypto, used by chain_fill
@@ -31,6 +97,9 @@ REQUIREMENTS. It allocates a ~247 MB block cache at startup (one entry per
 block at CHAIN_HEIGHT, matching struct block_cache_data). CPU worker threads
 each allocate their own pad, so v7 at 32 threads wants ~768 MB on top. Budget
 about 1.5 GB of RAM.
+
+A device without cl_khr_fp64 builds the rest of the program normally and simply
+has no FP kernels; those two rows are skipped and the footer says so.
 
 ok=yes on every row means the GPU and CPU produced identical hashes. A row
 without it gets no ratio, because the two sides were not computing the same

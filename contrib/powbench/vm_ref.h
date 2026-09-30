@@ -300,12 +300,109 @@ static uint64_t vm_v7(uint64_t *buf, uint64_t qw, const cn_ins_t *prog,
     return acc ? acc : 1ULL;
 }
 
+
+// --------------------------------------------------------------------------
+// PLAN-v8 Phase 2: the floating-point stage, mirroring src/crypto/slow-hash-fp.h.
+//
+// This is the reference the OpenCL kernels are checked against, so it uses the
+// real rounding-mode changes rather than the kernels' emulation of them. A row
+// that reports ok=yes has therefore proved that the GPU's software emulation
+// of directed rounding produces bit-identical results to a CPU's MXCSR or
+// FPCR, which is what makes the timing on that row mean anything.
+//
+// fesetround is called through a noinline wrapper with memory clobbers, for
+// the same reason RandomX puts rx_set_rounding_mode in its own translation
+// unit: GCC and Clang both ignore #pragma STDC FENV_ACCESS, so without an
+// opaque barrier they may assume round-to-nearest throughout and fold
+// arithmetic across the mode change.
+// --------------------------------------------------------------------------
+#include <fenv.h>
+#include <math.h>
+
+#define CN_V8_FP_ROUNDS     9600
+#define CN_V8_FP_ROUND_MASK 15
+
+#if defined(__GNUC__) || defined(__clang__)
+#  define VM_FP_NOINLINE __attribute__((noinline))
+#  define VM_FP_BARRIER() __asm__ __volatile__("" ::: "memory")
+#elif defined(_MSC_VER)
+#  define VM_FP_NOINLINE __declspec(noinline)
+#  define VM_FP_BARRIER() _ReadWriteBarrier()
+#else
+#  define VM_FP_NOINLINE
+#  define VM_FP_BARRIER() ((void)0)
+#endif
+
+static const int vm_fp_modes[4] = { FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO };
+
+static VM_FP_NOINLINE void vm_fp_set_round(int mode)
+{
+    VM_FP_BARRIER();
+    fesetround(mode);
+    VM_FP_BARRIER();
+}
+
+static inline double vm_fp_bits_to_e(uint64_t bits)
+{
+    const uint64_t e = 0x300ull | ((bits >> 52) & 0xFFull);
+    const uint64_t o = (e << 52) | (bits & 0x000FFFFFFFFFFFFFull);
+    double d; memcpy(&d, &o, sizeof(d)); return d;
+}
+
+static inline uint64_t vm_fp_e_to_bits(double d)
+{
+    uint64_t u; memcpy(&u, &d, sizeof(u)); return u;
+}
+
+// Every result passes through the constraint before anything reads it, so no
+// multiply feeds an add and there is no contraction for a compiler to do.
+#define VM_FP_ROUND(e)                                                  \
+    e[0] = e[0] + e[1]; e[0] = vm_fp_bits_to_e(vm_fp_e_to_bits(e[0]));  \
+    e[1] = e[1] - e[2]; e[1] = vm_fp_bits_to_e(vm_fp_e_to_bits(e[1]));  \
+    e[2] = e[2] * e[3]; e[2] = vm_fp_bits_to_e(vm_fp_e_to_bits(e[2]));  \
+    e[3] = e[3] / e[0]; e[3] = vm_fp_bits_to_e(vm_fp_e_to_bits(e[3]));  \
+    e[0] = sqrt(e[0]);  e[0] = vm_fp_bits_to_e(vm_fp_e_to_bits(e[0]));
+
+// fp_mode 0: fixed nearest-even, the matching reference for cna_v8_fp_rne,
+// which is not the algorithm but isolates the arithmetic from the mode change.
+// fp_mode 1: the algorithm, modes selected from data every sixteenth round.
+static void vm_fp_stage(uint64_t *pad, uint64_t nblocks,
+                        uint64_t *pa0, uint64_t *pa1, int fp_mode,
+                        uint32_t rounds)
+{
+    const uint64_t mask = nblocks - 1;
+    const uint64_t a0 = *pa0, a1 = *pa1;
+    uint64_t *p0 = pad + ((a0 >> 4) & mask) * 2;
+    uint64_t *p1 = pad + ((a1 >> 4) & mask) * 2;
+    double e[4];
+
+    e[0] = vm_fp_bits_to_e(p0[0]);
+    e[1] = vm_fp_bits_to_e(p0[1]);
+    e[2] = vm_fp_bits_to_e(p1[0] ^ a0);
+    e[3] = vm_fp_bits_to_e(p1[1] ^ a1);
+
+    for (uint32_t r = 0; r < rounds; r++) {
+        if (fp_mode && (r & CN_V8_FP_ROUND_MASK) == 0)
+            vm_fp_set_round(vm_fp_modes[(vm_fp_e_to_bits(e[0]) >> 3) & 3]);
+        VM_FP_ROUND(e)
+    }
+    if (fp_mode) vm_fp_set_round(FE_TONEAREST);
+
+    p1[0] ^= vm_fp_e_to_bits(e[2]);
+    p1[1] ^= vm_fp_e_to_bits(e[1]);
+    p0[0] ^= vm_fp_e_to_bits(e[0]);
+    p0[1] ^= vm_fp_e_to_bits(e[3]);
+
+    *pa0 = a0 ^ vm_fp_e_to_bits(e[0]) ^ vm_fp_e_to_bits(e[2]);
+    *pa1 = a1 ^ vm_fp_e_to_bits(e[1]) ^ vm_fp_e_to_bits(e[3]);
+}
 // --------------------------------------------------------------------------
 // v5: cn_slow_hash_v11's inner loop. No VM.
 // --------------------------------------------------------------------------
 static uint64_t vm_v5(uint64_t *pad, uint64_t qw, const uint8_t *params,
                       uint64_t *salt, uint64_t salt_qw,
-                      const __m128i *rk, uint64_t gid)
+                      const __m128i *rk, uint64_t gid, int fp_mode,
+                      uint32_t fp_rounds)
 {
     // Per-nonce salt, derived exactly as the kernel does so the checksum gate
     // can compare them. Real v5 gets this from the chain; content does not
@@ -372,6 +469,10 @@ static uint64_t vm_v5(uint64_t *pad, uint64_t qw, const uint8_t *params,
             }
         }
     }
+    // CN_FP_STAGE() in slow-hash-v8-impl.h sits here: after the xx/yy loop,
+    // before the iters loop. fp_mode < 0 is v5, which has no stage.
+    if (fp_mode >= 0) vm_fp_stage(pad, nblocks, &a0, &a1, fp_mode, fp_rounds);
+
     for (uint32_t i = 0; i < it_n; i++) V5_STEP();
     #undef V5_STEP
     uint64_t acc = a0 ^ a1 ^ b0 ^ b1 ^ salt_acc;

@@ -37,26 +37,81 @@ bool cl_load(CL &cl) {
 // gen 5/6/7. pad_kb is the main per-nonce working set. v6 runs the VM over the
 // pad for CN_VM_ITERATIONS passes; v7 chases a buffer and writes to a separate
 // 256 KB pad, with passes = buffer / (8 * hops) exactly as CN_VM_ITERATIONS_V14.
-struct Variant { const char *name; int gen; size_t pad_kb; };
-static Variant VARIANTS[] = {
-    { "v5 1MB",    5,  1024 },
-    { "v5 4MB",    5,  4096 },
-    { "v5 8MB",    5,  8192 },
-    { "v6 1MB",    6,  1024 },
-    { "v6 4MB",    6,  4096 },
-    { "v6 8MB",    6,  8192 },
-    { "v7 24MB",   7, 24576 },
-};
-static const int NV = (int)(sizeof(VARIANTS) / sizeof(VARIANTS[0]));
+struct Variant { const char *name; int gen; size_t pad_kb; int grp; };
 
-static double g_gpu[NV], g_cpu[NV], g_ms1[NV], g_spread[NV], g_cspread[NV];
-static size_t g_nonces[NV], g_bufs[NV];
-static unsigned g_thr[NV];
+// grp 0 is the default set and answers PLAN-v8's GPU question and nothing
+// else: v5 1MB is the control, v8 1MB the baseline, and the two FP rows the
+// measurement. Fewer rows means more VRAM and less accumulated heat per row,
+// which is what the numbers turn on. grp 1 is the pad sweep plus v6 and v7,
+// which Phase 3 already settled (FINDINGS F24, F27, F28) and which v7's
+// removal makes dead; pass "all" as the fourth argument to run it anyway.
+static const Variant ALL_VARIANTS[] = {
+    { "v5 1MB",    5,  1024, 0 },   // control: same GPU work as v8 1MB, separate path
+    { "v8 1MB",    8,  1024, 0 },   // baseline the FP rows are divided by
+    { "v8+fp rne", 9,  1024, 0 },   // FP stage, rounding fixed at nearest-even
+    { "v8+fp",    10,  1024, 0 },   // FP stage as specified, mode from data
+    { "v5 1MB end",5,  1024, 0 },   // the control again, AFTER the FP rows
+    { "v5 4MB",    5,  4096, 1 },
+    { "v5 8MB",    5,  8192, 1 },
+    { "v6 1MB",    6,  1024, 1 },
+    { "v6 4MB",    6,  4096, 1 },
+    { "v6 8MB",    6,  8192, 1 },
+    { "v7 24MB",   7, 24576, 1 },
+};
+static const int MAXV = (int)(sizeof(ALL_VARIANTS) / sizeof(ALL_VARIANTS[0]));
+static Variant VARIANTS[MAXV];
+static int NV = 0;
+static bool g_all = false;          // argv[4] == "all": restore the grp 1 rows
+
+static double g_gpu[MAXV], g_cpu[MAXV], g_ms1[MAXV], g_spread[MAXV], g_cspread[MAXV];
+static size_t g_nonces[MAXV], g_bufs[MAXV];
+static unsigned g_thr[MAXV];
 static double g_alu_full = 0.0, g_alu_only = 0.0;  // v6 8MB: interpreted vs ideal-JIT kernel
 static double g_sweep_ratio = 0.0;                 // v5 sweep: naive vs word-coalesced
-static int    g_verified[NV];          // 1 ok, 0 not run, -1 mismatch
-static const int GPU_REPS = 2;
-static const int CPU_REPS = 2;
+static bool   g_no_fp64 = false;                   // device has no cl_khr_fp64
+// FP round-count multiplier, argv "fpxN". At the real count the stage costs a
+// GPU a few tenths of a percent, which is under this harness's own floor (the
+// v5/v8 control gap). Running it at 10x puts the cost above the floor on both
+// sides, and the cost is linear in the count, so dividing back out gives a
+// number the harness can actually resolve. Measured on an RTX 3050: 1x read
+// GPU +0.02% CPU +5.6%, 10x read GPU +3.4% CPU +44.3%, and both give the same
+// 13x CPU-to-GPU cost ratio. That agreement is what says the 1x reading is a
+// resolution limit and not a broken measurement.
+static int    g_fp_mult = 1;
+static char   g_why[MAXV][72];      // why a GPU row produced nothing
+static double g_load = 0.0;         // system CPU busy % before the run
+
+// System-wide CPU busy percentage over a short window.
+//
+// This exists because a whole set of results was taken on a machine that was
+// mining on 12 threads at the time, and nothing in the output said so. The CPU
+// column is then measuring the benchmark against a competitor rather than
+// against the machine, and it is not recoverable afterwards. So the figure goes
+// in the header of every run: a result taken under load is at least labelled as
+// one, and cannot be quietly compared against a clean run.
+static double sys_busy(int ms)
+{
+    FILETIME i0, k0, u0, i1, k1, u1;
+    if (!GetSystemTimes(&i0, &k0, &u0)) return -1.0;
+    Sleep(ms);
+    if (!GetSystemTimes(&i1, &k1, &u1)) return -1.0;
+    auto d = [](const FILETIME &a, const FILETIME &b) {
+        const unsigned long long x = ((unsigned long long)a.dwHighDateTime << 32) | a.dwLowDateTime;
+        const unsigned long long y = ((unsigned long long)b.dwHighDateTime << 32) | b.dwLowDateTime;
+        return (double)(y - x);
+    };
+    // kernel time INCLUDES idle time, which is the part everyone gets wrong.
+    const double idle = d(i0, i1), kern = d(k0, k1), user = d(u0, u1);
+    const double total = kern + user;
+    if (total <= 0.0) return -1.0;
+    return 100.0 * (total - idle) / total;
+}
+static int    g_verified[MAXV];        // 1 ok, 0 not run, -1 mismatch
+// The FP rows differ from their baseline by about 1% on a GPU, which is the
+// same order as run-to-run noise, so both sides take best-of-3 rather than
+// best-of-2 and the worst run spread is printed next to the verdict.
+static const int GPU_REPS = 3;
+static const int CPU_REPS = 5;
 static double g_vram_frac = 0.50;   // of VRAM; argv[1], 0 = skip GPU
 static double g_cooldown  = 15.0;   // seconds idle between GPU variants; argv[2]
 static double g_launch_cap = 25.0;  // max seconds for one kernel launch; argv[3].
@@ -72,9 +127,16 @@ static double g_launch_cap = 25.0;  // max seconds for one kernel launch; argv[3
 
 static unsigned v6_iters()               { return CN_VM_ITERATIONS; }
 static unsigned v7_iters(size_t bytes)   { return (unsigned)(bytes / (8 * CN_V7_HOPS)); }
+// gens 8, 9 and 10 are v8: the v5 core with the Phase 2 floating-point stage
+// absent, present at fixed nearest-even, and present with data-driven rounding.
+// Same pad, same salt residency, same kernel arguments as v5.
+static inline bool v5_like(int gen) { return gen == 5 || gen >= 8; }
+// -1 no stage, 0 stage at fixed nearest-even, 1 the algorithm as specified
+static inline int fp_mode_of(int gen) { return gen < 9 ? -1 : (gen == 9 ? 0 : 1); }
+
 // per-nonce memory beyond the main pad
 static size_t side_bytes(int gen) {
-    if (gen == 5) return CN_SALT_MEMORY;                                  // salt stays resident
+    if (v5_like(gen)) return CN_SALT_MEMORY;                              // salt stays resident
     if (gen == 6) return CN_PROGRAM_SIZE * sizeof(cn_ins_t);              // program only
     return CN_PROGRAM_SIZE * sizeof(cn_ins_t) + CN_V7_SEGMENTS * 2
          + CN_V7_HOPS * 8 + CN_V7_PAD_BYTES;                              // prog+segs+vals+pad
@@ -168,8 +230,9 @@ static uint64_t cpu_one(const Variant &v, uint64_t gid, const HostData &h,
     g_fill_sink ^= fill_buf[0];
 
     const uint64_t qw = (uint64_t)v.pad_kb * 1024 / 8;
-    if (v.gen == 5)
-        return vm_v5(pad, qw, &h.params[gid * 4], salt_priv, CN_SALT_MEMORY / 8, g_rk, gid);
+    if (v5_like(v.gen))
+        return vm_v5(pad, qw, &h.params[gid * 4], salt_priv, CN_SALT_MEMORY / 8, g_rk, gid,
+                     fp_mode_of(v.gen), (uint32_t)CN_V8_FP_ROUNDS * (uint32_t)g_fp_mult);
     if (v.gen == 6)
         return vm_v6(pad, qw, &h.progs[gid * CN_PROGRAM_SIZE], h.salt.data(), v6_iters(), g_rk, gid);
     return vm_v7(pad, qw, &h.progs[gid * CN_PROGRAM_SIZE], &h.segs[gid * CN_V7_SEGMENTS],
@@ -190,9 +253,9 @@ static double cpu_bench(const Variant &v, const HostData &h, unsigned threads,
         std::vector<uint64_t> pad(padb / 8);
         std::vector<uint64_t> vals(v.gen == 7 ? CN_V7_HOPS : 1);
         std::vector<uint64_t> spad(v.gen == 7 ? CN_V7_PAD_BYTES / 8 : 1);
-        std::vector<uint64_t> salt(v.gen == 5 ? CN_SALT_MEMORY / 8 : 1);
+        std::vector<uint64_t> salt(v5_like(v.gen) ? CN_SALT_MEMORY / 8 : 1);
         std::vector<unsigned char> fillb(SALT_BYTES);
-        if (v.gen == 5) memcpy(salt.data(), h.salt.data(), CN_SALT_MEMORY);
+        if (v5_like(v.gen)) memcpy(salt.data(), h.salt.data(), CN_SALT_MEMORY);
         uint64_t acc = 0;
         acc ^= cpu_one(v, t % gid_mod, h, pad.data(), vals.data(), spad.data(), salt.data(), fillb.data());
         ready++;
@@ -217,6 +280,15 @@ int main(int argc, char **argv) {
     if (argc > 1) { double p = atof(argv[1]); if (p >= 0.0 && p <= 95.0) g_vram_frac = p / 100.0; }
     if (argc > 2) { double c = atof(argv[2]); if (c >= 0.0 && c <= 120.0) g_cooldown = c; }
     if (argc > 3) { double L = atof(argv[3]); if (L >= 1.0 && L <= 600.0) g_launch_cap = L; }
+    for (int i = 4; i < argc; i++) {
+        if (strcmp(argv[i], "all") == 0) g_all = true;
+        else if (strncmp(argv[i], "fpx", 3) == 0) {
+            const int mlt = atoi(argv[i] + 3);
+            if (mlt >= 1 && mlt <= 100) g_fp_mult = mlt;
+        }
+    }
+    for (int i = 0; i < MAXV; i++)
+        if (ALL_VARIANTS[i].grp == 0 || g_all) VARIANTS[NV++] = ALL_VARIANTS[i];
     for (int i = 0; i < NV; i++) {
         g_gpu[i]=0; g_cpu[i]=0; g_ms1[i]=0; g_spread[i]=1.0; g_cspread[i]=1.0;
         g_nonces[i]=0; g_bufs[i]=0; g_verified[i]=0;
@@ -274,18 +346,28 @@ int main(int argc, char **argv) {
         } else have_gpu = false;
     }
 
+    g_load = sys_busy(500);
     g_tty = _isatty(_fileno(stdout)) != 0;
     unsigned hw = std::thread::hardware_concurrency(); if (!hw) hw = 4;
 
-    printf("NERVA PoW BENCH   real VM cores, v5 / v6 / v7   same work both sides\n");
+    printf("NERVA PoW BENCH   real VM cores, same work both sides\n");
     printf("CPU  %.50s  (%u thr)\n", cpu_brand().c_str(), hw);
+    if (g_load >= 0.0) {
+        printf("LOAD %.0f%% CPU busy before the run%s\n", g_load,
+               g_load > 8.0 ? "   <-- STOP MINERS AND CLOSE THE BROWSER" : "");
+        if (g_load > 8.0)
+            printf("     the CPU columns measure this machine against whatever else is\n"
+                   "     running on it, so they are not comparable with a clean run\n");
+    }
     if (have_gpu)
-        printf("GPU  %.28s %.1fG VRAM %.1fG alloc %uCU  vram=%d%%\n", devname,
+        printf("GPU  %.28s %.1fG/%.1fG %uCU  vram=%d%% cap=%.0fs cool=%.0fs\n", devname,
                gmem / 1073741824.0, maxalloc / 1073741824.0, cus,
-               (int)(g_vram_frac * 100.0 + 0.5));
-    if (have_gpu) printf("     cooldown=%.0fs  launch cap=%.0fs  (a low cap starves rows)\n", g_cooldown, g_launch_cap);
+               (int)(g_vram_frac * 100.0 + 0.5), g_launch_cap, g_cooldown);
     else
         printf("GPU  none usable, CPU columns only\n");
+    if (g_fp_mult != 1)
+        printf("     fpx%d: FP stage at %d rounds, %dx the real count\n",
+               g_fp_mult, CN_V8_FP_ROUNDS * g_fp_mult, g_fp_mult);
     printf("\n");
 
     cl_mem te_buf = NULL, rk_buf = NULL;
@@ -303,6 +385,9 @@ int main(int argc, char **argv) {
     HostData host;
     std::vector<uint64_t> gpu_out;
 
+    // Records why a GPU row produced nothing. Silence here cost a whole RX 580
+    // run: every row printed a dash and the output said nothing about why.
+    #define WHY(...) snprintf(g_why[gi], sizeof(g_why[gi]), __VA_ARGS__)
     if (have_gpu) {
         for (int gi = 0; gi < NV; gi++) {
             const Variant &v = VARIANTS[gi];
@@ -318,7 +403,7 @@ int main(int argc, char **argv) {
             // would oversubscribe VRAM, which is exactly what made the Vega
             // read 7x slow above 55%.
             size_t cap_nonces = budget / (padb + sideb);
-            if (cap_nonces < 1) continue;
+            if (cap_nonces < 1) { WHY("VRAM too small for even one nonce"); continue; }
 
             const size_t MAXBUF = 4;
             size_t nbuf = 1;
@@ -327,7 +412,7 @@ int main(int argc, char **argv) {
             size_t chunk = padbudget / nbuf;
             if (chunk > (size_t)maxalloc) chunk = (size_t)maxalloc;
             size_t per_buf = chunk / padb;
-            if (per_buf < 1) continue;
+            if (per_buf < 1) { WHY("no pad fits in one allocation"); continue; }
 
             cl_int err = 0;
             cl_mem bl[MAXBUF] = { NULL, NULL, NULL, NULL };
@@ -337,7 +422,7 @@ int main(int argc, char **argv) {
                 if (err != CL_SUCCESS || bl[b] == NULL) { bl[b] = NULL; break; }
                 got++;
             }
-            if (got == 0) continue;
+            if (got == 0) { WHY("VRAM allocation refused by the driver"); continue; }
             nbuf = got;
             for (size_t b = nbuf; b < MAXBUF; b++) bl[b] = bl[0];
             size_t nonces = nbuf * per_buf;
@@ -345,7 +430,8 @@ int main(int argc, char **argv) {
             size_t lws = 64;
             while (lws > 1 && nonces < lws * 4) lws /= 2;
             nonces = (nonces / lws) * lws;
-            if (nonces < 1) { for (size_t b=0;b<nbuf;b++) cl.ReleaseMemObject(bl[b]); continue; }
+            if (nonces < 1) { WHY("fewer nonces than one work group");
+                              for (size_t b=0;b<nbuf;b++) cl.ReleaseMemObject(bl[b]); continue; }
 
             if (host.progs.size() < nonces * CN_PROGRAM_SIZE) build_host(host, nonces);
 
@@ -361,29 +447,48 @@ int main(int argc, char **argv) {
                 vals_b = cl.CreateBuffer(ctx, CL_MEM_READ_WRITE | CL_MEM_HOST_NO_ACCESS, nonces * CN_V7_HOPS * 8, NULL, &err);
                 spad_b = cl.CreateBuffer(ctx, CL_MEM_READ_WRITE | CL_MEM_HOST_NO_ACCESS, nonces * (size_t)CN_V7_PAD_BYTES, NULL, &err);
             }
-            if (v.gen == 5) {
+            if (v5_like(v.gen)) {
                 params_b = cl.CreateBuffer(ctx, CL_MEM_READ_ONLY, nonces * 4, NULL, &err);
                 cl.EnqueueWriteBuffer(q, params_b, CL_TRUE, 0, nonces * 4, host.params.data(), 0, NULL, NULL);
                 salts_b = cl.CreateBuffer(ctx, CL_MEM_READ_WRITE | CL_MEM_HOST_NO_ACCESS, nonces * (size_t)CN_SALT_MEMORY, NULL, &err);
             }
             if (err != CL_SUCCESS) {
+                WHY("side buffer creation failed, CL %d", (int)err);
                 if (out) cl.ReleaseMemObject(out);
                 for (size_t b=0;b<nbuf;b++) cl.ReleaseMemObject(bl[b]);
                 continue;
             }
 
-            const char *kname = v.gen == 5 ? "cna_v5" : v.gen == 6 ? "cna_v6" : "cna_v7";
+            const char *kname = v.gen == 5 ? "cna_v5"
+                              : v.gen == 6 ? "cna_v6"
+                              : v.gen == 7 ? "cna_v7"
+                              : v.gen == 8 ? "cna_v8"
+                              : v.gen == 9 ? "cna_v8_fp_rne" : "cna_v8_fp";
             cl_kernel k = cl.CreateKernel(prog, kname, &err);
+            // A device without cl_khr_fp64 builds the rest of the program fine and
+            // simply has no FP kernels, so the row is skipped rather than the run
+            // being lost. g_missing records it for the footnote.
+            if (!k || err != CL_SUCCESS) {
+                WHY("kernel %s missing%s", kname,
+                    v.gen >= 9 ? " (no cl_khr_fp64?)" : "");
+                if (v.gen >= 9) g_no_fp64 = true;
+                cl.ReleaseMemObject(out); cl.ReleaseMemObject(progs_b);
+                cl.ReleaseMemObject(salt_b);
+                if (params_b) cl.ReleaseMemObject(params_b);
+                if (salts_b) cl.ReleaseMemObject(salts_b);
+                for (size_t b = 0; b < nbuf; b++) cl.ReleaseMemObject(bl[b]);
+                continue;
+            }
             cl_uint a = 0;
             cl_uint prog_size = CN_PROGRAM_SIZE;
-            cl_uint iters = v.gen == 6 ? v6_iters() : v7_iters(padb);
+            cl_uint iters = v.gen == 6 ? v6_iters() : v.gen == 7 ? v7_iters(padb) : 0;
             cl_uint hops = CN_V7_HOPS, segments = CN_V7_SEGMENTS;
             cl_uint pad_qw = CN_V7_PAD_BYTES / 8;
             cl_uint salt_qw = CN_SALT_MEMORY / 8;
             cl_uint pb = (cl_uint)per_buf;
             cl.SetKernelArg(k, a++, sizeof(cl_mem), &bl[0]);
             cl.SetKernelArg(k, a++, sizeof(cl_ulong), &qw);
-            if (v.gen == 5) {
+            if (v5_like(v.gen)) {
                 cl.SetKernelArg(k, a++, sizeof(cl_mem), &params_b);
                 cl.SetKernelArg(k, a++, sizeof(cl_mem), &salts_b);
                 cl.SetKernelArg(k, a++, sizeof(cl_uint), &salt_qw);
@@ -411,6 +516,8 @@ int main(int argc, char **argv) {
             cl.SetKernelArg(k, a++, sizeof(cl_mem), &bl[2]);
             cl.SetKernelArg(k, a++, sizeof(cl_mem), &bl[3]);
             cl.SetKernelArg(k, a++, sizeof(cl_uint), &pb);
+            const cl_uint fp_rounds = (cl_uint)CN_V8_FP_ROUNDS * (cl_uint)g_fp_mult;
+            if (v.gen >= 8) cl.SetKernelArg(k, a++, sizeof(cl_uint), &fp_rounds);
 
             // Zero the output so a failed launch cannot pass the guard below.
             { std::vector<uint64_t> z(nonces, 0);
@@ -433,31 +540,60 @@ int main(int argc, char **argv) {
             // the projection fits under the cap. A row that gets capped
             // reports the largest count the card could safely run, which is
             // an honest statement of what it managed rather than a hang.
+            // A TINY PROBE FIRST, then the ramp. LAUNCH_CAP cannot protect the
+            // first launch, because the projection needs a rate from a completed
+            // one, and the first launch is exactly where a card with a 2 s display
+            // watchdog dies: nmax/4 is already several seconds on a mid-range card.
+            // An RX 580 produced no rows at all this way, and the run after it could
+            // not create a context, which is what a driver reset looks like.
+            //
+            // The probe is timed only to seed the projection and is never reported:
+            // a launch that small is starved, and its rate is not the card's rate.
             const double LAUNCH_CAP = g_launch_cap;
             const size_t nmax = nonces;
-            size_t cands[3] = { nmax / 4, nmax / 2, nmax };
+            size_t cands[4] = { lws * 8, nmax / 4, nmax / 2, nmax };
             double best = 0.0, worst = 0.0;
             bool ok = true;
             size_t best_n = 0;
             double rate = 0.0;                 // nonces/sec from the previous launch
-            for (int c = 0; c < 3 && ok; c++) {
+            cl_int lerr = CL_SUCCESS;
+            size_t last_ok = 0;                // largest launch that completed
+            for (int c = 0; c < 4 && ok; c++) {
                 size_t n = (cands[c] / lws) * lws;
-                if (n < lws) continue;
-                if (rate > 0.0 && (double)n / rate > LAUNCH_CAP) break;
+                if (n < lws || n > nmax) continue;
+                if (c > 0 && rate > 0.0 && (double)n / rate > LAUNCH_CAP) break;
                 const auto t0 = std::chrono::steady_clock::now();
-                if (cl.EnqueueNDRangeKernel(q, k, 1, NULL, &n, &lws, 0, NULL, NULL) != CL_SUCCESS) { ok = false; break; }
-                if (cl.Finish(q) != CL_SUCCESS) { ok = false; break; }
+                lerr = cl.EnqueueNDRangeKernel(q, k, 1, NULL, &n, &lws, 0, NULL, NULL);
+                if (lerr != CL_SUCCESS) { ok = false; break; }
+                lerr = cl.Finish(q);
+                if (lerr != CL_SUCCESS) { ok = false; break; }
                 const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
                 if (secs <= 0.0) continue;
                 rate = n / secs;
-                if (rate > best) { best = rate; best_n = n; }
+                last_ok = n;
+                if (c > 0 && rate > best) { best = rate; best_n = n; }
             }
+            if (!ok)
+                WHY("ramp failed after %zu nonces ok, CL %d (watchdog?)",
+                    last_ok, (int)lerr);
+            else if (best_n == 0)
+                WHY("every launch projected over the %.0fs cap", LAUNCH_CAP);
             if (best_n == 0) ok = false;
             best = 0.0;
             for (int rep = 0; rep < GPU_REPS && ok; rep++) {
                 const auto t0 = std::chrono::steady_clock::now();
-                if (cl.EnqueueNDRangeKernel(q, k, 1, NULL, &best_n, &lws, 0, NULL, NULL) != CL_SUCCESS) { ok = false; break; }
-                if (cl.Finish(q) != CL_SUCCESS) { ok = false; break; }
+                lerr = cl.EnqueueNDRangeKernel(q, k, 1, NULL, &best_n, &lws, 0, NULL, NULL);
+                if (lerr != CL_SUCCESS) {
+                    WHY("timed rep %d of %zu failed, CL %d (watchdog?)", rep + 1,
+                        best_n, (int)lerr);
+                    ok = false; break;
+                }
+                lerr = cl.Finish(q);
+                if (lerr != CL_SUCCESS) {
+                    WHY("timed rep %d of %zu did not finish, CL %d (watchdog?)", rep + 1,
+                        best_n, (int)lerr);
+                    ok = false; break;
+                }
                 const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
                 if (secs <= 0.0) continue;
                 const double hs = best_n / secs;
@@ -466,10 +602,18 @@ int main(int argc, char **argv) {
             }
             nonces = best_n;
             gpu_out.assign(nonces, 0);
-            cl.EnqueueReadBuffer(q, out, CL_TRUE, 0, nonces * 8, gpu_out.data(), 0, NULL, NULL);
+            const cl_int rerr = cl.EnqueueReadBuffer(q, out, CL_TRUE, 0, nonces * 8,
+                                                     gpu_out.data(), 0, NULL, NULL);
             size_t unwritten = 0;
             for (uint64_t x : gpu_out) if (x == 0) unwritten++;
             const double sp = (worst > 0.0) ? (best / worst) : 1.0;
+            if (ok && rerr != CL_SUCCESS)
+                WHY("could not read results back, CL %d", (int)rerr);
+            else if (ok && unwritten > 0)
+                WHY("%zu of %zu nonces unwritten, kernel claimed %.0f n/s", unwritten,
+                    nonces, best);
+            else if (ok && best <= 0.0)
+                WHY("every timed launch returned a zero duration");
             if (ok && unwritten == 0 && best > 0.0) {
                 g_gpu[gi] = best; g_nonces[gi] = nonces; g_bufs[gi] = nbuf; g_spread[gi] = sp;
 
@@ -490,7 +634,7 @@ int main(int argc, char **argv) {
                 const size_t nchk = nonces < 4 ? nonces : 4;
                 for (size_t s = 0; s < nchk; s++) {
                     const uint64_t gidv = (uint64_t)(s * (nonces / nchk));
-                    if (v.gen == 5) memcpy(saltv.data(), host.salt.data(), CN_SALT_MEMORY);
+                    if (v5_like(v.gen)) memcpy(saltv.data(), host.salt.data(), CN_SALT_MEMORY);
                     const uint64_t cref = cpu_one(v, gidv, host, pad.data(), vals.data(), spadv.data(), saltv.data(), fillbv.data());
                     if (cref != gpu_out[gidv]) bad++;
                 }
@@ -552,47 +696,90 @@ int main(int argc, char **argv) {
     if (host.progs.empty()) build_host(host, 256);
     const size_t gid_mod = host.progs.size() / CN_PROGRAM_SIZE;
 
+    // THE VARIANTS ARE MEASURED INTERLEAVED, not one at a time to completion.
+    //
+    // The FP stage costs a CPU a few percent of a whole nonce, and a 7950X
+    // drifts by more than that over the minutes it takes to finish a row. Run
+    // to completion, the baseline and the FP row are measured in different
+    // thermal states and the difference between them is mostly drift: that
+    // read 2.0% run spread against a 4% effect, which is not a measurement.
+    // Interleaving puts every variant in the same few seconds, so drift moves
+    // them together and cancels in the ratio. Best-of across rounds then
+    // handles scheduling jitter, which interleaving does not help with.
+    std::vector<unsigned> per(NV, 1);
+    std::vector<double> bw(NV, 0.0);       // worst seen, for the spread
+
+    // Pass 1: calibrate the rep length and pick a thread count per variant.
+    // One rep per candidate; the peak matters, not its precision. Pinning this
+    // to hardware_concurrency understates the CPU, because the memory-bound
+    // variants top out well below all-threads once the pads stop fitting in L3,
+    // and an understated CPU inflates GPU:CPU.
     for (int ci = 0; ci < NV; ci++) {
         const Variant &v = VARIANTS[ci];
-        progress("CPU", v.name, ci + 1, NV);
+        progress("CPU thr", v.name, ci + 1, NV);
         const double one = cpu_bench(v, host, 1, 1, gid_mod);
         const double ms = one > 0.0 ? 1000.0 / one : 1000.0;
-        unsigned per = (unsigned)(400.0 / (ms > 0.001 ? ms : 0.001));
-        if (per < 1) per = 1;
-        if (per > 400) per = 400;
-        auto best_of = [&](unsigned threads) {
-            double b = 0.0, w = 0.0;
-            for (int rep = 0; rep < CPU_REPS; rep++) {
-                const double hs = cpu_bench(v, host, threads, per, gid_mod);
-                if (hs <= 0.0) continue;
-                if (hs > b) b = hs;
-                if (w == 0.0 || hs < w) w = hs;
-            }
-            if (w > 0.0 && threads == g_thr[ci]) g_cspread[ci] = b / w;
-            return b;
-        };
-        // Sweep thread counts and keep the peak. Pinning this to
-        // hardware_concurrency understates the CPU: the memory-bound variants
-        // top out well below all-threads once the pads stop fitting in L3, and
-        // an understated CPU inflates GPU:CPU, which errs toward making the
-        // algorithm look less resistant than it is. One rep per candidate to
-        // find the peak, then best-of-N at the winner.
+        // 1000 ms per rep, not 400. A 32-thread memory-bound window that short
+        // still has boost and thermal transitions in it, and the FP effect being
+        // measured is about 5%: at 400 ms the run spread on these rows reached 19%.
+        unsigned pr = (unsigned)(1000.0 / (ms > 0.001 ? ms : 0.001));
+        if (pr < 1) pr = 1;
+        if (pr > 1000) pr = 1000;
+        per[ci] = pr;
         unsigned cand[4] = { hw, hw * 3 / 4, hw / 2, hw / 4 };
         unsigned bestthr = hw; double bestv = 0.0;
         for (int c = 0; c < 4; c++) {
             if (cand[c] < 1) continue;
-            const double got = cpu_bench(v, host, cand[c], per, gid_mod);
+            const double got = cpu_bench(v, host, cand[c], per[ci], gid_mod);
             if (got > bestv) { bestv = got; bestthr = cand[c]; }
         }
         g_thr[ci] = bestthr;
-        g_cpu[ci] = best_of(bestthr);
-        const double h1 = best_of(1);
-        g_ms1[ci] = h1 > 0.0 ? 1000.0 / h1 : 0.0;
     }
+
+    // Pass 2: multi-threaded, interleaved, best-of, ORDER REVERSED EVERY OTHER
+    // ROUND. Interleaving alone leaves a systematic error: with a fixed order the
+    // baseline is always measured before the FP rows within each cycle, so any
+    // sawtooth in clocks across a cycle lands on the baseline's side every time
+    // and inflates the FP cost. Reversing cancels a monotonic drift to first
+    // order. Without it the baseline once read 11351 H/s against a 9900 H/s
+    // norm, 19% run spread, and carried the whole verdict with it.
+    for (int rep = 0; rep < CPU_REPS; rep++)
+        for (int z = 0; z < NV; z++) {
+            const int ci = (rep & 1) ? (NV - 1 - z) : z;
+            progress("CPU", VARIANTS[ci].name, rep * NV + z + 1, CPU_REPS * NV);
+            const double hs = cpu_bench(VARIANTS[ci], host, g_thr[ci], per[ci], gid_mod);
+            if (hs <= 0.0) continue;
+            if (hs > g_cpu[ci]) g_cpu[ci] = hs;
+            if (bw[ci] == 0.0 || hs < bw[ci]) bw[ci] = hs;
+        }
+    for (int ci = 0; ci < NV; ci++)
+        if (bw[ci] > 0.0 && g_cpu[ci] > 0.0) g_cspread[ci] = g_cpu[ci] / bw[ci];
+
+    // Pass 3: single thread, interleaved and reversed the same way.
+    std::vector<double> h1(NV, 0.0);
+    for (int rep = 0; rep < CPU_REPS; rep++)
+        for (int z = 0; z < NV; z++) {
+            const int ci = (rep & 1) ? (NV - 1 - z) : z;
+            progress("CPU 1T", VARIANTS[ci].name, rep * NV + z + 1, CPU_REPS * NV);
+            const double hs = cpu_bench(VARIANTS[ci], host, 1, per[ci], gid_mod);
+            if (hs > h1[ci]) h1[ci] = hs;
+        }
+    for (int ci = 0; ci < NV; ci++)
+        g_ms1[ci] = h1[ci] > 0.0 ? 1000.0 / h1[ci] : 0.0;
     progress_clear();
 
+    if (have_gpu) {
+        int any = 0;
+        for (int i = 0; i < NV; i++) if (g_gpu[i] <= 0.0 && g_why[i][0]) any++;
+        if (any) {
+            printf("GPU rows with no result:\n");
+            for (int i = 0; i < NV; i++)
+                if (g_gpu[i] <= 0.0 && g_why[i][0])
+                    printf("  %-11s %s\n", VARIANTS[i].name, g_why[i]);
+            printf("\n");
+        }
+    }
     printf("VARIANT       KB  nonces  ok   GPU H/s thr    CPU H/s   GPU:CPU    1T ms\n");
-    printf("---------------------------------------------------------------------------\n");
     for (int i = 0; i < NV; i++) {
         printf("%-11s %5zu", VARIANTS[i].name, VARIANTS[i].pad_kb);
         if (g_gpu[i] > 0.0) printf(" %7zu %3s %9.1f%s", g_nonces[i],
@@ -600,18 +787,109 @@ int main(int argc, char **argv) {
                                    g_spread[i] > 1.10 ? "!" : " ");
         else                printf(" %7s %3s %9s ", "-", "-", "-");
         printf(" %3u %9.1f%s", g_thr[i], g_cpu[i], g_cspread[i] > 1.10 ? "!" : " ");
-        if (g_gpu[i] > 0.0 && g_verified[i] == 1) printf(" %7.2fx", g_gpu[i] / g_cpu[i]);
+        if (g_gpu[i] > 0.0 && g_verified[i] == 1) printf(" %7.4fx", g_gpu[i] / g_cpu[i]);
         else                                      printf(" %8s", "-");
         printf(" %8.2f\n", g_ms1[i]);
     }
-    printf("---------------------------------------------------------------------------\n");
+
+    // ---- the Phase 2 FP question ----------------------------------------
+    // What the floating-point stage costs each side, as a multiple of the v8
+    // baseline. The modelling caveats that limit the absolute GPU:CPU column
+    // (extra_hash replaced by mix64, chain salt charged only to the CPU) cancel
+    // in these ratios, because numerator and denominator differ by the stage and
+    // by nothing else. That is why this block is worth more than the column.
+    {
+        int ib = -1, ir = -1, im = -1, ic = -1, ic2 = -1;
+        for (int i = 0; i < NV; i++) {
+            if (VARIANTS[i].gen == 8)  ib = i;
+            if (VARIANTS[i].gen == 9)  ir = i;
+            if (VARIANTS[i].gen == 10) im = i;
+            if (VARIANTS[i].gen == 5 && VARIANTS[i].pad_kb == 1024) {
+                if (ic < 0) ic = i; else ic2 = i;
+            }
+        }
+        // Divide the measured cost back down to one round count. Linear in the
+        // count on both sides, checked at 1x and 10x.
+        auto cost = [&](const double *arr, int i) {
+            if (!(ib >= 0 && i >= 0 && arr[i] > 0.0 && arr[ib] > 0.0)) return 0.0;
+            return 1.0 + (arr[ib] / arr[i] - 1.0) / (double)g_fp_mult;
+        };
+        auto fmt = [](char *b, double x) {
+            if (x > 0.0) snprintf(b, 12, "%6.3fx", x); else snprintf(b, 12, "%7s", "-");
+        };
+        char c1[12], c2[12], c3[12], c4[12];
+        fmt(c1, cost(g_gpu, ir)); fmt(c2, cost(g_cpu, ir));
+        fmt(c3, cost(g_gpu, im)); fmt(c4, cost(g_cpu, im));
+        printf("FP cost x v8 base   rne GPU %s CPU %s | modes GPU %s CPU %s%s\n",
+               c1, c2, c3, c4, g_fp_mult != 1 ? "  (scaled back from fpx)" : "");
+        if (ib >= 0 && im >= 0 && g_gpu[ib] > 0.0 && g_gpu[im] > 0.0 &&
+            g_cpu[ib] > 0.0 && g_cpu[im] > 0.0 && g_verified[ib] == 1 && g_verified[im] == 1) {
+            const double r0 = g_gpu[ib] / g_cpu[ib];
+            const double r1 = r0 * cost(g_cpu, im) / cost(g_gpu, im);
+            // r1 == r0 * cpu_cost / gpu_cost, both being multipliers on a rate.
+            //
+            // The CPU cost has to be the stage as a share of a WHOLE nonce, chain
+            // fill included, and the harness charges that fill per nonce because
+            // consensus does: get_block_longhash_v14 seeds HC128 from the blob hash
+            // and the blob carries the nonce, so get_cna_v6_data runs on every nonce
+            // for miner and verifier alike. F34's +14.5 to +18.2% is the stage
+            // against cn_slow_hash alone, which is the right number for verify cost
+            // and the wrong denominator here. An earlier version of this line used it
+            // and overstated the effect about threefold.
+            //
+            // The worst run spread over these rows goes beside the verdict, because
+            // the GPU effect is around 1% and so is the noise.
+            double sg = 0.0, sc = 0.0;
+            const int fprows[3] = { ib, ir, im };
+            for (int z = 0; z < 3; z++) {
+                const int j = fprows[z];
+                if (j < 0) continue;
+                if (g_spread[j]  > 1.0 + sg) sg = g_spread[j]  - 1.0;
+                if (g_cspread[j] > 1.0 + sc) sc = g_cspread[j] - 1.0;
+            }
+            printf("GPU:CPU %.4fx -> %.4fx, FP %s by %.0f%%   spread GPU %.1f%% CPU %.1f%%\n",
+                   r0, r1, r1 < r0 ? "HELPS" : "HURTS",
+                   100.0 * (r1 > r0 ? r1 - r0 : r0 - r1) / r0, 100.0 * sg, 100.0 * sc);
+            // The GPU rows are NOT interleaved (each needs its own buffers), so the
+            // within-row spread above understates their real uncertainty: v8 and
+            // v8+fp are measured a minute apart. v5 1MB and v8 1MB are identical GPU
+            // work, so the gap between them IS that cross-row reproducibility,
+            // measured rather than assumed. The FP effect has to clear it to mean
+            // anything, and on the GPU the two are within about a factor of two.
+            // THREE rows of identical GPU work, one before the FP rows and one
+            // after, so the floor brackets them instead of leading them. Measured
+            // only between the first two, the control read 0.02% on a run whose FP
+            // rows were visibly noise, because drift that accumulates by rows 3 and
+            // 4 cannot show up in a comparison of rows 1 and 2.
+            double ctl = 0.0;
+            const int ctls[3] = { ic, ib, ic2 };
+            for (int x = 0; x < 3; x++)
+                for (int y = x + 1; y < 3; y++) {
+                    const int u = ctls[x], w = ctls[y];
+                    if (u < 0 || w < 0 || g_gpu[u] <= 0.0 || g_gpu[w] <= 0.0) continue;
+                    const double d = (g_gpu[u] > g_gpu[w] ? g_gpu[u] - g_gpu[w]
+                                                          : g_gpu[w] - g_gpu[u]) / g_gpu[w];
+                    if (d > ctl) ctl = d;
+                }
+            // Scaled by fp_mult exactly as the costs above are, or the two are not
+            // comparable: at fpx10 a raw 4.0% FP gap against a raw 1.1% drift floor
+            // printed as "1.004x" against "1.14%" and read as though the effect were
+            // under the floor, when it is 3.5x above it.
+            if (ctl > 0.0)
+                printf("control: %.3f%% drift between rows of identical GPU work, one\n"
+                       "         after the FP rows. Same scale as the costs above\n",
+                       100.0 * ctl / (double)g_fp_mult);
+        }
+        if (g_no_fp64)
+            printf("no cl_khr_fp64 here, so the FP rows could not run.\n");
+    }
     // ---- v5 sweep bound -------------------------------------------------
     // How much an optimising GPU miner could gain on v5's salt_pad sweeps,
     // the only part of v5 with no loop-carried dependency and therefore the
     // only part anyone can restructure. Both kernels apply identical XORs;
     // sweep_vec just folds every hit inside an 8-byte word into one load and
     // store instead of doing a byte read-modify-write per hit.
-    if (have_gpu) {
+    if (have_gpu && g_all) {
         cl_int se = 0;
         const size_t sp_bytes = 8ull * 1024 * 1024;
         const size_t sp_n = 64;
@@ -654,12 +932,15 @@ int main(int argc, char **argv) {
         if (ssalt) cl.ReleaseMemObject(ssalt);
         if (sout)  cl.ReleaseMemObject(sout);
     }
-    if (g_sweep_ratio > 0.0 || g_alu_full > 0.0)
+    if (g_all && (g_sweep_ratio > 0.0 || g_alu_full > 0.0))
         printf("v5 sweep opt %.1fx | JIT ceiling %.2fx (v6/v7 only, v5 has no program)\n",
                g_sweep_ratio > 0.0 ? g_sweep_ratio : 1.0,
                g_alu_full > 0.0 ? g_alu_only / g_alu_full : 1.0);
-    printf("ok=yes: GPU hash matched CPU hash. No ok = no ratio.\n");
-    printf("GPU:CPU lower is better, >1.00 the GPU wins. \"!\" = >10%% run spread.\n");
+    printf("ok = GPU matched CPU; on v8+fp that proves OpenCL's software rounding is\n"
+           "bit-exact against a real MXCSR. No ok, no ratio. Lower GPU:CPU is better.\n"
+           "CPU cost is per whole nonce, chain fill included: that is what a miner\n"
+           "pays, since the salt is reseeded from the nonce. v5/v8 1MB are the same\n"
+           "GPU work, so a gap there is the port, not the algorithm.\n");
 
     if (have_gpu) { cl.ReleaseProgram(prog); cl.ReleaseCommandQueue(q); cl.ReleaseContext(ctx); }
     return 0;

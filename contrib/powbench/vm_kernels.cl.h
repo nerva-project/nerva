@@ -27,6 +27,18 @@
 //   core to generate, so a GPU on a full node gets it nearly free. Its
 //   RESIDENCY is modelled, because that is a real VRAM cost.
 static const char *VM_KERNEL_SRC = R"CLC(
+// FP64 is an optional OpenCL feature. Guarded rather than assumed: a device
+// without it must still build the v5/v6/v7 kernels, so the FP kernels simply
+// do not exist there and main.cpp skips those rows instead of the whole
+// program failing to build.
+#if defined(cl_khr_fp64)
+#  pragma OPENCL EXTENSION cl_khr_fp64 : enable
+#  define CN_HAVE_FP64 1
+#elif defined(cl_amd_fp64)
+#  pragma OPENCL EXTENSION cl_amd_fp64 : enable
+#  define CN_HAVE_FP64 1
+#endif
+
 #define ROTL32(x,n) (((x) << (n)) | ((x) >> (32-(n))))
 #define CN_REG_COUNT   8
 #define CN_SALT_MEMORY 262144
@@ -472,6 +484,349 @@ __kernel void cna_v5(__global ulong *b0, const ulong qw,
 }
 
 
+
+// ---------------------------------------------------------------------------
+// PLAN-v8 Phase 2: the floating-point stage, ported from src/crypto/slow-hash-fp.h.
+//
+// Runs once per nonce, between the xx/yy loop and the iters loop, exactly
+// where CN_FP_STAGE() sits in slow-hash-v8-impl.h. Seeded from a and two pad
+// lines, folded back into both pad lines and a. 9,600 rounds of five
+// operations, with the rounding mode reselected from data every sixteenth
+// round.
+//
+// THE POINT OF THIS KERNEL. OpenCL cannot change the rounding mode at all:
+// round-to-nearest-even is the only mode for arithmetic,
+// cl_khr_select_fprounding_mode was deprecated in OpenCL 1.1 and no current
+// vendor implements it, and only the convert_* builtins take a rounding
+// suffix. So the three kernels below separate the two costs that argument
+// turns on. cna_v8 is the baseline, cna_v8_fp_rne adds the arithmetic at fixed
+// nearest-even, and cna_v8_fp adds the data-driven rounding an OpenCL miner
+// would actually have to produce. The gap between the last two is what a
+// rounding mode costs a GPU; a CPU pays one MXCSR or FPCR write.
+// ---------------------------------------------------------------------------
+#ifdef CN_HAVE_FP64
+
+#define CN_V8_FP_ROUNDS      9600
+#define CN_V8_FP_ROUND_MASK  15
+
+// RandomX constExponentBits = 0x300: sign cleared, top three exponent bits
+// forced to 011, so every value is a positive normal in [2^-255, 2).
+static inline double fp_bits_to_e(ulong bits)
+{
+    const ulong e = 0x300UL | ((bits >> 52) & 0xFFUL);
+    return as_double((e << 52) | (bits & 0x000FFFFFFFFFFFFFUL));
+}
+
+// One ULP toward +inf (dir > 0) or -inf (dir < 0). The zero case cannot arise
+// from this stage's operands but is handled rather than assumed away, since
+// getting it wrong would produce a NaN from a bit pattern rather than a wrong
+// number, and the checksum gate would report it as drift.
+static inline double fp_nudge(double x, int dir)
+{
+    ulong b = as_ulong(x);
+    if ((b << 1) == 0UL)
+        return dir > 0 ? as_double(1UL) : as_double(0x8000000000000001UL);
+    const int neg = (int)(b >> 63);
+    if ((dir > 0) == (neg != 0)) b -= 1UL;
+    else                         b += 1UL;
+    return as_double(b);
+}
+
+// esign is the sign of (exact result - r), where r is the nearest-even result.
+// The exact value lies between two adjacent doubles and r is one of them, so
+// the directed result is either r or its neighbour on the side esign names.
+// mode indexes cn_fp_modes in slow-hash-fp.h: 0 nearest, 1 down, 2 up, 3 zero.
+static inline double fp_apply(double r, int esign, int mode)
+{
+    if (mode == 0 || esign == 0) return r;
+    const int want = (mode == 1) ? -1
+                   : (mode == 2) ?  1
+                   : (((as_ulong(r) >> 63) != 0UL) ? 1 : -1);
+    return (want == esign) ? fp_nudge(r, esign) : r;
+}
+
+static inline int fp_esign(double err)
+{
+    return (err == 0.0) ? 0 : (((as_ulong(err) >> 63) != 0UL) ? -1 : 1);
+}
+
+// The five operations under an arbitrary IEEE rounding mode. Each recovers the
+// exact residual of the nearest-even result: 2Sum for add and subtract, and a
+// single fma for multiply, divide and square root. Those identities need the
+// residual to be representable, which the group-E constraint guarantees here:
+// operands live in [2^-255, 2), so no sum, product, quotient or residual can
+// overflow or reach a subnormal.
+//
+// Written branch-free on purpose. A per-lane switch on the mode would diverge
+// across a warp and inflate the cost, and a miner would not write that. Giving
+// the GPU the strongest implementation is the conservative choice when the
+// number is going to be used to argue about GPU resistance.
+static inline double fp_add_m(double a, double b, int mode)
+{
+    const double s   = a + b;
+    const double bb  = s - a;
+    const double err = (a - (s - bb)) + (b - bb);
+    return fp_apply(s, fp_esign(err), mode);
+}
+
+static inline double fp_mul_m(double a, double b, int mode)
+{
+    const double p = a * b;
+    return fp_apply(p, fp_esign(fma(a, b, -p)), mode);
+}
+
+static inline double fp_div_m(double a, double b, int mode)
+{
+    const double q = a / b;
+    // exact a - q*b; sign(exact quotient - q) = sign(residual) * sign(b)
+    int es = fp_esign(fma(-q, b, a));
+    if ((as_ulong(b) >> 63) != 0UL) es = -es;
+    return fp_apply(q, es, mode);
+}
+
+static inline double fp_sqrt_m(double a, int mode)
+{
+    const double s = sqrt(a);
+    return fp_apply(s, fp_esign(fma(-s, s, a)), mode);
+}
+
+// The round body, twice: once on native nearest-even arithmetic and once on
+// the emulated modes. Both constrain every result before anything reads it,
+// which is what makes fma contraction structurally impossible here as well as
+// on the CPU: no multiply result is ever consumed by an add.
+#define CN_FP_ROUND_RNE(e)                                  \
+    e[0] = fp_bits_to_e(as_ulong(e[0] + e[1]));             \
+    e[1] = fp_bits_to_e(as_ulong(e[1] - e[2]));             \
+    e[2] = fp_bits_to_e(as_ulong(e[2] * e[3]));             \
+    e[3] = fp_bits_to_e(as_ulong(e[3] / e[0]));             \
+    e[0] = fp_bits_to_e(as_ulong(sqrt(e[0])));
+
+#define CN_FP_ROUND_MODE(e, M)                              \
+    e[0] = fp_bits_to_e(as_ulong(fp_add_m(e[0],  e[1], M))); \
+    e[1] = fp_bits_to_e(as_ulong(fp_add_m(e[1], -e[2], M))); \
+    e[2] = fp_bits_to_e(as_ulong(fp_mul_m(e[2],  e[3], M))); \
+    e[3] = fp_bits_to_e(as_ulong(fp_div_m(e[3],  e[0], M))); \
+    e[0] = fp_bits_to_e(as_ulong(fp_sqrt_m(e[0],      M)));
+
+// emulate = 0: fixed nearest-even, which is all OpenCL can express natively.
+// emulate = 1: the algorithm as specified, modes selected from data.
+static void cn_fp_stage_cl(__global ulong *pad, ulong nblocks,
+                           ulong *pa0, ulong *pa1, const int emulate,
+                           const uint rounds)
+{
+    const ulong mask = nblocks - 1UL;
+    const ulong a0 = *pa0, a1 = *pa1;
+    __global ulong *p0 = pad + ((a0 >> 4) & mask) * 2UL;
+    __global ulong *p1 = pad + ((a1 >> 4) & mask) * 2UL;
+    double e[4];
+
+    e[0] = fp_bits_to_e(p0[0]);
+    e[1] = fp_bits_to_e(p0[1]);
+    e[2] = fp_bits_to_e(p1[0] ^ a0);
+    e[3] = fp_bits_to_e(p1[1] ^ a1);
+
+    if (emulate) {
+        int mode = 0;
+        for (uint r = 0; r < rounds; r++) {
+            if ((r & CN_V8_FP_ROUND_MASK) == 0)
+                mode = (int)((as_ulong(e[0]) >> 3) & 3UL);
+            CN_FP_ROUND_MODE(e, mode)
+        }
+    } else {
+        for (uint r = 0; r < rounds; r++) {
+            CN_FP_ROUND_RNE(e)
+        }
+    }
+
+    // p1 before p0, matching slow-hash-fp.h, so a j0 == j1 collision resolves
+    // the same way on both sides.
+    p1[0] ^= as_ulong(e[2]);
+    p1[1] ^= as_ulong(e[1]);
+    p0[0] ^= as_ulong(e[0]);
+    p0[1] ^= as_ulong(e[3]);
+
+    *pa0 = a0 ^ as_ulong(e[0]) ^ as_ulong(e[2]);
+    *pa1 = a1 ^ as_ulong(e[1]) ^ as_ulong(e[3]);
+}
+
+#endif /* CN_HAVE_FP64 */
+
+// ---------------------------------------------------------------------------
+// v8: v5 with salt_pad's hash selector widened from a % 3 to a & 3, plus the
+// Phase 2 FP stage. The selector change is invisible here because the model
+// replaces extra_hash with a mix64 chain of equal call count, so cna_v8 with
+// fp_mode -1 computes what cna_v5 computes. That is deliberate: the "v5 1MB"
+// and "v8 1MB" rows are then the same work through two separate code paths,
+// which is the control that catches the dead FP code costing registers and
+// occupancy in the baseline. If those two rows disagree, the ratios below are
+// measuring the port rather than the algorithm.
+//
+// One body, three kernels, so the FP rows cannot drift from the baseline they
+// are divided by. fp_mode is a compile-time constant at each call site, so the
+// unused path is dead code in every one of them.
+// ---------------------------------------------------------------------------
+static void cna_core(__global ulong *b0, const ulong qw,
+                     __global const uchar *params, __global ulong *salts_all,
+                     const uint salt_qw,
+                     __constant uint *te0, __constant uint *rk,
+                     __global ulong *out, __global ulong *b1, __global ulong *b2,
+                     __global ulong *b3, const uint per_buf,
+                     const int fp_mode, const uint fp_rounds)
+{
+    const size_t gid = get_global_id(0);
+    __global ulong *pad = PICK_BUF(gid, per_buf, qw, b0, b1, b2, b3);
+    // v5 re-reads its salt roughly 30 times per nonce, so unlike v6 it cannot
+    // stream it: the 256 KB stays resident for the whole hash. Modelled.
+    __global ulong *salt = salts_all + (size_t)gid * salt_qw;
+    // Derive the per-nonce salt from gid. Real v5 gets it from the chain, but
+    // the content does not affect timing and deriving it here means the CPU
+    // reference can produce the same bytes, which is what lets the checksum
+    // gate verify this kernel. About 200K ops against a hash of many millions.
+    {
+        ulong sx = (ulong)gid * 0x9e3779b97f4a7c15UL + 0xABCDEFUL;
+        for (uint i = 0; i < salt_qw; i++) { sx = mix64(sx, i + 1u); salt[i] = sx; }
+    }
+
+    const uint xx    = 4u + params[gid * 4 + 0];
+    const uint yy    = 4u + params[gid * 4 + 1];
+    const uint it_n  = params[gid * 4 + 2];
+    const uint d     = params[gid * 4 + 3];
+
+    aes_fill_pad((__global uint *)pad, (uint)(qw * 8 / 128), te0, rk, gid);
+
+    // randomize_scratchpad_256k: one BYTE every four XORed with successive
+    // salt bytes, PAD/4 iterations. Not the same as v13's salt pass, which
+    // XORs a full 32-bit word every four bytes.
+    {
+        __global uchar *sp8 = (__global uchar *)pad;
+        __global const uchar *ss8 = (__global const uchar *)salt;
+        uint x = 0;
+        const uint nb = (uint)(qw * 8);
+        for (uint i = 0; i < nb; i += 4) {
+            sp8[i] ^= ss8[x++];
+            if (x >= CN_SALT_MEMORY) x = 0;
+        }
+    }
+
+    const ulong nblocks = qw / 2;            // 16-byte blocks
+    ulong a0 = pad[0], a1 = pad[1];
+    ulong b_0 = pad[2], b_1 = pad[3];
+    ulong salt_acc = 0;
+    // salt_pad walks the pad as BYTES with a byte stride (hp_state is uint8_t*
+    // in slow-hash.h), so the sweep is PAD/offset_2 iterations. Indexing
+    // 32-bit words did a quarter of the work.
+    const uint salt_mask8 = (salt_qw * 8) - 1;
+
+    for (uint k = 1; k < xx; k++) {
+        for (uint l = 0; l < yy; l++) {
+            // pre_aes + aesenc + post_aes_variant
+            ulong j = (a0 >> 4) % nblocks;
+            ulong c0 = pad[j*2], c1 = pad[j*2+1];
+            // one AES round on the 16-byte block, key = a
+            uint x0=(uint)c0, x1=(uint)(c0>>32), x2=(uint)c1, x3=(uint)(c1>>32);
+            uint k0=(uint)a0, k1=(uint)(a0>>32), k2=(uint)a1, k3=(uint)(a1>>32);
+            uint t0 = te0[x0 & 0xff] ^ ROTL32(te0[(x1>>8)&0xff],8) ^ ROTL32(te0[(x2>>16)&0xff],16) ^ ROTL32(te0[(x3>>24)&0xff],24) ^ k0;
+            uint t1 = te0[x1 & 0xff] ^ ROTL32(te0[(x2>>8)&0xff],8) ^ ROTL32(te0[(x3>>16)&0xff],16) ^ ROTL32(te0[(x0>>24)&0xff],24) ^ k1;
+            uint t2 = te0[x2 & 0xff] ^ ROTL32(te0[(x3>>8)&0xff],8) ^ ROTL32(te0[(x0>>16)&0xff],16) ^ ROTL32(te0[(x1>>24)&0xff],24) ^ k2;
+            uint t3 = te0[x3 & 0xff] ^ ROTL32(te0[(x0>>8)&0xff],8) ^ ROTL32(te0[(x1>>16)&0xff],16) ^ ROTL32(te0[(x2>>24)&0xff],24) ^ k3;
+            ulong n0 = ((ulong)t1 << 32) | t0, n1 = ((ulong)t3 << 32) | t2;
+            pad[j*2]   = b_0 ^ n0;
+            pad[j*2+1] = b_1 ^ n1;
+            ulong j2 = (n0 >> 4) % nblocks;
+            ulong p0 = pad[j2*2], p1 = pad[j2*2+1];
+            ulong hi = mul_hi(n0, p0), lo = n0 * p0;
+            a0 += hi; a1 += lo;
+            pad[j2*2] = a0; pad[j2*2+1] = a1;
+            a0 ^= p0; a1 ^= p1;
+            b_0 = n0; b_1 = n1;
+
+            // salt_pad: a strided sweep of the whole pad against the salt.
+            // The 200-byte extra_hash is replaced by a mix64 chain of the same
+            // call count; measured at well under 1% of a nonce.
+            salt_acc = mix64(salt_acc ^ a0, (uint)(k * 31u + l));
+            uint off1 = ((uint)(salt_acc & 63)) + 1u;
+            uint off2 = (((uint)(salt_acc >> 8) * off1) % 125u) + 4u;
+            uint sx = 0;
+            __global uchar *p8 = (__global uchar *)pad;
+            __global const uchar *s8 = (__global const uchar *)salt;
+            const uint nbytes = (uint)(qw * 8);
+            for (uint jj = off1; jj < nbytes; jj += off2) {
+                p8[jj] ^= s8[sx & salt_mask8];
+                sx++;
+            }
+        }
+    }
+#ifdef CN_HAVE_FP64
+    // CN_FP_STAGE() in slow-hash-v8-impl.h sits here, between the xx/yy loop
+    // and the iters loop, and runs once per nonce.
+    if (fp_mode >= 0) cn_fp_stage_cl(pad, nblocks, &a0, &a1, fp_mode, fp_rounds);
+#else
+    (void)fp_mode; (void)fp_rounds;
+#endif
+
+    for (uint i = 0; i < it_n; i++) {
+        ulong j = (a0 >> 4) % nblocks;
+        ulong c0 = pad[j*2], c1 = pad[j*2+1];
+        uint x0=(uint)c0, x1=(uint)(c0>>32), x2=(uint)c1, x3=(uint)(c1>>32);
+        uint k0=(uint)a0, k1=(uint)(a0>>32), k2=(uint)a1, k3=(uint)(a1>>32);
+        uint t0 = te0[x0 & 0xff] ^ ROTL32(te0[(x1>>8)&0xff],8) ^ ROTL32(te0[(x2>>16)&0xff],16) ^ ROTL32(te0[(x3>>24)&0xff],24) ^ k0;
+        uint t1 = te0[x1 & 0xff] ^ ROTL32(te0[(x2>>8)&0xff],8) ^ ROTL32(te0[(x3>>16)&0xff],16) ^ ROTL32(te0[(x0>>24)&0xff],24) ^ k1;
+        uint t2 = te0[x2 & 0xff] ^ ROTL32(te0[(x3>>8)&0xff],8) ^ ROTL32(te0[(x0>>16)&0xff],16) ^ ROTL32(te0[(x1>>24)&0xff],24) ^ k2;
+        uint t3 = te0[x3 & 0xff] ^ ROTL32(te0[(x0>>8)&0xff],8) ^ ROTL32(te0[(x1>>16)&0xff],16) ^ ROTL32(te0[(x2>>24)&0xff],24) ^ k3;
+        ulong n0 = ((ulong)t1 << 32) | t0, n1 = ((ulong)t3 << 32) | t2;
+        pad[j*2]   = b_0 ^ n0;
+        pad[j*2+1] = b_1 ^ n1;
+        ulong j2 = (n0 >> 4) % nblocks;
+        ulong p0 = pad[j2*2], p1 = pad[j2*2+1];
+        ulong hi = mul_hi(n0, p0), lo = n0 * p0;
+        a0 += hi; a1 += lo;
+        pad[j2*2] = a0; pad[j2*2+1] = a1;
+        a0 ^= p0; a1 ^= p1;
+        b_0 = n0; b_1 = n1;
+    }
+    (void)d;
+    ulong acc = a0 ^ a1 ^ b_0 ^ b_1 ^ salt_acc;
+    acc ^= aes_finalize((__global const uint *)pad, (uint)(qw * 8 / 128), te0, rk, gid);
+    out[gid] = acc ? acc : 1UL;
+}
+
+__kernel void cna_v8(__global ulong *b0, const ulong qw,
+                     __global const uchar *params, __global ulong *salts_all,
+                     const uint salt_qw,
+                     __constant uint *te0, __constant uint *rk,
+                     __global ulong *out, __global ulong *b1, __global ulong *b2,
+                     __global ulong *b3, const uint per_buf,
+                     const uint fp_rounds)
+{
+    cna_core(b0, qw, params, salts_all, salt_qw, te0, rk, out, b1, b2, b3, per_buf,
+             -1, fp_rounds);
+}
+
+#ifdef CN_HAVE_FP64
+__kernel void cna_v8_fp_rne(__global ulong *b0, const ulong qw,
+                            __global const uchar *params, __global ulong *salts_all,
+                            const uint salt_qw,
+                            __constant uint *te0, __constant uint *rk,
+                            __global ulong *out, __global ulong *b1, __global ulong *b2,
+                            __global ulong *b3, const uint per_buf,
+                            const uint fp_rounds)
+{
+    cna_core(b0, qw, params, salts_all, salt_qw, te0, rk, out, b1, b2, b3, per_buf,
+             0, fp_rounds);
+}
+
+__kernel void cna_v8_fp(__global ulong *b0, const ulong qw,
+                        __global const uchar *params, __global ulong *salts_all,
+                        const uint salt_qw,
+                        __constant uint *te0, __constant uint *rk,
+                        __global ulong *out, __global ulong *b1, __global ulong *b2,
+                        __global ulong *b3, const uint per_buf,
+                        const uint fp_rounds)
+{
+    cna_core(b0, qw, params, salts_all, salt_qw, te0, rk, out, b1, b2, b3, per_buf,
+             1, fp_rounds);
+}
+#endif /* CN_HAVE_FP64 */
 
 // What a perfect JIT would emit for v6: straight-line code, registers in
 // registers, no instruction fetch, no switch dispatch, no register select
