@@ -139,9 +139,18 @@ PROBE
         fi
         [ -n "$ARCHFLAGS" ] && echo "arm crypto via: $ARCHFLAGS"
         ;;
-    *)
+    x86_64 | amd64 | i386 | i486 | i586 | i686)
         CC=${CC:-gcc}
         ARCHFLAGS=${ARCHFLAGS:--maes -march=x86-64}
+        ;;
+    *)
+        # riscv64, ppc64le, s390x and anything else: no hardware AES path in
+        # slow-hash.h, so no architecture flags and no -maes. The dispatcher's
+        # detect_hardware_aes returns 0 on these, so everything routes to the
+        # software body and the banner says so. Slower, and correct, which is
+        # what a portability check wants.
+        CC=${CC:-cc}
+        ARCHFLAGS=${ARCHFLAGS:-}
         ;;
 esac
 

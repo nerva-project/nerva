@@ -1,0 +1,155 @@
+# Copyright (c) 2018-2024, The Nerva Project
+# Copyright (c) 2014-2024, The Monero Project
+#
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without modification, are
+# permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this list of
+#    conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice, this list
+#    of conditions and the following disclaimer in the documentation and/or other
+#    materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its contributors may be
+#    used to endorse or promote products derived from this software without specific
+#    prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
+# EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
+# THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+# STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+# THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+# Does the CryptoNight-Adaptive v8 floating-point stage compute the same values
+# on architectures nobody here owns?
+#
+# PLAN-v8 Phase 2 adds IEEE-754 double arithmetic to the hash. A single ULP of
+# disagreement between two platforms forks the chain, so determinism is the
+# property that decides whether the stage can ship. It has been verified by hand
+# on x86-64 (Windows, Linux) and aarch64 (macOS, Android). This covers the rest
+# of what the build claims to support, under QEMU.
+#
+# Two probes, and they answer different questions.
+#
+# t_fp_determinism is standalone C with no project dependencies. It exercises
+# the five permitted operations under the group-E constraint and prints four
+# checksums of raw bit patterns. Nothing in it is endian-sensitive: memcpy
+# between a double and a uint64_t yields the IEEE bit pattern as an integer on
+# either byte order, because both types use the machine's own order. So this
+# must pass everywhere, big-endian included, and it is a hard gate.
+#
+# t_fp_stage links the real hash and compares v14 against v15. It is expected to
+# FAIL on s390x, and that is not about floating point: e2i in slow-hash.h reads
+# the scratchpad index through *((uint64_t *)a) with no SWAP64LE, while mul and
+# sum_half_blocks seven lines below it both swap. Every big-endian machine takes
+# the software-AES path and hits e2i, so v5, v11 and v14 already compute
+# different hashes there. Big-endian support is nominal. FINDINGS.md F36.
+#
+# The s390x job is therefore marked as expected to fail rather than removed: it
+# pins the current state, and if anyone ever fixes the endianness it will start
+# passing and say so.
+
+name: fp-portability
+
+on:
+  push:
+    paths:
+      - 'src/crypto/slow-hash-fp.h'
+      - 'src/crypto/slow-hash-v8fp-*.c'
+      - 'contrib/powbench/t_fp_determinism.c'
+      - 'contrib/powbench/t_fp_stage.c'
+      - 'contrib/powbench/build-*.sh'
+      - '.github/workflows/fp-portability.yml'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  fp:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # little-endian, a third architecture family and libc beyond x86 and ARM
+          - arch: riscv64
+            distro: ubuntu_latest
+            stage_expected: pass
+          # the 32-bit ARM path, which nothing has exercised
+          - arch: armv7
+            distro: ubuntu_latest
+            stage_expected: pass
+          # big-endian. FP must still match; the full hash is expected not to
+          - arch: s390x
+            distro: ubuntu_latest
+            stage_expected: fail
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: uraimo/run-on-arch-action@v2
+        name: build and run the FP probes on ${{ matrix.arch }}
+        with:
+          arch: ${{ matrix.arch }}
+          distro: ${{ matrix.distro }}
+          githubToken: ${{ github.token }}
+          install: |
+            apt-get update -q
+            apt-get install -q -y build-essential
+          run: |
+            set -e
+            echo "::group::t_fp_determinism"
+            cc -O2 -ffp-contract=off contrib/powbench/t_fp_determinism.c -o t_fp_determinism -lm
+            ./t_fp_determinism | tee fp.txt
+            echo "::endgroup::"
+
+            # The x86-64 reference, from commit fb5f781. All four must match, on
+            # every architecture, byte order included.
+            for pair in \
+              "basic add/sub/mul/div:8ae92fac4343e627" \
+              "sqrt and div:0de4d9f1333e87b7" \
+              "fma contraction canary:04c3614dff6aed8c" \
+              "data-driven rounding:d6e736346922def8"
+            do
+              label="${pair%%:*}"
+              want="${pair##*:}"
+              if ! grep -q "$label *: *$want" fp.txt; then
+                echo "MISMATCH: $label expected $want"
+                echo "A divergence here means the FP stage cannot ship as-is."
+                exit 1
+              fi
+            done
+            echo "t_fp_determinism: all four checksums match the x86-64 reference"
+
+            echo "::group::t_fp_stage"
+            if sh contrib/powbench/build-fp-stage-test.sh && ./t_fp_stage > stage.txt 2>&1; then
+              stage_rc=0
+            else
+              stage_rc=1
+            fi
+            cat stage.txt || true
+            echo "::endgroup::"
+
+            if [ "${{ matrix.stage_expected }}" = "fail" ]; then
+              if [ "$stage_rc" = "0" ]; then
+                echo "t_fp_stage PASSED on a big-endian target."
+                echo "That is a change: it was expected to fail on e2i's missing"
+                echo "SWAP64LE (FINDINGS.md F36). Someone has fixed endianness."
+                echo "Update this workflow and F36."
+                exit 1
+              fi
+              echo "t_fp_stage failed as expected on big-endian; see F36"
+            else
+              if [ "$stage_rc" != "0" ]; then
+                echo "t_fp_stage FAILED on a little-endian target."
+                echo "This is the result that would stop the FP stage shipping."
+                exit 1
+              fi
+              echo "t_fp_stage: v14 and v15 match the reference on this architecture"
+            fi

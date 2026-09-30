@@ -1,13 +1,14 @@
 #!/bin/sh
-# Build the Phase 2 FP stage test. Generated from build-v8bench.sh: same source
-# list, same flags, same platform handling, plus the two v8fp translation units,
-# because this links v14 and v15 into one binary to compare them.
+# Build the Phase 2 FP stage test. Generated from build-v8bench.sh by
+# substituting the output name and the main source, so the two cannot drift in
+# flags or platform handling.
 #
 #   sh contrib/powbench/build-fp-stage-test.sh
 #   ./t_fp_stage
 #
-# Exit 0 means the FP determinism vector matched, the stage changed the hash on
-# every input including iters=0, and the two AES arms agreed.
+# Exit 0 means the FP determinism vector matched, the value scan found no
+# denormal or infinity or NaN, the stage changed the hash on every input
+# including iters=0, and the two AES arms agreed.
 #
 # (the rest of this header is build-v8bench.sh's and applies unchanged)
 # Build v8bench as a single executable that runs on a machine with no toolchain
@@ -150,9 +151,18 @@ PROBE
         fi
         [ -n "$ARCHFLAGS" ] && echo "arm crypto via: $ARCHFLAGS"
         ;;
-    *)
+    x86_64 | amd64 | i386 | i486 | i586 | i686)
         CC=${CC:-gcc}
         ARCHFLAGS=${ARCHFLAGS:--maes -march=x86-64}
+        ;;
+    *)
+        # riscv64, ppc64le, s390x and anything else: no hardware AES path in
+        # slow-hash.h, so no architecture flags and no -maes. The dispatcher's
+        # detect_hardware_aes returns 0 on these, so everything routes to the
+        # software body and the banner says so. Slower, and correct, which is
+        # what a portability check wants.
+        CC=${CC:-cc}
+        ARCHFLAGS=${ARCHFLAGS:-}
         ;;
 esac
 

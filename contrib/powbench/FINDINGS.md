@@ -1099,6 +1099,62 @@ and without the stage measured in the same run so throttling and background load
 land on both. Phone run unpinned and under a wake lock, since a thread ladder on
 one pinned core measures nothing.
 
+### F36. Big-endian support is nominal: `e2i` is missing its byte swap
+
+`e2i` in `src/crypto/slow-hash.h` reads the scratchpad index straight out of
+memory:
+
+    STATIC size_t e2i(const uint8_t *a, size_t count)
+    { return (*((uint64_t *)a) / AES_BLOCK_SIZE) & (count - 1); }
+
+There is no `SWAP64LE`. Seven lines below it, `mul` and `sum_half_blocks` both
+use it on every load and store. Upstream's version of this line has it.
+
+`SWAP64LE` is `IDENT64` on little-endian and `SWAP64` on big-endian
+(`contrib/epee/include/int-util.h`), so on every machine anyone runs this on,
+the omission is invisible. On a big-endian machine the same sixteen bytes yield
+a different index, so the hash walks a different path through the pad and comes
+out different.
+
+**This reaches live consensus, not just the Phase 2 prototype.** The hardware-AES
+gate in `slow-hash.h` covers only x86 and aarch64-with-crypto, so every
+big-endian target compiles the software path and calls `e2i`. That path is what
+`cn_slow_hash_v11` and `cn_slow_hash_v14` run there, which means v5 and v8
+already produce different proof-of-work on big-endian than on little-endian.
+
+So the s390x entry in `CMakeLists.txt` buys a build, not a working node. A node
+built there would reject the chain. **Big-endian support is nominal.**
+
+Two consequences worth separating.
+
+**For Phase 2:** the FP stage inherits this rather than causing it, and the same
+is true of its own `(uint64_t *)` reads of `a` and the pad. "v15 adds
+big-endian risk" was wrong as an argument against shipping it; the risk predates
+it by every release.
+
+**For a fix, if anyone wants one:** adding `SWAP64LE` to `e2i` is provably a
+no-op on little-endian, since the macro is the identity there, so it cannot
+change any hash any existing node computes. That makes it safe in a way most
+consensus edits are not. It is not done here because it is a consensus file and
+the decision is not a measurement. Note also that fixing `e2i` alone would not
+be sufficient: the FP stage would need the same treatment, and nothing has
+audited the rest of the software path for other unswapped reads.
+
+*Checked:* read the three functions together in `slow-hash.h`; confirmed
+`SWAP64LE` resolves to `IDENT64` under `__LITTLE_ENDIAN__` in
+`contrib/epee/include/int-util.h`; confirmed the hardware gate at
+`slow-hash.h:234` excludes every architecture that is not x86 or
+aarch64-with-crypto, so big-endian necessarily takes the `e2i` path; and traced
+the line's history to 83ff56d, which introduced it without the swap. The swap
+was never present in this file.
+
+*Pinned by CI:* `.github/workflows/fp-portability.yml` runs the FP probes under
+QEMU on riscv64, armv7 and s390x. `t_fp_determinism` is a hard gate on all
+three, including big-endian, because nothing in it is endian-sensitive.
+`t_fp_stage` is expected to fail on s390x and the workflow fails if it ever
+starts passing, so a future endianness fix announces itself instead of going
+unnoticed.
+
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell
