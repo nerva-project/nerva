@@ -408,11 +408,75 @@ static int shipped_matches_recompiled(void)
  * closer to one box one vote.
  */
 
+/* Start gate: hold every worker until all of them are built, so the clock
+ * measures hashing rather than thread creation and page faults.
+ *
+ * This used a POSIX barrier and does not any more, for two independent reasons.
+ *
+ * macOS does not implement them. Barriers are optional in the standard and
+ * Apple's libpthread omits them, so the type and its three functions are simply
+ * undeclared there and the harness would not compile at all.
+ *
+ * The fixed participant count was also wrong. The barrier was sized t + 1, and
+ * when pthread_create failed partway the controller tried to absorb the missing
+ * slots by waiting once per missing thread. Its first such wait blocks, because
+ * the barrier has not been reached, so it could never make the remaining calls:
+ * the loop whose comment read "or everyone waits forever" was itself the thing
+ * that waited forever. Only reachable when thread creation fails, which is why
+ * it survived this long.
+ *
+ * A gate needs no fixed count. Workers announce arrival and block; the
+ * controller waits for however many workers actually exist, then releases them.
+ * Nothing has to be known in advance and nothing has to be absorbed. */
+struct start_gate {
+    pthread_mutex_t m;
+    pthread_cond_t  c;
+    unsigned        ready;   /* workers that have announced themselves */
+    int             go;      /* set once the controller has seen them all */
+};
+
+static int gate_init(struct start_gate *g)
+{
+    if (pthread_mutex_init(&g->m, NULL) != 0) return -1;
+    if (pthread_cond_init(&g->c, NULL) != 0) { pthread_mutex_destroy(&g->m); return -1; }
+    g->ready = 0;
+    g->go = 0;
+    return 0;
+}
+
+static void gate_destroy(struct start_gate *g)
+{
+    pthread_cond_destroy(&g->c);
+    pthread_mutex_destroy(&g->m);
+}
+
+/* worker side: announce, then block until told to go */
+static void gate_arrive(struct start_gate *g)
+{
+    pthread_mutex_lock(&g->m);
+    g->ready++;
+    pthread_cond_broadcast(&g->c);
+    while (!g->go)
+        pthread_cond_wait(&g->c, &g->m);
+    pthread_mutex_unlock(&g->m);
+}
+
+/* controller side: wait for exactly the workers that exist, then release */
+static void gate_release(struct start_gate *g, unsigned n)
+{
+    pthread_mutex_lock(&g->m);
+    while (g->ready < n)
+        pthread_cond_wait(&g->c, &g->m);
+    g->go = 1;
+    pthread_cond_broadcast(&g->c);
+    pthread_mutex_unlock(&g->m);
+}
+
 struct worker {
     hashfn   fn;
     size_t   pad_bytes;
     unsigned n;
-    pthread_barrier_t *start;
+    struct start_gate *start;
     double   hs;        /* out: hashes per second achieved by this thread */
 };
 
@@ -428,7 +492,7 @@ static void *worker_main(void *arg)
     double t0;
 
     w->hs = 0.0;
-    if (ctx == NULL) { pthread_barrier_wait(w->start); return NULL; }
+    if (ctx == NULL) { gate_arrive(w->start); return NULL; }
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
 
     /* Set up, allocate and fault the pad in BEFORE the barrier. Timing the
@@ -437,10 +501,10 @@ static void *worker_main(void *arg)
      * memsets its pad, and at 32 threads that is hundreds of MB. */
     { struct params wp; rng_state = 1; wp = draw();
       cn_slow_hash_v11(ctx, blob, sizeof(blob) - 1, out, wp.iters, wp.blk, wp.xx, wp.yy); }
-    if (ctx->salt == NULL) { cn_hash_context_free(ctx); pthread_barrier_wait(w->start); return NULL; }
+    if (ctx->salt == NULL) { cn_hash_context_free(ctx); gate_arrive(w->start); return NULL; }
 
     own = (uint8_t *)malloc(w->pad_bytes);
-    if (own == NULL) { cn_hash_context_free(ctx); pthread_barrier_wait(w->start); return NULL; }
+    if (own == NULL) { cn_hash_context_free(ctx); gate_arrive(w->start); return NULL; }
     memset(own, 0, w->pad_bytes);
     saved = ctx->scratchpad;
     ctx->scratchpad = own;
@@ -450,7 +514,7 @@ static void *worker_main(void *arg)
     seed = (uint32_t)(uintptr_t)w ^ 0x9E3779B9u;
     if (seed == 0) seed = 1;
 
-    pthread_barrier_wait(w->start);
+    gate_arrive(w->start);
 
     t0 = now_sec();
     for (i = 0; i < w->n; i++)
@@ -484,14 +548,14 @@ static void *worker_main(void *arg)
  * up, keeping allocation and page-faulting out of the measurement. */
 static double bench_threads(hashfn fn, size_t pad_bytes, unsigned n, unsigned t)
 {
-    pthread_barrier_t start;
+    struct start_gate start;
     pthread_t *th = (pthread_t *)malloc(t * sizeof(pthread_t));
     struct worker *w = (struct worker *)malloc(t * sizeof(struct worker));
     unsigned i, made = 0;
     double t0, wall;
 
     if (th == NULL || w == NULL) { free(th); free(w); return 0.0; }
-    if (pthread_barrier_init(&start, NULL, t + 1) != 0) { free(th); free(w); return 0.0; }
+    if (gate_init(&start) != 0) { free(th); free(w); return 0.0; }
 
     for (i = 0; i < t; i++) {
         w[i].fn = fn; w[i].pad_bytes = pad_bytes; w[i].n = n;
@@ -499,16 +563,14 @@ static double bench_threads(hashfn fn, size_t pad_bytes, unsigned n, unsigned t)
         if (pthread_create(&th[i], NULL, worker_main, &w[i]) != 0) break;
         made++;
     }
-    /* absorb the barrier slots of any thread that could not be created, or
-     * everyone waits forever */
-    for (i = made; i < t; i++) pthread_barrier_wait(&start);
-
-    pthread_barrier_wait(&start);       /* all set up; start the clock */
+    /* Release exactly the threads that were created. Nothing to absorb: if
+     * some could not be started, the gate waits for fewer. */
+    gate_release(&start, made);         /* all set up; start the clock */
     t0 = now_sec();
     for (i = 0; i < made; i++) pthread_join(th[i], NULL);
     wall = now_sec() - t0;
 
-    pthread_barrier_destroy(&start);
+    gate_destroy(&start);
     free(th); free(w);
     return wall > 0.0 ? (double)made * (double)n / wall : 0.0;
 }
