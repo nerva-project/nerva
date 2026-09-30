@@ -82,9 +82,17 @@ OUT=${OUT:-v8bench$SUF}
 # them: hash-ops.h includes epee's warnings.h, which includes
 # boost/preprocessor/stringize.hpp.
 BOOSTINC=""
-for d in /opt/homebrew/include /usr/local/include /usr/include; do
-    if [ -d "$d/boost/preprocessor" ]; then BOOSTINC="-I$d"; break; fi
+for d in /opt/homebrew/include /usr/local/include /mingw64/include /usr/include; do
+    if [ -f "$d/boost/preprocessor/stringize.hpp" ]; then BOOSTINC="-I$d"; break; fi
 done
+if [ -z "$BOOSTINC" ]; then
+    # No Boost. The only thing this build wants from it is BOOST_PP_STRINGIZE,
+    # via epee's warnings.h, so fall back to the stand-in rather than making a
+    # Boost install a prerequisite for measuring a hash function. Searched
+    # after the real headers, so a real installation always wins.
+    BOOSTINC="-I contrib/powbench/noboost"
+    echo "Boost headers not found; using contrib/powbench/noboost for BOOST_PP_STRINGIZE"
+fi
 
 case "$MACH" in
     aarch64 | arm64)
