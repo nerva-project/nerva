@@ -827,6 +827,23 @@ std::string get_nix_version_display_string()
             "Falling back to the software AES path; hashing will be substantially slower.");
     }
 #endif // !defined NO_AES
+
+    /* PLAN-v8 Phase 2's floating-point stage. Checked on every build, including
+     * software-AES ones, because floating point has nothing to do with AES.
+     * Warn rather than refuse: nothing in consensus routes to v15 yet, so a
+     * divergent FP build cannot split the chain today. It could once v15 ships,
+     * which is why the check exists now rather than being added later and
+     * forgotten. */
+    if (!crypto::cn_fp_stage_self_test())
+    {
+      MGUSER_YELLOW(
+          "Floating-point self-test FAILED: this build does not compute the "
+          "reference vector. Nothing in consensus uses floating point today, so "
+          "this is not fatal, but this build must not be used to mine or "
+          "validate if a future fork enables the FP stage. Please report it "
+          "with your compiler and platform.");
+    }
+
     return true;
   }
 

@@ -72,6 +72,7 @@ extern void cn_slow_hash_v11_sw(cn_hash_context_t *context, const void *data, si
 extern void cn_slow_hash_v13_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
 extern void cn_slow_hash_v14_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 extern void cn_slow_hash_v15_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
+extern int cn_slow_hash_v15_selftest(void);
 
 /* Runtime CPU detection. Cached in a function-static so the per-hash overhead
  * is one branch on a hot variable. Override with NERVA_FORCE_SOFTWARE_AES=1 to
@@ -505,6 +506,34 @@ void cn_hash_context_free(cn_hash_context_t *context)
     }
 
     free(context);
+}
+
+/* The FP stage's build check, deliberately separate from cn_slow_hash_self_test.
+ *
+ * That test gates daemon startup and is gated on hardware AES, and neither fits
+ * here. v15 is a prototype that no consensus path calls, so a failure cannot
+ * fork anything today and must not stop a node from running; and the FP stage
+ * has nothing to do with AES, so it must be checked on software-AES machines
+ * too.
+ *
+ * What it catches is the failure F30 demonstrated: a build whose floating point
+ * diverges produces a node that disagrees with the network by forking, not by
+ * failing to compile. The stage is immune to FMA contraction by construction
+ * and the mode change sits behind a barrier, so this should never fire; it is
+ * here because "should never" is not a property anyone can check at runtime.
+ *
+ * Returns 1 when this build computes the reference vector, 0 otherwise. Note
+ * the inversion against cn_slow_hash_v15_selftest, which returns 0 on success;
+ * this follows cn_slow_hash_self_test's convention instead, since that is what
+ * its caller expects.
+ *
+ * WHEN v15 SHIPS: this must become fatal at the fork that routes to it, and the
+ * v15 hardware-against-software comparison should move into
+ * cn_slow_hash_self_test beside v14's. Both are one-line changes and both are
+ * wrong to make before consensus actually calls v15. */
+int cn_fp_stage_self_test(void)
+{
+    return cn_slow_hash_v15_selftest() == 0 ? 1 : 0;
 }
 
 int cn_slow_hash_self_test(void)
