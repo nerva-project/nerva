@@ -127,26 +127,49 @@ static void time_stage(cn_hash_context_t *ctx, const char *blob)
 {
     const int reps = 120;
     char h[32];
-    double t14 = 0.0, t15 = 0.0, t0;
+    double s14 = 0.0, s15 = 0.0, b14 = 1e30, b15 = 1e30, t0, d;
     int i;
 
     for (i = 0; i < reps; i++) {
         t0 = now_ms();
         call(ctx, cn_slow_hash_v14_hw, blob, h, 8);
-        t14 += now_ms() - t0;
+        d = now_ms() - t0;
+        s14 += d;
+        if (d < b14) b14 = d;
 
         t0 = now_ms();
         call(ctx, cn_slow_hash_v15_hw, blob, h, 8);
-        t15 += now_ms() - t0;
+        d = now_ms() - t0;
+        s15 += d;
+        if (d < b15) b15 = d;
     }
-    t14 /= reps;
-    t15 /= reps;
+    s14 /= reps;
+    s15 /= reps;
 
-    printf("\n  v14 %.4f ms   v15 %.4f ms   stage %+.2f%%\n",
-           t14, t15, (t15 - t14) / t14 * 100.0);
-    printf("  %.1f us over %d rounds = %.2f ns/round\n",
-           (t15 - t14) * 1000.0, CN_V8_FP_ROUNDS_REPORTED,
-           (t15 - t14) * 1e6 / (double)CN_V8_FP_ROUNDS_REPORTED);
+    /* Report both, and prefer the best-of.
+     *
+     * The mean is the wrong estimator for this stage on two kinds of machine we
+     * have already been caught by. On an Apple M1 the scheduler moves the work
+     * between performance and efficiency cores and no affinity call can stop
+     * it, so the mean is a blend and a few percent vanishes into its variance.
+     * On a fanless mini PC the chip throttles part way through, and because the
+     * hash is memory-bound while this stage is a latency-bound dependency
+     * chain, throttling slows the stage and barely touches the hash: two runs
+     * minutes apart read 100.4 us and 65.8 us.
+     *
+     * Neither effect can make a run faster than its uncontended cost, so the
+     * minimum is the honest figure and one run of this is enough anywhere. */
+    printf("\n  mean   v14 %.4f ms  v15 %.4f ms  stage %+.2f%%\n",
+           s14, s15, (s15 - s14) / s14 * 100.0);
+    printf("  best   v14 %.4f ms  v15 %.4f ms  stage %+.2f%%\n",
+           b14, b15, (b15 - b14) / b14 * 100.0);
+    printf("  FPSTAGE-BEST %.1f us over %d rounds = %.2f ns/round\n",
+           (b15 - b14) * 1000.0, CN_V8_FP_ROUNDS_REPORTED,
+           (b15 - b14) * 1e6 / (double)CN_V8_FP_ROUNDS_REPORTED);
+    if (s15 - s14 > 0.0 && (b15 - b14) > 0.0 &&
+        (s15 - s14) / (b15 - b14) > 1.25)
+        printf("  (mean is %.0f%% above best: this machine throttles or migrates)\n",
+               ((s15 - s14) / (b15 - b14) - 1.0) * 100.0);
 }
 
 int main(void)
