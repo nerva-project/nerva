@@ -1,14 +1,17 @@
 #!/bin/sh
 # Build the Phase 2 FP stage test. Generated from build-v8bench.sh by
-# substituting the output name and the main source, so the two cannot drift in
-# flags or platform handling.
+# substituting the output name and the main source, and by dropping the
+# contrib/hf14checks resized-pad units.
 #
 #   sh contrib/powbench/build-fp-stage-test.sh
 #   ./t_fp_stage
 #
-# Exit 0 means the FP determinism vector matched, the value scan found no
-# denormal or infinity or NaN, the stage changed the hash on every input
-# including iters=0, and the two AES arms agreed.
+# Those units are dropped because this test needs no symbol from them; they
+# exist for v8bench's pad sweep. They also refuse to build without hardware AES:
+# v5pad.inc has an #error saying the software path carries its own pad-size
+# assumption. Linking them here cost nothing on x86 and broke the build outright
+# on every architecture with no AES path, which is riscv64, armv7 and s390x,
+# exactly the ones the portability workflow exists to test.
 #
 # (the rest of this header is build-v8bench.sh's and applies unchanged)
 # Build v8bench as a single executable that runs on a machine with no toolchain
@@ -37,6 +40,10 @@
 #                               the software-AES body and every number is about
 #                               5x too slow. The banner reports which path ran.
 #   -fno-strict-aliasing        slow-hash type-puns the scratchpad.
+#   -ffp-contract=off           the Phase 2 FP stage is immune to contraction by
+#                               construction, but CMakeLists.txt sets this on its
+#                               translation units and a harness that builds the
+#                               same code differently from the daemon is a trap.
 #
 # -O2 plus the per-architecture flags below match what the main build uses for
 # the crypto sources, so the recompiled rows are comparable to the shipped ones.
@@ -166,12 +173,10 @@ PROBE
         ;;
 esac
 
-$CC -O2 $ARCHFLAGS -fno-strict-aliasing \
+$CC -O2 $ARCHFLAGS -fno-strict-aliasing -ffp-contract=off \
     -DSLOW_HASH_HW_AES_BUILT=1 \
     $BOOSTINC -I src -I src/crypto -I contrib/epee/include -I contrib/hf14checks \
     contrib/powbench/t_fp_stage.c \
-    contrib/hf14checks/v5pad1.c contrib/hf14checks/v5pad2.c \
-    contrib/hf14checks/v5pad4.c contrib/hf14checks/v5pad8.c \
     src/crypto/slow-hash.c src/crypto/slow-hash-hw.c src/crypto/slow-hash-sw.c \
     src/crypto/slow-hash-v8-hw.c src/crypto/slow-hash-v8-sw.c \
     src/crypto/slow-hash-v8fp-hw.c src/crypto/slow-hash-v8fp-sw.c \

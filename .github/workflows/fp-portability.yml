@@ -87,13 +87,18 @@ jobs:
             stage_expected: pass
           # big-endian. FP must still match; the full hash is expected not to.
           #
-          # bullseye rather than ubuntu_latest: current Ubuntu's s390x glibc
-          # requires VXRS_EXT2 (z15 or later) and QEMU's default s390x CPU model
-          # does not provide it, so the container dies during setup with
-          # "Fatal glibc error: CPU lacks VXRS_EXT2 support" before any of this
-          # project's code runs. Debian 11 targets a lower baseline.
+          # Not ubuntu_latest: its s390x glibc requires VXRS_EXT2, meaning a z15
+          # or later CPU model, which QEMU's default s390x model does not
+          # provide, so the container dies during setup with "Fatal glibc error:
+          # CPU lacks VXRS_EXT2 support" before any of this project's code runs.
+          #
+          # Not bullseye either: Debian 11 left LTS in August 2026 and moved to
+          # archive.debian.org, so deb.debian.org no longer serves its main
+          # package index and build-essential cannot be installed.
+          #
+          # bookworm is current and still targets a low enough s390x baseline.
           - arch: s390x
-            distro: bullseye
+            distro: bookworm
             stage_expected: fail
 
     steps:

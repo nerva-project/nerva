@@ -25,6 +25,10 @@
 #                               the software-AES body and every number is about
 #                               5x too slow. The banner reports which path ran.
 #   -fno-strict-aliasing        slow-hash type-puns the scratchpad.
+#   -ffp-contract=off           the Phase 2 FP stage is immune to contraction by
+#                               construction, but CMakeLists.txt sets this on its
+#                               translation units and a harness that builds the
+#                               same code differently from the daemon is a trap.
 #
 # -O2 plus the per-architecture flags below match what the main build uses for
 # the crypto sources, so the recompiled rows are comparable to the shipped ones.
@@ -154,7 +158,7 @@ PROBE
         ;;
 esac
 
-$CC -O2 $ARCHFLAGS -fno-strict-aliasing \
+$CC -O2 $ARCHFLAGS -fno-strict-aliasing -ffp-contract=off \
     -DSLOW_HASH_HW_AES_BUILT=1 \
     $BOOSTINC -I src -I src/crypto -I contrib/epee/include -I contrib/hf14checks \
     contrib/powbench/v8bench.c \
