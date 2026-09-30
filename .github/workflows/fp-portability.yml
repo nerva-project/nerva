@@ -85,9 +85,15 @@ jobs:
           - arch: armv7
             distro: ubuntu_latest
             stage_expected: pass
-          # big-endian. FP must still match; the full hash is expected not to
+          # big-endian. FP must still match; the full hash is expected not to.
+          #
+          # bullseye rather than ubuntu_latest: current Ubuntu's s390x glibc
+          # requires VXRS_EXT2 (z15 or later) and QEMU's default s390x CPU model
+          # does not provide it, so the container dies during setup with
+          # "Fatal glibc error: CPU lacks VXRS_EXT2 support" before any of this
+          # project's code runs. Debian 11 targets a lower baseline.
           - arch: s390x
-            distro: ubuntu_latest
+            distro: bullseye
             stage_expected: fail
 
     steps:

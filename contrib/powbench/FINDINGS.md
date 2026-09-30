@@ -945,11 +945,14 @@ and needs its own pass before anything ships.
 and `cn_slow_hash_v15` produce identical output on three platforms spanning two
 architectures and three toolchains:
 
-| platform | toolchain |
-|---|---|
-| Windows x86-64 | MinGW gcc |
-| Linux x86-64 | gcc |
-| macOS aarch64 (Apple M1) | clang |
+| platform | toolchain | how |
+|---|---|---|
+| Windows x86-64 | MinGW gcc | by hand |
+| Linux x86-64 | gcc | by hand |
+| macOS aarch64 (Apple M1) | clang | by hand |
+| Android aarch64 (Pixel 7a) | Termux clang | by hand |
+| Linux riscv64 | gcc | CI under QEMU |
+| Linux armv7 (32-bit) | gcc | CI under QEMU |
 
     v14 16da28b8ec84c42cd776c908807ac204daf763503b24c396e6b0d6c4b015eba2
     v15 c7d123c1993299cbd07bb8a84cc4bb002e35f3cc1240b95b2e663d22318e5edd
@@ -957,6 +960,15 @@ architectures and three toolchains:
 This is what F29 could only claim for the primitives. The FP stage crosses the
 architecture boundary inside the real hash, which is the risk that could have
 ended Phase 2 outright.
+
+**Four architecture families now, not two.** riscv64 and armv7 were added by
+`.github/workflows/fp-portability.yml` running under QEMU, and both pass on the
+first attempt: `t_fp_determinism` matches all four x86-64 reference checksums
+and `t_fp_stage` produces the same v14 and v15 hashes. riscv64 matters because
+it is a third instruction set with a third libc and compiler combination, and
+armv7 because it is the 32-bit path nothing else had exercised. Big-endian
+remains untested for the full hash, for reasons that are nothing to do with
+floating point: see F36.
 
 **Measured cost of the stage**, `contrib/powbench/t_fp_stage.c`, at the shipping
 count of 9,600 rounds. Every figure below is measured, none projected:
