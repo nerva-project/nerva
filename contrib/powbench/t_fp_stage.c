@@ -65,6 +65,7 @@ void cn_slow_hash_v14_hw(cn_hash_context_t *, const void *, size_t, char *, size
 void cn_slow_hash_v15_hw(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v15_sw(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 int  cn_slow_hash_v15_selftest(void);
+void cn_slow_hash_v15_value_scan(unsigned seeds, unsigned rounds, unsigned out[5]);
 
 /* kept in step with CN_V8_FP_ROUNDS in slow-hash-fp.h, which this file
  * cannot include: that header needs the pad-size machinery set up first. */
@@ -231,6 +232,33 @@ int main(void)
     printf("\n  FP determinism vector ............ %s\n", fp_ok ? "PASS" : "FAIL");
     printf("  ablation, v15 != v14 ............. %d of %d\n", differ, total);
     printf("  cross-arm, v15 hw == v15 sw ...... %s\n", hwsw ? "PASS" : "FAIL");
+
+    /* The property RandomX's FP safety argument rests on, checked on our round.
+     * A denormal, infinity or NaN anywhere would mean the constraint does not
+     * make the divergent cases unreachable, and FTZ/DAZ differences between
+     * platforms would start to matter. A negative is expected from the
+     * subtraction and nowhere else. */
+    {
+        static const char *const opname[5] = { "add", "sub", "mul", "div", "sqrt" };
+        unsigned scan[5], i, bad = 0;
+
+        cn_slow_hash_v15_value_scan(64, 2000, scan);
+        printf("\n  value scan, 64 seeds x 2000 rounds:\n");
+        for (i = 0; i < 5; i++) {
+            const unsigned f = scan[i];
+            const unsigned fatal = f & (1u | 2u | 4u | 8u);   /* zero, denorm, inf, nan */
+            if (fatal) bad = 1;
+            printf("    %-4s %s%s%s%s%s\n", opname[i],
+                   (f & 1u)  ? "ZERO "     : "",
+                   (f & 2u)  ? "DENORMAL " : "",
+                   (f & 4u)  ? "INF "      : "",
+                   (f & 8u)  ? "NAN "      : "",
+                   (f & 16u) ? "negative (expected for sub only)" : "positive normal only");
+        }
+        printf("  %s\n", bad ? "FAIL: a divergent case is reachable"
+                                : "PASS: no zero, denormal, infinity or NaN reachable");
+        if (bad) fp_ok = 0;
+    }
 
     time_stage(ctx, inputs[0]);
 

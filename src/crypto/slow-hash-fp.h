@@ -166,17 +166,66 @@ STATIC INLINE uint64_t cn_fp_e_to_bits(double d)
  * contraction impossible and what keeps every value a positive normal, so it is
  * not optional decoration and must not be hoisted or thinned as an
  * optimisation. */
+/* Changing the rounding mode, structured the way RandomX structures it.
+ *
+ * RandomX has run in Monero consensus on every architecture they ship since
+ * 2019, and it uses plain fesetround on the portable path
+ * (instructions_portable.cpp, setRoundMode_). What it does not do is call it
+ * inline: rx_set_rounding_mode is an out-of-line function in its own
+ * translation unit, so to the optimiser it is an opaque call with unknown
+ * effects and no floating-point work can be scheduled across it. RandomX uses
+ * no #pragma STDC FENV_ACCESS anywhere; that call is the barrier.
+ *
+ * It has to be, because GCC and Clang both ignore FENV_ACCESS. Without a
+ * barrier they are entitled to assume round-to-nearest throughout and to
+ * reorder or fold arithmetic across a mode change. Our stage previously called
+ * fesetround inline from a STATIC INLINE function in the same translation unit,
+ * where the compiler can see everything, which is the one place this
+ * construction was weaker than the implementation it is modelled on.
+ *
+ * noinline gives the opaque call; the memory clobbers stop the register array
+ * being kept in registers across it. Called 600 times per nonce against 9,600
+ * rounds, so the cost is noise. */
+#if defined(__GNUC__) || defined(__clang__)
+#  define CN_FP_NOINLINE __attribute__((noinline))
+#  define CN_FP_BARRIER() __asm__ __volatile__("" ::: "memory")
+#elif defined(_MSC_VER)
+#  define CN_FP_NOINLINE __declspec(noinline)
+#  define CN_FP_BARRIER() _ReadWriteBarrier()
+#else
+#  define CN_FP_NOINLINE
+#  define CN_FP_BARRIER() ((void)0)
+#endif
+
+static CN_FP_NOINLINE void cn_fp_set_round(int mode)
+{
+    CN_FP_BARRIER();
+    fesetround(mode);
+    CN_FP_BARRIER();
+}
+
 /* File scope so the stage and the self-test cannot drift apart in which modes
  * they select or in what order. */
 static const int cn_fp_modes[4] = { FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO };
 
+/* The body is a macro so cn_fp_round and cn_fp_value_scan cannot drift apart.
+ * The scan exists to prove the no-denormal, no-infinity, no-NaN property this
+ * whole approach rests on, and a scan that tested a near-copy of the round
+ * would prove nothing about the round. OP sees each raw result before it is
+ * constrained and expands to nothing in the shipping path, so the generated
+ * code is unchanged. */
+#define CN_FP_ROUND_BODY(e, OP)                                                     \
+    e[0] = e[0] + e[1]; OP(0, e[0]); e[0] = cn_fp_bits_to_e(cn_fp_e_to_bits(e[0])); \
+    e[1] = e[1] - e[2]; OP(1, e[1]); e[1] = cn_fp_bits_to_e(cn_fp_e_to_bits(e[1])); \
+    e[2] = e[2] * e[3]; OP(2, e[2]); e[2] = cn_fp_bits_to_e(cn_fp_e_to_bits(e[2])); \
+    e[3] = e[3] / e[0]; OP(3, e[3]); e[3] = cn_fp_bits_to_e(cn_fp_e_to_bits(e[3])); \
+    e[0] = sqrt(e[0]);  OP(4, e[0]); e[0] = cn_fp_bits_to_e(cn_fp_e_to_bits(e[0]));
+
+#define CN_FP_NO_HOOK(i, x) ((void)0)
+
 STATIC INLINE void cn_fp_round(double *e)
 {
-    e[0] = e[0] + e[1];  e[0] = cn_fp_bits_to_e(cn_fp_e_to_bits(e[0]));
-    e[1] = e[1] - e[2];  e[1] = cn_fp_bits_to_e(cn_fp_e_to_bits(e[1]));
-    e[2] = e[2] * e[3];  e[2] = cn_fp_bits_to_e(cn_fp_e_to_bits(e[2]));
-    e[3] = e[3] / e[0];  e[3] = cn_fp_bits_to_e(cn_fp_e_to_bits(e[3]));
-    e[0] = sqrt(e[0]);   e[0] = cn_fp_bits_to_e(cn_fp_e_to_bits(e[0]));
+    CN_FP_ROUND_BODY(e, CN_FP_NO_HOOK)
 }
 
 /* The stage. Seeded from the pad at a state-derived offset, so it cannot be
@@ -221,10 +270,10 @@ STATIC INLINE uint64_t cn_fp_selftest_value(void)
     for (r = 0; r < CN_V8_FP_SELFTEST_ROUNDS; r++)
     {
         if ((r & CN_V8_FP_ROUND_MASK) == 0)
-            fesetround(cn_fp_modes[(cn_fp_e_to_bits(e[0]) >> 3) & 3]);
+            cn_fp_set_round(cn_fp_modes[(cn_fp_e_to_bits(e[0]) >> 3) & 3]);
         cn_fp_round(e);
     }
-    fesetround(FE_TONEAREST);
+    cn_fp_set_round(FE_TONEAREST);
 
     for (i = 0; i < 4; i++)
     {
@@ -237,6 +286,71 @@ STATIC INLINE uint64_t cn_fp_selftest_value(void)
 STATIC INLINE int cn_fp_selftest(void)
 {
     return cn_fp_selftest_value() == CN_V8_FP_SELFTEST_VECTOR ? 0 : 1;
+}
+
+/* Value safety, which is the claim this entire approach rests on and the one
+ * RandomX's own argument rests on too.
+ *
+ * RandomX sets flush-to-zero and denormals-are-zero on x86 (mxcsr 0x9FC0) and
+ * uses the default environment on ARM. Those are different settings, and the
+ * spec says it does not matter because "no operation results in NaN or a
+ * denormal number": the constraint makes the divergent cases unreachable, so
+ * the flags that govern them never fire. We inherit that reasoning only if the
+ * same thing is true of our round, which has a different shape: one register
+ * group rather than three, a subtraction that RandomX would put in its additive
+ * group, and the constraint applied to every result rather than to memory
+ * operands.
+ *
+ * So it is checked rather than inherited. This runs the real round body, via
+ * the shared macro above, and classifies every raw result before it is
+ * constrained. It returns a bitmask of what it saw, per operation.
+ *
+ * Expected: no zero, no denormal, no infinity, no NaN anywhere. A negative is
+ * expected from the subtraction and nowhere else; that it never appears at
+ * index 4 is the proof that sqrt is never handed a negative, and no infinity or
+ * NaN at index 3 is the proof that the divisor is never zero. */
+#define CN_FP_SAW_ZERO      1u
+#define CN_FP_SAW_DENORMAL  2u
+#define CN_FP_SAW_INF       4u
+#define CN_FP_SAW_NAN       8u
+#define CN_FP_SAW_NEGATIVE 16u
+
+STATIC INLINE void cn_fp_classify(unsigned *flags, double v)
+{
+    switch (fpclassify(v)) {
+    case FP_ZERO:      *flags |= CN_FP_SAW_ZERO;     break;
+    case FP_SUBNORMAL: *flags |= CN_FP_SAW_DENORMAL; break;
+    case FP_INFINITE:  *flags |= CN_FP_SAW_INF;      break;
+    case FP_NAN:       *flags |= CN_FP_SAW_NAN;      break;
+    default: break;
+    }
+    if (signbit(v)) *flags |= CN_FP_SAW_NEGATIVE;
+}
+
+#define CN_FP_SCAN_HOOK(i, x) cn_fp_classify(&scan[i], (x))
+
+/* seeds x rounds of the real round body. out[] receives five masks, one per
+ * operation, in the order add, sub, mul, div, sqrt. */
+STATIC INLINE void cn_fp_value_scan(unsigned seeds, unsigned rounds, unsigned out[5])
+{
+    unsigned scan[5] = { 0, 0, 0, 0, 0 };
+    uint64_t st = 0x243F6A8885A308D3ull;   /* pi, arbitrary and fixed */
+    unsigned s, r, i;
+
+    for (s = 0; s < seeds; s++) {
+        double e[4];
+        for (i = 0; i < 4; i++) {
+            st ^= st << 13; st ^= st >> 7; st ^= st << 17;
+            e[i] = cn_fp_bits_to_e(st);
+        }
+        for (r = 0; r < rounds; r++) {
+            if ((r & CN_V8_FP_ROUND_MASK) == 0)
+                cn_fp_set_round(cn_fp_modes[(cn_fp_e_to_bits(e[0]) >> 3) & 3]);
+            CN_FP_ROUND_BODY(e, CN_FP_SCAN_HOOK)
+        }
+        cn_fp_set_round(FE_TONEAREST);
+    }
+    for (i = 0; i < 5; i++) out[i] = scan[i];
 }
 
 /* Seeded from a and the pad, and deliberately NOT from b.
@@ -289,7 +403,7 @@ STATIC INLINE void cn_fp_stage(uint8_t *hp_state, void *a)
         /* Fixed cadence, data-chosen mode. The count of mode changes is a
          * constant of the algorithm; which mode is selected is not. */
         if ((r & CN_V8_FP_ROUND_MASK) == 0)
-            fesetround(cn_fp_modes[(cn_fp_e_to_bits(e[0]) >> 3) & 3]);
+            cn_fp_set_round(cn_fp_modes[(cn_fp_e_to_bits(e[0]) >> 3) & 3]);
 
         cn_fp_round(e);
     }
@@ -297,7 +411,7 @@ STATIC INLINE void cn_fp_stage(uint8_t *hp_state, void *a)
     /* Leave the environment as it was found. A stage that returned with the
      * mode still changed would silently alter every later FP operation in the
      * process, including any in the caller's own code. */
-    fesetround(FE_TONEAREST);
+    cn_fp_set_round(FE_TONEAREST);
 
     /* Fold into both pad lines and into a, so the stage is load-bearing by
      * every route out of the hash rather than by one. p1 is written before p0

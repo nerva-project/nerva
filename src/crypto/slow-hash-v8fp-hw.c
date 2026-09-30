@@ -55,3 +55,11 @@
  * there with the dispatcher entry if Phase 2 ships. */
 int cn_slow_hash_v15_selftest(void);
 int cn_slow_hash_v15_selftest(void) { return cn_fp_selftest(); }
+
+/* Exposes the value-safety scan so the no-denormal, no-infinity, no-NaN claim
+ * can be checked on the real round rather than argued from the source. */
+void cn_slow_hash_v15_value_scan(unsigned seeds, unsigned rounds, unsigned out[5]);
+void cn_slow_hash_v15_value_scan(unsigned seeds, unsigned rounds, unsigned out[5])
+{
+    cn_fp_value_scan(seeds, rounds, out);
+}
