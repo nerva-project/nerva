@@ -999,6 +999,16 @@ count of 9,600 rounds. Every figure below is measured, none projected:
 | Pixel A55 | 7.3022 | 322.5 | 33.60 | 7.6247 |
 
 **Cross-CPU spread goes from 2.388x to 2.201x, which meets the 2.2x target.**
+
+*Denominator, which matters and was not stated here originally.* Every figure in
+this entry is against `cn_slow_hash` alone. That is the right basis for verify
+cost, and the wrong one for anything a miner pays: `get_block_longhash_v14`
+seeds HC128 from the blob hash, which carries the nonce, so `get_cna_v6_data`
+runs on every nonce and is roughly 60% of one. Against a whole nonce the stage
+costs about 4.4% rather than 14.5 to 18.2%, and the spread narrows from 2.17x to
+2.10x rather than 2.39x to 2.20x. Same direction, about a third of the size.
+F37 point 2 records where using the wrong one of these overstated a result
+threefold.
 The 9700X sets the fast end and the i7-7700HQ the slow end, on both axes. The
 gate passed on every machine. Phone figures use the X1, since a miner pins to
 the big cores; the A78 and A55 rows are context, not spread inputs.
@@ -1196,6 +1206,243 @@ test's checks are internal and all three pass on big-endian while the hash is
 different. It reported that s390x had been fixed. Comparing hashes is the only
 thing that tests what this entry is about.
 
+## GPU
+
+### F37. The FP stage costs a GPU 0.4% of a nonce and a CPU 4.4%, so it makes GPU resistance slightly worse
+
+*Three cards, two vendors, three architectures. All runs `50 10 60 fpx10`.*
+
+| CPU | GPU | CU | nonces | GPU H/s | FP cost GPU | FP cost CPU | GPU:CPU | verdict |
+|---|---|---|---|---|---|---|---|---|
+| 7950X, 32T | RTX 3050 | 20 | 3264 | 511.1 | 1.004x | 1.043x | 0.0433 → 0.0450 | worse 4% |
+| 5600X, 12T | Vega FE | 64 | 3264 | 545.8 | 1.006x | 1.038x | 0.1609 → 0.1660 | worse 3% |
+| i7-7700HQ, 8T | GTX 1050 Ti | 6 | 1600 | 222.5 | 1.004x | 1.015x | 0.2078 → 0.2101 | worse 1% |
+| 9700X, 16T | RX 580 | 36 | — | — | — | 1.048x | — | device failed, see below |
+
+**The stage costs a GPU about 0.4% of a nonce and a CPU about 4.4%.** A cost
+falling almost entirely on one side moves the ratio toward the other, so GPU
+resistance gets slightly worse everywhere it was measured. The arithmetic and
+the rounding modes are separable and both are nearly free on the GPU: 0.2% and a
+further 0.2%.
+
+**FP64 capability is not the axis.** Hashrate per resident nonce is 0.167 on a
+64 CU Vega, 0.157 on a 20 CU RTX 3050 and 0.139 on a 6 CU GTX 1050 Ti: a ten-fold
+range of compute units delivers the same throughput per nonce slot within 10%.
+v5 runs one work-item per nonce doing ~30 byte-stride scattered read-modify-write
+sweeps of a 1 MB pad, which is a chain of dependent memory round trips with no
+parallel work inside a nonce for compute units to attack. The card is
+latency-bound, and arithmetic added to a latency-bound kernel is free whatever
+the FP64 rate. The clinching detail is that the Vega's FP cost came out
+*higher* than the 3050's despite far better FP64 hardware, which is backwards
+for anything FP64-limited.
+
+*Correction to PLAN-v8:* that document states the Vega FE runs FP64 at 1/2. It
+is Vega 10, which is 1/16, the same as the RX 580. So the test set never
+contained a high-FP64 card. It does not weaken the conclusion, it changes what
+the conclusion rests on: not coverage of the FP64 range, but the measured fact
+that FP64 rate does not predict the result.
+
+**PLAN-v8's prediction was right and its counter-argument was wrong by an order
+of magnitude.** The plan estimated 0.05x drifting to about 0.057x on
+FLOP-capacity grounds; measured, 0.0433x to 0.0450x. The argument the other way
+held that OpenCL cannot select a rounding mode, so a miner would emulate
+directed rounding at 10 to 50x per operation. The first half is true. The second
+is not: error-free transformations cost about 4x, and 4x of work the card is not
+bound by is still nothing.
+
+#### Every identified bias runs the same direction
+
+Against the GPU, so its measured FP cost is if anything overstated: 50% of VRAM
+and 3264 concurrent nonces where a real miner would use most of the card, and low
+occupancy makes added latency harder to hide.
+
+For the GPU, so its real FP share is smaller still: Keccak and the
+blake/groestl/jh/skein finalisation are omitted and are branchy work a GPU really
+pays; `extra_hash` is replaced by a mix64 chain; the chain salt is modelled as
+free to the GPU, which it nearly is at ~0.8 of a host core per card.
+
+The emulation is also close to the best a miner could do. It is branch-free
+rather than a switch on the mode, because a warp holds nonces with different
+modes. It could save perhaps a quarter by skipping the residual when the mode is
+nearest-even, moving 0.4% to about 0.3%. And on NVIDIA an OpenCL miner is not the
+relevant threat: **CUDA has native directed rounding** (`__dadd_rd`, `__dmul_ru`
+and friends), so a CUDA miner pays nothing for the mode and only the arithmetic,
+which is the `rne` row at 0.2%.
+
+So 0.4% is an upper bound and the verdict can only get worse for the stage.
+
+*What the model does not support* is the absolute GPU:CPU figure, which carries
+every caveat in F28 and section 7 of RESULTS.md. The ratio change is the claim,
+and it holds because numerator and denominator differ by the stage and nothing
+else. Note also that the absolute figure is mostly a statement about the CPU it
+is paired with: the three GPUs are within 7% of each other while their CPUs
+differ threefold, which is the whole spread from 0.043x to 0.208x.
+
+#### Proving the harness can see the effect at all
+
+At the real round count all four rows read the same, which had to be explained
+before any of the numbers meant anything. `fpxN` runs the stage at N times its
+round count and divides the cost back out:
+
+| | GPU rne | GPU modes | CPU rne | CPU modes | CPU/GPU |
+|---|---|---|---|---|---|
+| 1x, 9,600 | −0.16% | +0.02% | +1.9% | +5.6% | unresolved |
+| 10x, 96,000 | +0.85% | +3.39% | +24.5% | +44.3% | 13x |
+
+Cost is linear in the round count, so the 10x row divided by ten reproduces the
+1x row, and the CPU-to-GPU cost ratio is 13x at both scales. The 1x reading is a
+resolution limit, not a broken measurement. Confirmed independently on the 9700X,
+whose CPU cost reads 1.046x at 1x and 1.048x at 10x.
+
+The floor is measured rather than assumed. Three rows in the default set are
+identical GPU work through two separate code paths (`v5 1MB`, `v8 1MB`,
+`v5 1MB end`), so the largest gap among them is the harness's own cross-row
+reproducibility. On a good run it is 0.026% against an effect of 0.4%.
+
+#### Eight measurement errors found on the way
+
+Worth listing because most of them produced confident wrong numbers rather than
+obvious failures, and because six were found only by cross-checking one route
+against another.
+
+1. **The verdict was printed inverted.** Both costs divide a rate, so the new
+   ratio is `r0 * cpu_cost / gpu_cost`. The first summary line said FP *helped*
+   GPU resistance while the table's own column said the opposite.
+2. **Wrong denominator on the CPU.** F34's +14.5 to 18.2% is the stage against
+   `cn_slow_hash` alone. A miner's nonce is fill plus hash, and
+   `get_block_longhash_v14` seeds HC128 from the blob hash, which carries the
+   nonce, so `get_cna_v6_data` runs on every nonce. The fill is ~60% of a nonce,
+   so the right figure is 4.4%, not 15%. This overstated the effect threefold.
+3. **CPU rows measured one at a time to completion**, leaving baseline and FP row
+   minutes and several degrees apart. The difference was mostly thermal drift:
+   2.0% run spread against a 4% effect. Fixed by interleaving.
+4. **Fixed order inside each interleaved cycle**, so the baseline always ran
+   first and a sawtooth in clocks landed on its side every time. The baseline
+   once read 11,351 H/s against a 9,900 norm, 19% spread. Fixed by reversing the
+   order on alternate rounds.
+5. **400 ms measurement windows**, too short for 32 threads on a memory-bound
+   workload to settle. Raised to 1000 ms.
+6. **Background load unmeasured.** A whole set of results was taken on a machine
+   mining on 12 threads, and nothing in the output said so. The CPU column was
+   depressed ~15%. Every run now prints `LOAD n% CPU busy before the run` and
+   warns above 8%, so a contaminated run is self-labelling. The FP *ratio*
+   survived it unchanged, 1.046x against 1.044x clean, which is evidence that
+   interleaving plus order reversal does what it was added for.
+7. **The control led the FP rows instead of bracketing them.** Measured between
+   rows 1 and 2, it could not see drift accumulating by rows 3 and 4: it read
+   0.02% on a run whose FP rows were visibly noise. A second identical row now
+   runs after the FP rows.
+8. **The control printed in unscaled units** next to scaled costs. A raw 4.03%
+   effect against a raw 1.14% floor printed as "1.004x" against "1.14%" and read
+   as though the effect were under the floor when it was 3.5x above it.
+
+#### A second result, from the checksum gate
+
+OpenCL has no rounding-mode control at all, so `cna_v8_fp` computes the
+nearest-even result natively, recovers the exact residual (2Sum for add and
+subtract, one `fma` for multiply, divide and square root) and nudges by one ULP
+when the mode demands it. That is exact for every value this stage can produce,
+because the group-E constraint keeps operands in [2^-255, 2) where no sum,
+product, quotient or residual can overflow or reach a subnormal.
+
+The row passes the gate against a CPU reference using real `fesetround` on all
+three cards, so the software emulation is **bit-exact against a real MXCSR**.
+PLAN-v8 hoped this kernel would fail to compile and that the failure would be the
+result. It compiles, it is cheap, and directed rounding is not a barrier to an
+OpenCL miner.
+
+#### The RX 580, which is a device failure and not a result
+
+Every row on the 9700X box reported `3264 of 3264 nonces unwritten`: the kernel
+dispatched with no CL error, the timed repetitions returned, and nothing was
+written to the output buffer. The read-back itself is now checked separately and
+was not the cause. An earlier run left the OpenCL runtime unable to create a
+context at all, which is what a driver reset looks like.
+
+Not pursued, because it cannot change the conclusion: the card sits inside the
+range already covered rather than extending it, at 1/16 FP64 like the Vega, and
+the three cards that ran agree to within the measurement floor. Its CPU column
+is clean and usable (`LOAD 0%`, FP cost 1.048x).
+
+Worth recording for whoever meets it next: the harness now names the reason a
+GPU row produced nothing, at every bail-out point. It previously printed a dash
+and said nothing, which cost a full diagnostic cycle.
+
+### F38. Work added to the hash core helps the specialised attacker; the chain fill is what does not
+
+The GPU result is one instance of something more general, and it is the most
+useful thing to come out of this measurement.
+
+**Put the Amdahl bound on an ASIC.** On a 7950X a whole nonce is 1.54 ms in the
+harness while the real `cn_slow_hash_v14` is about 0.65 ms, so
+`get_cna_v6_data` is roughly 0.9 ms, about 60% of a nonce. Now suppose an
+attacker builds silicon that makes the hash instantaneous:
+
+| | nonce cost | speedup over a commodity CPU |
+|---|---|---|
+| v14, hash free | 0.90 ms, fill only | **1.6x** |
+| v15, hash free | 0.90 ms, fill only | **1.8x** |
+
+A perfect hash ASIC with an infinite budget gets under 2x a desktop. To go past
+that it has to accelerate the fill, which is 256 KB per nonce assembled from
+scattered reads across a multi-gigabyte database. At any ASIC-scale rate that is
+a random-access storage bandwidth problem, which is a server rather than a chip,
+and the economics stop being ASIC economics. It is the same mechanism as the
+pool resistance: you cannot mine without being a full node, and the requirement
+scales linearly with hashrate.
+
+**Note which way v15 moves it: 1.6x to 1.8x, in the attacker's favour**, because
+it adds work to the half they can specialise and leaves the half they cannot
+untouched.
+
+That is the third appearance of one pattern:
+
+- **GPU** (F37): the stage costs the card 0.4% and the CPU 4.4%, so GPU:CPU worsens
+- **ASIC** (here): the stage inflates the hash, which is the specialisable half,
+  so the Amdahl bound loosens
+- **Thread load** (F35): under full load the stage gets *cheaper* on Zen desktops,
+  because the hash saturates memory while the stage competes for none of it
+
+**Work added to the hash core is work a specialised attacker can specialise. The
+chain fill is the part they cannot.** Anything bolted onto the hash shifts the
+balance toward the attacker, however exotic it looks. This generalises past the
+v14-versus-v15 decision and should be applied to any future proposal to
+strengthen the hash.
+
+*The honest weak point.* The v6 windowed fill puts ~95% of block reads in the
+last 100k blocks specifically so they stay cache-resident, which is what fixed
+sync speed. A well-funded attacker gets that cache too and can serve 95% of the
+fill from fast memory. What still binds is the ~5% drawn from the whole history:
+they must hold the entire database, they just need not read all of it at full
+bandwidth. That trade-off is deliberate and is recorded in PLAN-v8 Phase 4.
+
+*Unmeasured.* The 0.9 ms fill figure comes from `chain_fill.h` against a
+synthetic 247 MB block cache, not from real `get_cna_v6_data` against LMDB. The
+real thing reads a larger database with page-cache misses, so it should be more
+expensive and the bound stronger, but that is reasoning rather than measurement.
+Timing `get_block_longhash_v14`'s two halves separately in the daemon would
+settle it and would also say exactly where sync time goes.
+
+### F39. The FP stage's sync cost is ~0.12 ms per block, which is not what makes a sync slow
+
+Verification does one hash per block, and the stage adds a nearly constant amount
+of wall time per hash, because that constancy is the reason it narrows the
+cross-CPU spread at all.
+
+| machine | hash | stage share | added per block |
+|---|---|---|---|
+| 9700X | 0.668 ms | 18.2% | +0.122 ms |
+| i7-7700HQ | 1.593 ms | 9.1% | +0.145 ms |
+
+A month offline at one-minute blocks is about 43,000 blocks, so the stage adds
+roughly **6 seconds** to that resync. The "+14.5 to 18.2%" figure that Phase 2
+has been carrying is 18% of a sub-millisecond operation and reads far more
+alarming than it is.
+
+Sync cost is dominated by `get_cna_v6_data`'s scattered reads and by transaction
+verification, neither of which any of this touches. On the stated priority of
+keeping sync fast, the FP stage is close to a non-issue.
+
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell
@@ -1284,7 +1531,19 @@ control row (`v5ref` vs `v5ctl` at ~1.00x) exists to catch it, and if it is not
    load-bearing.
 4. **No GPU number is trustworthy at full occupancy.** Carried from
    `RESULTS.md`: every large-pad row on every machine hit the launch cap
-   because a display-attached GPU trips TDR.
+   because a display-attached GPU trips TDR. Still true of the large-pad
+   rows, which are now off by default. It does not affect F37, whose rows
+   are all 1 MB, all ran their full nonce count, and are compared against a
+   measured cross-row floor rather than against each other in isolation.
+5. **Why the RX 580 dispatches without writing output.** F37. Not pursued,
+   because it cannot change that conclusion, but it is unexplained and the
+   next person to meet it should know it is a known device failure and not
+   a property of the kernel.
+6. **The real cost of `get_cna_v6_data` against LMDB is unmeasured.** F38
+   puts the ASIC bound at 1.6x using a modelled fill; the real one should
+   be more expensive and the bound stronger. Timing
+   `get_block_longhash_v14`'s two halves in the daemon would settle it and
+   would also say exactly where sync time goes.
 
 ## Reproducing
 

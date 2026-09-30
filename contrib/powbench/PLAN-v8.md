@@ -328,18 +328,32 @@ trimmed, stays an engineering estimate under open item 3.
 - RESULTS.md carries the four-machine table, and this section records the
   measured figure, not the predicted one
 
-## Phase 2: floating point  [NEXT, not started]
+## Phase 2: floating point  [BUILT AND MEASURED, not shipped]
+
+The stage exists as `cn_slow_hash_v15`, wired into nothing. Consensus still
+routes HF14 to `cn_slow_hash_v14`. Every question raised against it has been
+answered, and the answers do not all point the same way. See "Where this
+leaves the decision" at the end of this phase.
 
 ### Why, revised
 
 The original justification was ASIC resistance. That is gone: at this chain's
 size an ASIC is not a credible economic threat. Two better reasons replace it.
 
-**GPU resistance via FP64 rate limits.** Consumer GPUs deliberately cripple
-double precision, roughly 1/64 of FP32 on GeForce and 1/16 on RX 580, while a
-CPU runs FP64 at integer speed. That is the largest hardware asymmetry available
-that costs no memory. Note a pro card is the exception: the Vega FE in the test
-set runs FP64 at 1/2 rate and would suffer least.
+**GPU resistance via FP64 rate limits. MEASURED AND WRONG (F37).** The reasoning
+was that consumer GPUs cripple double precision, roughly 1/64 of FP32 on GeForce
+and 1/16 on Polaris and Vega, while a CPU runs FP64 at integer speed, making it
+the largest hardware asymmetry available that costs no memory.
+
+It does not work, because the kernel is nowhere near FP-limited. Measured on
+three cards, the stage costs a GPU 0.4% of a nonce against 4.4% on a CPU, so it
+makes GPU resistance slightly *worse*. Hashrate per resident nonce is the same
+within 10% across a ten-fold range of compute units, which says the card is
+latency-bound and arithmetic added to it is free. This paragraph also had the
+Vega FE at 1/2 rate; it is Vega 10, which is 1/16, so the test set never held a
+high-FP64 card. That turned out not to matter, which is itself the finding.
+
+So one of the two reasons for this phase is gone. The other still stands.
 
 **Cross-CPU fairness, which v8 measured and missed** at 2.39x against a 2.2x
 target. FP adds work without adding memory, so unlike a larger pad it does not
@@ -515,13 +529,31 @@ loaded axis on cooled hardware, is deterministic across four platforms and two
 architectures, is immune to FMA contraction by construction, and costs constant
 instruction count per nonce.
 
-### The GPU question, which is the last one open  [designed, not built]
+### The GPU question  [ANSWERED: the stage makes GPU resistance slightly worse]
 
-GPU resistance was half the original justification for adding floating point and
-it has never been measured. F28 already established that the existing GPU table
-cannot support strong conclusions. Two arguments pull in opposite directions and
-the harness cannot currently tell them apart, because it is entirely integer:
-there is no FP64 anywhere in `vm_kernels.cl.h`.
+**Result: GPU:CPU worsens by 1 to 4% on every card measured.** The stage costs a
+GPU 0.4% of a nonce and a CPU 4.4%. Three cards, two vendors, three
+architectures; the RX 580 failed to produce output and was not pursued, since it
+sits inside the range already covered. FINDINGS F37 has the runs, the method,
+the eight measurement errors found on the way, and the caveats.
+
+The two arguments below are kept as written, because the point of recording them
+was to see which survived. The first did. The second turned on an estimate that
+was wrong by an order of magnitude: emulating directed rounding costs about 4x
+per operation, not 10 to 50x, and 4x of work the card is not bound by is still
+nothing. Point 3 also did not become the hoped-for compile failure. The kernel
+compiles, and it passes the checksum gate, which means software-emulated directed
+rounding is bit-exact against a real MXCSR.
+
+The wider lesson is in F38: work added to the hash core is work a specialised
+attacker can specialise, and the chain fill is the part they cannot.
+
+What follows is the question as it stood before the measurement, kept for the
+record. GPU resistance was half the original justification for adding floating
+point and had never been measured. F28 had established that the existing GPU
+table could not support strong conclusions, and the harness could not tell the
+two arguments apart because it was entirely integer: there was no FP64 anywhere
+in `vm_kernels.cl.h`.
 
 **The argument against, from arithmetic.** Consumer GPUs do rate-limit FP64,
 1/64 on the RTX 3050 and 1/16 on the RX 580, and the Vega FE is the exception at
@@ -567,25 +599,72 @@ all, the compile failure is the result**, and a stronger one than any timing.
 Comparing the same kernel with and without FP also sidesteps the harness's
 modelling caveats, since the extra-hash approximation cancels in the ratio.
 
-**What building it involves.** The three kernels in `vm_kernels.cl.h`; matching
-CPU references in `vm_ref.h` so the checksum gate still works, noting that gate
-verifies kernel against CPU *model*, not against the real `cn_slow_hash`; the
-harness wiring in `main.cpp`. FP64 in OpenCL needs
-`#pragma OPENCL EXTENSION cl_khr_fp64 : enable`, and the constraint uses
-`as_ulong`/`as_double` rather than memcpy. Both the RTX 3050 and the RX 580
-support FP64.
+**How it was built.** The three kernels are generated from one body in
+`vm_kernels.cl.h`, so an FP row cannot drift from the baseline it is divided by,
+and `fp_mode` is a compile-time constant at each call site so the unused path is
+dead code. The CPU reference is `vm_v5` with an `fp_mode` argument, so all rows
+check against one function.
+
+`cna_v8_fp` computes the nearest-even result natively, recovers the exact
+residual (2Sum for add and subtract, one `fma` for multiply, divide and square
+root) and nudges by one ULP when the mode demands it. Exact for every value this
+stage can produce, because the group-E constraint keeps operands in
+[2^-255, 2). Written branch-free, because a warp holds nonces with different
+modes and a miner would not write the diverging version.
+
+Two things the harness needed before its numbers meant anything. The default set
+holds **three rows of identical GPU work** bracketing the FP rows, so the
+cross-row floor is measured rather than assumed. And **`fpxN`** runs the stage at
+N times its round count and divides the cost back out, because at the real count
+the GPU effect sits under that floor. Cost is linear in the count, checked at 1x
+and 10x on both sides and independently on a second CPU.
 
 **Where to run it:** the three machines with discrete GPUs. Not the laptop;
 RESULTS 2.12 records that column as an Intel HD 630 rather than a discrete card.
 
-### Measure before committing to ship
+### Where this leaves the decision
 
-Prototype, then measure three things, and only then decide:
+Against the three things this algorithm is for:
 
-1. cross-CPU spread: does 2.39x actually move toward 2.2x?
-2. verify cost: there is an order of magnitude of headroom, so this is unlikely
-   to bind
-3. the determinism gate, which is pass/fail
+| | effect of the FP stage | evidence |
+|---|---|---|
+| GPU resistance | slightly worse, 1 to 4% | measured, F37 |
+| ASIC resistance | slightly worse, Amdahl bound 1.6x to 1.8x | argued, F38 |
+| CPU fairness | better: 2.39x to 2.20x on the hash, 2.17x to 2.10x per nonce | measured, F34 |
+| Sync speed | +0.12 ms per block, about 6 s for a month offline | measured, F39 |
+
+So the stage helps one of the three, and the 2.2x figure was a target to aim at
+rather than a requirement. Note the fairness number depends on the denominator:
+measured against `cn_slow_hash` alone it is an 8% narrowing, measured against a
+whole nonce, which is what a miner pays, it is 3%.
+
+The cost side is a new floating-point code path in consensus on a fork with no
+successor planned for a long time. The determinism work is thorough: seven
+targets, four instruction sets, both byte orders, structural FMA immunity and a
+startup self-test. The risk is not zero.
+
+**Recommendation: ship v14, keep v15 on the branch.** The measurement is what has
+value here. It retired the GPU justification with numbers rather than argument,
+and that result stands whichever way the decision goes. If fairness later matters
+more than it looks now, the stage is built and tested and the work is not lost.
+The decision is the maintainer's, not a measurement.
+
+### The three gates this phase set itself  [all answered]
+
+1. **Cross-CPU spread: does 2.39x move toward 2.2x?** Yes, to 2.201x measured on
+   nine machine configurations (F34). Against a whole nonce rather than the hash
+   alone it is 2.17x to 2.10x, a third of the size but the same direction.
+2. **Verify cost.** +14.5 to 18.2% of the hash, which is +0.12 ms per block and
+   about 6 seconds on a month-long resync (F39). The headroom was there and this
+   does not bind.
+3. **The determinism gate, pass/fail.** Passed: seven targets, four instruction
+   sets, both byte orders, with FMA contraction made structurally impossible and
+   a startup self-test (F29, F30, F34). The OpenCL work added an unplanned check
+   on top, since software-emulated directed rounding on three GPUs is bit-exact
+   against a real MXCSR (F37).
+
+A fourth question the phase did not set itself, and which changed the picture:
+GPU and ASIC resistance both move slightly the wrong way (F37, F38).
 
 ## Phase 3: pad and parameter tuning  [DONE]
 

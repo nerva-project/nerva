@@ -275,8 +275,15 @@ gets competitive AES.
 
 ## 7. Known gaps
 
-- **Machine D's GPU column is an Intel HD 630, not the GTX 1050 Ti** (2.12).
-  Needs re-running with the fixed selector.
+**This document covers v5, v6 and v7 only.** The v8 kernels, the Phase 2
+floating-point stage and the GPU measurement that settled it are in
+FINDINGS.md F37 to F39, not here. `contrib/powbench/BUILD.txt` describes how to
+run the current harness, whose default variant set is the four 1 MB rows rather
+than the pad sweep below; pass `all` to reproduce this document.
+
+- ~~**Machine D's GPU column is an Intel HD 630, not the GTX 1050 Ti**~~
+  (2.12). **Resolved.** The fixed selector picks the discrete card: machine D
+  now reports `GeForce GTX 1050 Ti 4.0G/1.0G 6CU`. See FINDINGS F37.
 - **v7's CPU is ~40% above the real function** on machine A (87.88 vs ~69.8)
   and unexplained. It reads *faster* on the slower 5600X, which is impossible,
   so that cell is unreliable. The direction overstates v7's GPU:CPU.
