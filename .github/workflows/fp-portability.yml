@@ -32,29 +32,39 @@
 #
 # PLAN-v8 Phase 2 adds IEEE-754 double arithmetic to the hash. A single ULP of
 # disagreement between two platforms forks the chain, so determinism is the
-# property that decides whether the stage can ship. It has been verified by hand
-# on x86-64 (Windows, Linux) and aarch64 (macOS, Android). This covers the rest
-# of what the build claims to support, under QEMU.
+# property that decides whether the stage can ship. It is verified by hand on
+# x86-64 (Windows, Linux) and aarch64 (macOS, Android). This covers the rest of
+# what the build claims to support.
 #
-# Two probes, and they answer different questions.
+# Cross-compiled on the x86 runner and executed under qemu-user, rather than
+# running a whole emulated distro. The first version of this workflow used
+# run-on-arch-action, which boots a QEMU container and runs apt inside it; on
+# riscv64 that spent seventeen minutes installing a compiler and never reached
+# any of this project's code. Emulating a few seconds of probe is cheap.
+# Emulating dpkg is not. Binaries are linked static so qemu-user needs no target
+# loader or libraries.
+#
+# Two probes, answering different questions.
 #
 # t_fp_determinism is standalone C with no project dependencies. It exercises
 # the five permitted operations under the group-E constraint and prints four
 # checksums of raw bit patterns. Nothing in it is endian-sensitive: memcpy
 # between a double and a uint64_t yields the IEEE bit pattern as an integer on
-# either byte order, because both types use the machine's own order. So this
-# must pass everywhere, big-endian included, and it is a hard gate.
+# either byte order, because both types use the machine's own order. It must
+# pass everywhere, big-endian included, and is a hard gate on all three.
 #
-# t_fp_stage links the real hash and compares v14 against v15. It is expected to
-# FAIL on s390x, and that is not about floating point: e2i in slow-hash.h reads
-# the scratchpad index through *((uint64_t *)a) with no SWAP64LE, while mul and
-# sum_half_blocks seven lines below it both swap. Every big-endian machine takes
-# the software-AES path and hits e2i, so v5, v11 and v14 already compute
-# different hashes there. Big-endian support is nominal. FINDINGS.md F36.
+# t_fp_stage links the real hash and prints v14 and v15 for two fixed inputs.
+# Those are compared against the x86-64 values. Its exit code is NOT used for
+# that: its three internal checks all pass on big-endian, where the hash is
+# nonetheless different, and an earlier version of this workflow read the exit
+# code and concluded s390x had been fixed.
 #
-# The s390x job is therefore marked as expected to fail rather than removed: it
-# pins the current state, and if anyone ever fixes the endianness it will start
-# passing and say so.
+# s390x is expected to differ, and not because of floating point. e2i in
+# slow-hash.h reads the pad index through *((uint64_t *)a) with no SWAP64LE,
+# while mul and sum_half_blocks seven lines below it both swap, so every
+# big-endian machine walks a different path through the pad. That predates the
+# FP stage and affects v5 and v11 too. FINDINGS.md F36. The job fails if the
+# hashes ever start matching, so a fix announces itself.
 
 name: fp-portability
 
@@ -63,6 +73,8 @@ on:
     paths:
       - 'src/crypto/slow-hash-fp.h'
       - 'src/crypto/slow-hash-v8fp-*.c'
+      - 'src/crypto/slow-hash*.c'
+      - 'src/crypto/slow-hash*.h'
       - 'contrib/powbench/t_fp_determinism.c'
       - 'contrib/powbench/t_fp_stage.c'
       - 'contrib/powbench/build-*.sh'
@@ -73,135 +85,99 @@ on:
 jobs:
   fp:
     runs-on: ubuntu-latest
-    # Emulation is slow and a hung install should fail rather than spin. armv7
-    # and s390x finish in about two minutes; riscv64 is the slow one.
-    timeout-minutes: 30
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
-          # little-endian, a third architecture family and libc beyond x86 and ARM
+          # little-endian, a third instruction set beyond x86 and ARM
           - arch: riscv64
-            distro: ubuntu_latest
-            stage_expected: pass
-          # the 32-bit ARM path, which nothing has exercised
+            triple: riscv64-linux-gnu
+            qemu: qemu-riscv64-static
+            hashes: match
+          # the 32-bit ARM path, which nothing else exercises
           - arch: armv7
-            distro: ubuntu_latest
-            stage_expected: pass
-          # big-endian. FP must still match; the full hash is expected not to.
-          #
-          # Not ubuntu_latest: its s390x glibc requires VXRS_EXT2, meaning a z15
-          # or later CPU model, which QEMU's default s390x model does not
-          # provide, so the container dies during setup with "Fatal glibc error:
-          # CPU lacks VXRS_EXT2 support" before any of this project's code runs.
-          #
-          # Not bullseye either: Debian 11 left LTS in August 2026 and moved to
-          # archive.debian.org, so deb.debian.org no longer serves its main
-          # package index and build-essential cannot be installed.
-          #
-          # bookworm is current and still targets a low enough s390x baseline.
+            triple: arm-linux-gnueabihf
+            qemu: qemu-arm-static
+            hashes: match
+          # big-endian: FP must still match, the full hash is expected not to
           - arch: s390x
-            distro: bookworm
-            stage_expected: fail
+            triple: s390x-linux-gnu
+            qemu: qemu-s390x-static
+            hashes: differ
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: uraimo/run-on-arch-action@v2
-        name: build and run the FP probes on ${{ matrix.arch }}
-        with:
-          arch: ${{ matrix.arch }}
-          distro: ${{ matrix.distro }}
-          githubToken: ${{ github.token }}
-          install: |
-            apt-get update -q
-            # gcc and libc headers only. build-essential drags in g++, make,
-            # perl and dpkg-dev, and unpacking those inside QEMU is what left the
-            # riscv64 job spinning for 17 minutes at the install step without
-            # reaching any of this project's code. Nothing here needs a C++
-            # compiler or make: the build scripts invoke cc directly.
-            apt-get install -q -y --no-install-recommends gcc libc6-dev
-          run: |
-            set -e
-            echo "::group::t_fp_determinism"
-            cc -O2 -ffp-contract=off contrib/powbench/t_fp_determinism.c -o t_fp_determinism -lm
-            ./t_fp_determinism | tee fp.txt
-            echo "::endgroup::"
+      - name: install the cross toolchain and qemu-user
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -q -y --no-install-recommends \
+            gcc-${{ matrix.triple }} qemu-user-static
 
-            # The x86-64 reference, from commit fb5f781. All four must match, on
-            # every architecture, byte order included.
-            for pair in \
-              "basic add/sub/mul/div:8ae92fac4343e627" \
-              "sqrt and div:0de4d9f1333e87b7" \
-              "fma contraction canary:04c3614dff6aed8c" \
-              "data-driven rounding:d6e736346922def8"
-            do
-              label="${pair%%:*}"
-              want="${pair##*:}"
-              if ! grep -q "$label *: *$want" fp.txt; then
-                echo "MISMATCH: $label expected $want"
-                echo "A divergence here means the FP stage cannot ship as-is."
-                exit 1
-              fi
-            done
-            echo "t_fp_determinism: all four checksums match the x86-64 reference"
+      - name: t_fp_determinism on ${{ matrix.arch }}
+        run: |
+          set -e
+          ${{ matrix.triple }}-gcc -O2 -ffp-contract=off -static \
+            contrib/powbench/t_fp_determinism.c -o t_fp_determinism -lm
+          ${{ matrix.qemu }} ./t_fp_determinism | tee fp.txt
 
-            # Not grouped, and the build kept separate from the run. A collapsed
-            # group hid which of the three checks failed on the first armv7 run,
-            # and a build failure and a check failure are different problems
-            # that were reaching the same message.
-            if ! sh contrib/powbench/build-fp-stage-test.sh > build.txt 2>&1; then
-              echo "t_fp_stage did not BUILD on this architecture:"
-              tail -40 build.txt
+          # The x86-64 reference, from commit fb5f781. All four must match on
+          # every architecture, byte order included.
+          for pair in \
+            "basic add/sub/mul/div:8ae92fac4343e627" \
+            "sqrt and div:0de4d9f1333e87b7" \
+            "fma contraction canary:04c3614dff6aed8c" \
+            "data-driven rounding:d6e736346922def8"
+          do
+            label="${pair%%:*}"
+            want="${pair##*:}"
+            if ! grep -q "$label *: *$want" fp.txt; then
+              echo "MISMATCH: $label expected $want"
+              echo "A divergence here means the FP stage cannot ship as-is."
               exit 1
             fi
+          done
+          echo "all four checksums match the x86-64 reference"
 
-            # Quick mode: QEMU is roughly 8x slower than hardware and riscv64
-            # emulation slower still. Correctness is unaffected.
-            if ! T_FP_STAGE_QUICK=1 ./t_fp_stage > stage.txt 2>&1; then
-              echo "t_fp_stage's own checks failed:"
-              cat stage.txt
-              grep -E "FAIL|MISMATCH" stage.txt || true
+      - name: t_fp_stage on ${{ matrix.arch }}
+        run: |
+          set -e
+          ARCH=${{ matrix.arch }} \
+          CC=${{ matrix.triple }}-gcc \
+          LINKFLAGS=-static \
+          sh contrib/powbench/build-fp-stage-test.sh
+
+          T_FP_STAGE_QUICK=1 ${{ matrix.qemu }} ./t_fp_stage > stage.txt 2>&1 || true
+          cat stage.txt
+
+          # Compare the hashes, not the exit code. See the header.
+          matched=1
+          for want in \
+            16da28b8ec84c42cd776c908807ac204daf763503b24c396e6b0d6c4b015eba2 \
+            bb62ce919b5a9335a31ad178640ccfdc1a4d5b70a2df10c6873298088510e898 \
+            6998ffa9234b99676b92b2fc358c8dfa19cd6afa248b2c02be1030157e7c0332 \
+            86905c8d1e76df9de1bd6e8bac4c3a492eee23eec67c2b239b6423c71192bad0
+          do
+            grep -q "$want" stage.txt || matched=0
+          done
+
+          if [ "${{ matrix.hashes }}" = "differ" ]; then
+            if [ "$matched" = "1" ]; then
+              echo "The hashes now MATCH x86-64 on a big-endian target."
+              echo "They were expected to differ because e2i reads the pad index"
+              echo "with no SWAP64LE (FINDINGS.md F36). Someone has fixed"
+              echo "endianness. Update this workflow and F36."
               exit 1
             fi
-            echo "--- t_fp_stage output ---"
-            cat stage.txt
-            echo "--- end ---"
-
-            # t_fp_stage's exit code cannot answer the portability question. Its
-            # three checks are internal: the FP reference vector, the ablation,
-            # and hardware against software. All three pass on big-endian, where
-            # the hash is nonetheless different. The first version of this
-            # workflow read the exit code and concluded s390x had been fixed.
-            #
-            # So compare the hashes. These are the x86-64 values, and the v15
-            # ones move whenever CN_V8_FP_ROUNDS does.
-            matched=1
-            for want in \
-              16da28b8ec84c42cd776c908807ac204daf763503b24c396e6b0d6c4b015eba2 \
-              bb62ce919b5a9335a31ad178640ccfdc1a4d5b70a2df10c6873298088510e898 \
-              6998ffa9234b99676b92b2fc358c8dfa19cd6afa248b2c02be1030157e7c0332 \
-              86905c8d1e76df9de1bd6e8bac4c3a492eee23eec67c2b239b6423c71192bad0
-            do
-              grep -q "$want" stage.txt || matched=0
-            done
-
-            if [ "${{ matrix.stage_expected }}" = "fail" ]; then
-              if [ "$matched" = "1" ]; then
-                echo "The hashes now MATCH x86-64 on a big-endian target."
-                echo "That is a change: they were expected to differ because e2i"
-                echo "reads the pad index with no SWAP64LE (FINDINGS.md F36)."
-                echo "Someone has fixed endianness. Update this workflow and F36."
-                exit 1
-              fi
-              echo "hashes differ from x86-64 on big-endian, as F36 predicts"
-              echo "note the FP checks above all passed: the divergence is in"
-              echo "the integer path, not the floating-point stage"
-            else
-              if [ "$matched" != "1" ]; then
-                echo "The hashes DIFFER from x86-64 on a little-endian target."
-                echo "This is the result that would stop the FP stage shipping."
-                exit 1
-              fi
-              echo "t_fp_stage: v14 and v15 match the x86-64 reference exactly"
+            echo "hashes differ from x86-64 on big-endian, as F36 predicts"
+            echo "note that every FP check above passed: the divergence is in"
+            echo "the integer path, not the floating-point stage"
+          else
+            if [ "$matched" != "1" ]; then
+              echo "The hashes DIFFER from x86-64 on a little-endian target."
+              echo "This is the result that would stop the FP stage shipping."
+              exit 1
             fi
+            echo "v14 and v15 match the x86-64 reference exactly"
+          fi
