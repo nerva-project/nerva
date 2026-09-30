@@ -93,16 +93,19 @@ jobs:
           # little-endian, a third instruction set beyond x86 and ARM
           - arch: riscv64
             triple: riscv64-linux-gnu
+            debarch: riscv64
             qemu: qemu-riscv64-static
             hashes: match
           # the 32-bit ARM path, which nothing else exercises
           - arch: armv7
             triple: arm-linux-gnueabihf
+            debarch: armhf
             qemu: qemu-arm-static
             hashes: match
           # big-endian: FP must still match, the full hash is expected not to
           - arch: s390x
             triple: s390x-linux-gnu
+            debarch: s390x
             qemu: qemu-s390x-static
             hashes: differ
 
@@ -112,8 +115,15 @@ jobs:
       - name: install the cross toolchain and qemu-user
         run: |
           sudo apt-get update -q
-          sudo apt-get install -q -y --no-install-recommends \
-            gcc-${{ matrix.triple }} qemu-user-static
+          # libc6-dev-<arch>-cross must be named explicitly: gcc-<triple>
+          # only recommends it, so without it the cross compiler falls back
+          # to the host's /usr/include and dies on bits/libc-header-start.h.
+          # Recommends are left on here too; this runs on the x86 runner
+          # where apt is fast and the saving is not worth that failure mode.
+          sudo apt-get install -q -y \
+            gcc-${{ matrix.triple }} \
+            libc6-dev-${{ matrix.debarch }}-cross \
+            qemu-user-static
 
       - name: t_fp_determinism on ${{ matrix.arch }}
         run: |
