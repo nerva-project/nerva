@@ -70,6 +70,9 @@ int  cn_slow_hash_v15_selftest(void);
  * cannot include: that header needs the pad-size machinery set up first. */
 #define CN_V8_FP_ROUNDS_REPORTED 7680
 
+/* NONCE_POINTER is data + 35 read as a uint64_t (slow-hash.h) */
+#define CN_MIN_BLOB 43
+
 /* slow-hash.c asks crypto.cpp this on x86; supply it rather than linking the
  * C++ crypto library for one CPUID. See v8bench.c, which does the same. */
 #if defined(__x86_64__) || defined(__i386__)
@@ -120,7 +123,7 @@ static double now_ms(void)
     return (double)ts.tv_sec * 1e3 + (double)ts.tv_nsec * 1e-6;
 }
 
-static void time_stage(cn_hash_context_t *ctx)
+static void time_stage(cn_hash_context_t *ctx, const char *blob)
 {
     const int reps = 120;
     char h[32];
@@ -129,11 +132,11 @@ static void time_stage(cn_hash_context_t *ctx)
 
     for (i = 0; i < reps; i++) {
         t0 = now_ms();
-        call(ctx, cn_slow_hash_v14_hw, "timing", h, 8);
+        call(ctx, cn_slow_hash_v14_hw, blob, h, 8);
         t14 += now_ms() - t0;
 
         t0 = now_ms();
-        call(ctx, cn_slow_hash_v15_hw, "timing", h, 8);
+        call(ctx, cn_slow_hash_v15_hw, blob, h, 8);
         t15 += now_ms() - t0;
     }
     t14 /= reps;
@@ -148,7 +151,22 @@ static void time_stage(cn_hash_context_t *ctx)
 
 int main(void)
 {
-    static const char *inputs[6] = { "", "a", "abc", "nerva", "The quick brown fox", "0123456789abcdef" };
+    /* Every input must be at least CN_MIN_BLOB bytes. slow-hash.h's v1 tweak
+     * reads NONCE_POINTER, which is data + 35, as a uint64_t, so anything
+     * shorter reads past the end of the literal into whatever the linker put
+     * next. The first version of this test used "", "a", "abc" and friends and
+     * so compared uninitialised memory: Windows and macOS agreed with each
+     * other by accident of layout and Linux did not, which looked exactly like
+     * a consensus split in v14 and was not. v8bench has always used a long
+     * blob and says why in a comment; this file did not. */
+    static const char *inputs[6] = {
+        "nerva cna v8 phase 2 stage test input, long enough for the v1 tweak",
+        "a second input of sufficient length to clear the 43 byte minimum here",
+        "abcdefghijklmnopqrstuvwxyz0123456789 abcdefghijklmnopqrstuvwxyz012345",
+        "the quick brown fox jumps over the lazy dog, twice, for length reasons",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123",
+        "yet another distinct blob, padded out past thirty five plus eight bytes"
+    };
     static const size_t itervals[3] = { 0, 1, 64 };
     cn_hash_context_t *ctx = cn_hash_context_create();
     char h14[32], h15[32], h15sw[32], s14[65], s15[65];
@@ -156,11 +174,20 @@ int main(void)
 
     if (ctx == NULL) { printf("context alloc failed\n"); return 1; }
 
+    /* Checked rather than assumed, because the failure is silent: a short input
+     * produces a stable-looking hash that differs between builds. */
+    for (i = 0; i < 6; i++)
+        if (strlen(inputs[i]) < CN_MIN_BLOB) {
+            printf("input %d is %u bytes, minimum is %d\n",
+                   i, (unsigned)strlen(inputs[i]), CN_MIN_BLOB);
+            return 1;
+        }
+
     /* The _hw and _sw entry points skip the dispatcher's lazy pad allocation,
      * so go through the public dispatcher once to get the pads mapped. */
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
     memset(ctx->salt, 0, CN_SALT_MEMORY);
-    cn_slow_hash_v14(ctx, "warmup", 6, h14, 1, 8, 3, 3);
+    cn_slow_hash_v14(ctx, inputs[0], strlen(inputs[0]), h14, 1, 8, 3, 3);
 
     fp_ok = (cn_slow_hash_v15_selftest() == 0);
 
@@ -182,7 +209,7 @@ int main(void)
     printf("  ablation, v15 != v14 ............. %d of %d\n", differ, total);
     printf("  cross-arm, v15 hw == v15 sw ...... %s\n", hwsw ? "PASS" : "FAIL");
 
-    time_stage(ctx);
+    time_stage(ctx, inputs[0]);
 
     cn_hash_context_free(ctx);
     return (fp_ok && differ == total && hwsw) ? 0 : 1;
