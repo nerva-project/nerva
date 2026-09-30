@@ -361,6 +361,12 @@ punish small-cache machines. It is the only lever left after Phase 3.
 
 ### What RandomX actually does, reviewed against the source
 
+**Read FINDINGS F40 alongside this section.** It answers the question this review
+does not: why RandomX has floating point at all, when Monero adopted it (November
+2019, block 1978433, never in CryptoNight), and why that precedent does not carry
+to a memory-hard loop. FP is 37% of a RandomX program and inseparable from it;
+ours is a separable block, which is what F37 and F38 measured the cost of.
+
 Monero vendors `tevador/RandomX`; there is no separate Monero variant. Reviewed
 `doc/specs.md`, `src/intrin_portable.h` and `src/common.hpp`.
 
@@ -400,6 +406,16 @@ come from per-program masks, varying magnitude without leaving the safe band.
 | A | read-only constants | restricted to [1, 4294967296) |
 
 Only E needs to be positive, because only E is square-rooted.
+
+**Note what that list does NOT exclude: infinity.** `design.md` states "About 2%
+(6.85% for RandomX v2) of programs produce at least one `infinity` value".
+RandomX constrains group E *memory operands*, so register values may drift
+upward, and it forbids NaN and denormals rather than all special values. Our
+stage constrains every *result*, so infinity is structurally unreachable here.
+Both are deterministic, because IEEE-754 specifies overflow precisely. The point
+is that our value-safety argument is stricter than RandomX's and does not
+inherit it: `slow-hash-fp.h` says so and `cn_fp_value_scan` proves it on the real
+round body. FINDINGS F40.
 
 **Instruction set:** FADD_R/M, FSUB_R/M, FMUL_R, FDIV_M, FSQRT_R, plus FSCAL_R
 and FSWAP_R which are bit manipulation rather than arithmetic. Exactly the five

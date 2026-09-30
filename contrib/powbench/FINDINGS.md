@@ -1443,6 +1443,93 @@ Sync cost is dominated by `get_cna_v6_data`'s scattered reads and by transaction
 verification, neither of which any of this touches. On the stated priority of
 keeping sync fast, the FP stage is close to a non-issue.
 
+### F40. Monero's floating point is not a precedent for ours: it arrived with RandomX, where FP is 37% of the instruction stream
+
+Researched from primary sources after the GPU result, to answer whether Monero's
+use of floating point in consensus supports doing the same here. It does not,
+and the reason is the same one F37 and F38 measured.
+
+**Floating point was never in CryptoNight.** Monero ran CryptoNight from 2014 to
+November 2019 and its operations are AES, XOR, 64-bit multiply and 64-bit add.
+FP arrived with RandomX at the v12 fork, block **1978433**, November 2019
+(`src/hardforks/hardforks.cpp`). Nerva forked from Monero v0.12, before any of
+this, and carries none of it: the only FP under `src/crypto` is the v15 files
+this branch added.
+
+**There is a third position, which neither this plan nor its critics considered.**
+CryptoNight v2 (October 2018) used the FPU while keeping FP *out of consensus*.
+It computes a 64-bit integer square root with `_mm_sqrt_sd`, a double-precision
+hardware instruction, then applies `VARIANT2_INTEGER_MATH_SQRT_FIXUP`, which
+corrects by plus or minus one so the result is exactly the integer part.
+SChernykh also shipped an integer-only version using a 16 KB table for CPUs with
+a slow or absent FPU. So Monero took the FPU's speed and refused its rounding.
+If FP hardware is ever wanted here without a new consensus failure class, that is
+the shape to copy.
+
+**In RandomX, FP was there on day one.** The repository's initial commit is
+2018-10-31 and the initial draft README of the same day already specifies 32
+floating point registers, IEEE-754 double precision and exactly ADD, SUB, MUL,
+DIV, SQRT. It carries the warning this project rediscovered independently: "The
+order of operations must be preserved since floating point math is not
+associative." Two days later, "Updated specs: cache, FP rounding". It was never
+bolted on.
+
+**Why, from `doc/design.md`.** The goal is *device binding*: "To minimize the
+performance advantage of specialized hardware, a proof of work algorithm must
+achieve device binding by targeting specific features of existing general-purpose
+hardware." The mechanism is section 1.1.3, "The actual program execution should
+utilize as many CPU components as possible", listing multi-level caches, the uop
+cache, the ALU, **the FPU**, the memory controller and instruction-level
+parallelism. An ASIC that omits the FPU saves die area; requiring it forces the
+ASIC to build one and stop being cheaper than a CPU.
+
+Section 2.5 is the direct statement: "RandomX uses double precision floating
+point operations, which are supported by the majority of CPUs and **require more
+complex hardware than single precision**." And on determinism, the same reasoning
+this stage uses: "RandomX uses five operations that are guaranteed by the IEEE
+754 standard to give correctly rounded results: addition, subtraction,
+multiplication, division and square root. All 4 rounding modes defined by the
+standard are used."
+
+**Scale is the part that does not transfer.** Counting opcodes in `doc/specs.md`,
+FP instructions are **94 of 256, about 37% of a RandomX program**, interleaved
+with integer work, branches and memory access, competing for issue slots. Ours is
+a separable block of 9,600 rounds appended to an otherwise integer memory-hard
+loop.
+
+**So RandomX's floating point works because of what surrounds it, not because FP
+is intrinsically hostile to specialised hardware.** RandomX is a random program
+execution PoW whose thesis is that an ASIC must replicate a whole CPU. CNA v8 is
+a memory-hard loop, which F37 measured as latency-bound: arithmetic added to it
+costs a GPU 0.4% of a nonce, and F38's bound moves an ASIC from 1.6x to 1.8x in
+the attacker's favour. A separable FP block on a memory-bound loop is something
+an attacker amortises. That is what was measured, and this is why.
+
+**Correction to how this plan describes RandomX's value safety.** PLAN-v8's
+RandomX review presents their constraint as making the divergent cases
+unreachable, which is right, but the set of cases is smaller than assumed:
+`design.md` states "About 2% (6.85% for RandomX v2) of programs produce at least
+one `infinity` value". RandomX forbids NaN and denormals, **not infinity**,
+because it constrains group E *memory operands* while register values may drift
+upward. Our stage constrains every *result*, so infinity is structurally
+unreachable for us. Both are deterministic, since IEEE-754 specifies overflow
+precisely. The point is that our safety argument is **stricter than RandomX's and
+does not depend on theirs**, which `slow-hash-fp.h` already says correctly
+("checked rather than inherited", proven by `cn_fp_value_scan`).
+
+**What does support the technique generally:** RandomX was audited by four
+independent teams between May and August 2019 (Trail of Bits, X41 D-SEC,
+Kudelski, QuarksLab) with no critical findings, and FP in consensus has run on
+Monero for about seven years across every architecture they ship. The technique
+is proven. The question was never whether FP can be made deterministic; it is
+whether it buys anything in a design shaped like this one.
+
+*Sources, all primary:* `tevador/RandomX` `doc/design.md` and `doc/specs.md`;
+the initial draft README at commit `07a8318`; `monero-project/monero`
+`src/hardforks/hardforks.cpp`; monero PR #4218 and `SChernykh/sqrt_v2` for the
+CryptoNight v2 square root; docs.getmonero.org for the CryptoNight operation
+list.
+
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell
