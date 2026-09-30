@@ -791,6 +791,7 @@ int main(int argc, char **argv)
     const unsigned n1 = argc > 1 ? (unsigned)atoi(argv[1]) : 2000;
     const unsigned n4 = argc > 2 ? (unsigned)atoi(argv[2]) : 600;
     struct result v5ref, v8ref, v5ctl, v8ctl, v5p4, v8p4, v15r;
+    double v15peak = 0.0;
     int ok1, ok2;
     double ctl_noise, d1, d4, gate;
 
@@ -1107,12 +1108,53 @@ int main(int argc, char **argv)
                 v8ms[si] = best;   /* reuse the slot to carry peak H/s to the SCALE line */
             }
 
+            /* The one thing single-thread latency cannot answer: SMT siblings
+             * share FP units, so a stage that is fair thread-for-thread need
+             * not be fair machine-for-machine once every core is loaded. This
+             * row is v15 at 1 MB across the same thread counts, so the peak
+             * total throughput with and without the stage can be compared on
+             * each machine and then across machines.
+             *
+             * Sized from v15's own single-thread time rather than v8's, so it
+             * gets the same wall time per configuration and not a shorter one. */
+            if (ntc > 0 && v15r.mean_ms > 0.0) {
+                double best = 0.0, one = 0.0;
+                unsigned n, best_t = 0;
+
+                n = (unsigned)(1200.0 / v15r.mean_ms);
+                if (n < 8) n = 8;
+
+                if (g_narrow) printf("  1 MB FP\n");
+                else          printf("  %-5s", "1MBFP");
+                for (ti = 0; ti < ntc; ti++) {
+                    const double hs = bench_threads(cn_slow_hash_v15, 1024ull*1024, n, tcounts[ti]);
+                    if (ti == 0) one = hs;
+                    if (hs > best) { best = hs; best_t = tcounts[ti]; }
+                    if (g_narrow) {
+                        printf("%s%uT=%.1f", (ti % 3) == 0 ? "    " : " ",
+                               tcounts[ti], hs);
+                        if ((ti % 3) == 2 || ti + 1 == ntc) printf("\n");
+                    } else {
+                        printf(" %9.1f", hs);
+                    }
+                }
+                if (g_narrow)
+                    printf("    peak %.2fx @%uT\n", one > 0.0 ? best / one : 0.0, best_t);
+                else
+                    printf("  %5.2fx @%uT\n", one > 0.0 ? best / one : 0.0, best_t);
+                v15peak = best;
+            }
+
             if (ntc > 0) {
                 char brand[49]; char *p; char extra[24];
                 cpu_brand(brand);
                 for (p = brand; *p; p++) if (*p == ' ') *p = '_';
                 snprintf(extra, sizeof(extra), " cpus=%u", hw);
                 tag_line("SCALE", brand, extra, "H/s", v8ms, 1);
+                if (v15peak > 0.0 && v8ms[0] > 0.0)
+                    printf("  FPSCALE %s v8=%.1f v15=%.1f (%+.2f%%)\n",
+                           brand, v8ms[0], v15peak,
+                           (v15peak - v8ms[0]) / v8ms[0] * 100.0);
                 if (g_narrow) {
                     printf("  ^ peak total H/s per pad.\n");
                     printf("  Send this and the SWEEP line.\n");
