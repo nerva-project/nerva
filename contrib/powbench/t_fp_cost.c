@@ -293,18 +293,17 @@ int main(int argc, char **argv)
     pinned = (aff0[0] != '\0' && strchr(aff0, '-') == NULL &&
               strchr(aff0, ',') == NULL);
 
-    printf("FP cost probe\n");
-    if (aff0[0] != '\0') printf("  cpus allowed: %s\n", aff0);
+    printf("FP cost probe, %s | serial chains, ns/iter\n",
 #if defined(__x86_64__) || defined(_M_X64)
-    printf("  arch: x86-64\n");
+           "x86-64"
 #elif defined(__aarch64__)
-    printf("  arch: aarch64\n");
+           "aarch64"
 #else
-    printf("  arch: other\n");
+           "other"
 #endif
-    printf("  serial chains; ns per iteration\n");
-    printf("  net = block minus control\n");
-    printf("  add+sub is 2 ops; the rest are 1\n\n");
+          );
+    printf("  net = block minus control; add+sub is 2 ops%s%s\n\n",
+           aff0[0] ? " | cpus " : "", aff0[0] ? aff0 : "");
 
     printf("  %-8s %9s %9s\n", "op", "ns", "net");
     for (i = 0; i < OP_COUNT; i++) {
@@ -338,9 +337,7 @@ int main(int argc, char **argv)
         printf("  *** in the foreground, then measure again.\n");
     }
 
-    printf("\n  The question this answers: is the spread of the\n");
-    printf("  mixed column across machines wider or narrower\n");
-    printf("  than 2.44x? Wider means adding FP makes\n");
-    printf("  cross-CPU fairness worse, not better.\n");
+    printf("\n  Compare the mixed column across machines against\n");
+    printf("  2.44x: wider means FP worsens fairness.\n");
     return tainted ? 2 : 0;
 }

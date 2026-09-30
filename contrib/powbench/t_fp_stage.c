@@ -58,12 +58,17 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 #include "hash-ops.h"
 
 void cn_slow_hash_v14_hw(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v15_hw(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v15_sw(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 int  cn_slow_hash_v15_selftest(void);
+
+/* kept in step with CN_V8_FP_ROUNDS in slow-hash-fp.h, which this file
+ * cannot include: that header needs the pad-size machinery set up first. */
+#define CN_V8_FP_ROUNDS_REPORTED 7680
 
 /* slow-hash.c asks crypto.cpp this on x86; supply it rather than linking the
  * C++ crypto library for one CPUID. See v8bench.c, which does the same. */
@@ -95,6 +100,50 @@ static void hex(const char *h, char *o)
     int i;
     for (i = 0; i < 32; i++) sprintf(o + i * 2, "%02x", (unsigned char)h[i]);
     o[64] = 0;
+}
+
+
+/* A second, independent measurement of what the stage costs.
+ *
+ * v8bench already reports this, but on an Apple M1 it read -0.59%, meaning the
+ * stage appeared to cost nothing, while t_fp_cost on the same machine put a
+ * mixed FP round at 19 ns, which over CN_V8_FP_ROUNDS should be plainly
+ * visible. One of those is wrong and they share no code, so a third measurement
+ * that shares code with neither is the way to tell which.
+ *
+ * Alternates the two so drift cannot land on one and not the other, which is
+ * the same reason v8bench interleaves its group. */
+static double now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1e3 + (double)ts.tv_nsec * 1e-6;
+}
+
+static void time_stage(cn_hash_context_t *ctx)
+{
+    const int reps = 120;
+    char h[32];
+    double t14 = 0.0, t15 = 0.0, t0;
+    int i;
+
+    for (i = 0; i < reps; i++) {
+        t0 = now_ms();
+        call(ctx, cn_slow_hash_v14_hw, "timing", h, 8);
+        t14 += now_ms() - t0;
+
+        t0 = now_ms();
+        call(ctx, cn_slow_hash_v15_hw, "timing", h, 8);
+        t15 += now_ms() - t0;
+    }
+    t14 /= reps;
+    t15 /= reps;
+
+    printf("\n  v14 %.4f ms   v15 %.4f ms   stage %+.2f%%\n",
+           t14, t15, (t15 - t14) / t14 * 100.0);
+    printf("  %.1f us over %d rounds = %.2f ns/round\n",
+           (t15 - t14) * 1000.0, CN_V8_FP_ROUNDS_REPORTED,
+           (t15 - t14) * 1e6 / (double)CN_V8_FP_ROUNDS_REPORTED);
 }
 
 int main(void)
@@ -132,6 +181,8 @@ int main(void)
     printf("\n  FP determinism vector ............ %s\n", fp_ok ? "PASS" : "FAIL");
     printf("  ablation, v15 != v14 ............. %d of %d\n", differ, total);
     printf("  cross-arm, v15 hw == v15 sw ...... %s\n", hwsw ? "PASS" : "FAIL");
+
+    time_stage(ctx);
 
     cn_hash_context_free(ctx);
     return (fp_ok && differ == total && hwsw) ? 0 : 1;
