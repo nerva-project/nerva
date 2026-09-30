@@ -133,14 +133,28 @@ jobs:
             done
             echo "t_fp_determinism: all four checksums match the x86-64 reference"
 
-            echo "::group::t_fp_stage"
-            if sh contrib/powbench/build-fp-stage-test.sh && ./t_fp_stage > stage.txt 2>&1; then
+            # Not grouped, and the build kept separate from the run. A collapsed
+            # group hid which of the three checks failed on the first armv7 run,
+            # and a build failure and a check failure are different problems
+            # that were reaching the same message.
+            if ! sh contrib/powbench/build-fp-stage-test.sh > build.txt 2>&1; then
+              echo "t_fp_stage did not BUILD on this architecture:"
+              tail -40 build.txt
+              exit 1
+            fi
+
+            if ./t_fp_stage > stage.txt 2>&1; then
               stage_rc=0
             else
               stage_rc=1
             fi
+            echo "--- t_fp_stage output ---"
             cat stage.txt || true
-            echo "::endgroup::"
+            echo "--- end ---"
+            if [ "$stage_rc" != "0" ]; then
+              echo "checks that did not pass:"
+              grep -E "FAIL|did not|MISMATCH|[0-9]+ of [0-9]+" stage.txt || true
+            fi
 
             if [ "${{ matrix.stage_expected }}" = "fail" ]; then
               if [ "$stage_rc" = "0" ]; then

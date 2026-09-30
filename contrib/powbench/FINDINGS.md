@@ -951,8 +951,6 @@ architectures and three toolchains:
 | Linux x86-64 | gcc | by hand |
 | macOS aarch64 (Apple M1) | clang | by hand |
 | Android aarch64 (Pixel 7a) | Termux clang | by hand |
-| Linux riscv64 | gcc | CI under QEMU |
-| Linux armv7 (32-bit) | gcc | CI under QEMU |
 
     v14 16da28b8ec84c42cd776c908807ac204daf763503b24c396e6b0d6c4b015eba2
     v15 c7d123c1993299cbd07bb8a84cc4bb002e35f3cc1240b95b2e663d22318e5edd
@@ -961,13 +959,15 @@ This is what F29 could only claim for the primitives. The FP stage crosses the
 architecture boundary inside the real hash, which is the risk that could have
 ended Phase 2 outright.
 
-**Four architecture families now, not two.** riscv64 and armv7 were added by
-`.github/workflows/fp-portability.yml` running under QEMU, and both pass on the
-first attempt: `t_fp_determinism` matches all four x86-64 reference checksums
-and `t_fp_stage` produces the same v14 and v15 hashes. riscv64 matters because
-it is a third instruction set with a third libc and compiler combination, and
-armv7 because it is the 32-bit path nothing else had exercised. Big-endian
-remains untested for the full hash, for reasons that are nothing to do with
+**Still two architecture families, not four.** An earlier version of this entry
+claimed riscv64 and armv7 as well, read off job status icons in a CI run that
+was still in progress. It was wrong and is retracted. What the CI has since
+established on armv7 is narrower and worth stating exactly:
+`t_fp_determinism` matches all four x86-64 reference checksums there, so the FP
+primitives do agree on 32-bit ARM, while `t_fp_stage` fails for a reason not yet
+identified. Since that test compares nothing against x86, the failure is one of
+its own three checks and not a cross-platform hash divergence. riscv64 is
+unresolved. Big-endian is untested for the full hash for reasons unrelated to
 floating point: see F36.
 
 **Measured cost of the stage**, `contrib/powbench/t_fp_stage.c`, at the shipping
