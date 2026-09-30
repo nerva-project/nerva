@@ -951,6 +951,7 @@ architectures and three toolchains:
 | Linux x86-64 | gcc | by hand |
 | macOS aarch64 (Apple M1) | clang | by hand |
 | Android aarch64 (Pixel 7a) | Termux clang | by hand |
+| Linux armv7, 32-bit | gcc | CI under QEMU |
 
     v14 16da28b8ec84c42cd776c908807ac204daf763503b24c396e6b0d6c4b015eba2
     v15 c7d123c1993299cbd07bb8a84cc4bb002e35f3cc1240b95b2e663d22318e5edd
@@ -959,16 +960,18 @@ This is what F29 could only claim for the primitives. The FP stage crosses the
 architecture boundary inside the real hash, which is the risk that could have
 ended Phase 2 outright.
 
-**Still two architecture families, not four.** An earlier version of this entry
-claimed riscv64 and armv7 as well, read off job status icons in a CI run that
-was still in progress. It was wrong and is retracted. What the CI has since
-established on armv7 is narrower and worth stating exactly:
-`t_fp_determinism` matches all four x86-64 reference checksums there, so the FP
-primitives do agree on 32-bit ARM, while `t_fp_stage` fails for a reason not yet
-identified. Since that test compares nothing against x86, the failure is one of
-its own three checks and not a cross-platform hash divergence. riscv64 is
-unresolved. Big-endian is untested for the full hash for reasons unrelated to
-floating point: see F36.
+**Three architecture families.** armv7 was added by
+`.github/workflows/fp-portability.yml` under QEMU and matches exactly: all four
+`t_fp_determinism` checksums, and both v14 and v15 hashes. It is the 32-bit path
+nothing else exercised, and the one where `fesetround` reaching the VFP rounding
+bits was least certain. riscv64 is not yet resolved; QEMU emulates it slowly
+enough that the job has not completed.
+
+An earlier version of this entry claimed riscv64 and armv7 on the strength of
+job status icons in a run that was still in progress. That was wrong, and the
+armv7 half of it is now true for the right reason rather than by luck.
+
+Big-endian is a separate matter and is covered by F36.
 
 **Measured cost of the stage**, `contrib/powbench/t_fp_stage.c`, at the shipping
 count of 9,600 rounds. Every figure below is measured, none projected:
@@ -1160,12 +1163,28 @@ aarch64-with-crypto, so big-endian necessarily takes the `e2i` path; and traced
 the line's history to 83ff56d, which introduced it without the swap. The swap
 was never present in this file.
 
-*Pinned by CI:* `.github/workflows/fp-portability.yml` runs the FP probes under
-QEMU on riscv64, armv7 and s390x. `t_fp_determinism` is a hard gate on all
-three, including big-endian, because nothing in it is endian-sensitive.
-`t_fp_stage` is expected to fail on s390x and the workflow fails if it ever
-starts passing, so a future endianness fix announces itself instead of going
-unnoticed.
+*Confirmed by measurement, not only by reading:* the s390x CI job produces
+
+    v14 ad0cfef2a9dff36aee90b5591ed5be9c87664db8af460efadfa064d67b422fae
+    v15 5387071cc6f14f53f64ab3d4d4d3619bdce89a3182b0b4b31588ccb0bfdedd86
+
+against x86-64's `16da28b8...` and `bb62ce91...` for the same input. The
+prediction from reading `e2i` was right.
+
+**Everything floating-point passes on big-endian.** All four
+`t_fp_determinism` checksums match, the FP reference vector passes, the value
+scan finds no denormal or infinity or NaN, and the two AES arms agree. The
+divergence is entirely in the integer path. That is worth stating plainly
+because it is the opposite of what one would assume from a big-endian failure in
+a change that adds floating point.
+
+*Pinned by CI:* the workflow compares the printed hashes against the x86-64
+reference, and fails on s390x if they ever start matching, so an endianness fix
+announces itself. It did not always: the first version read `t_fp_stage`'s exit
+code instead, which cannot answer this question, because all three of that
+test's checks are internal and all three pass on big-endian while the hash is
+different. It reported that s390x had been fixed. Comparing hashes is the only
+thing that tests what this entry is about.
 
 ## Working environment
 

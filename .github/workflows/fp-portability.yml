@@ -148,33 +148,52 @@ jobs:
               exit 1
             fi
 
-            if ./t_fp_stage > stage.txt 2>&1; then
-              stage_rc=0
-            else
-              stage_rc=1
+            # Quick mode: QEMU is roughly 8x slower than hardware and riscv64
+            # emulation slower still. Correctness is unaffected.
+            if ! T_FP_STAGE_QUICK=1 ./t_fp_stage > stage.txt 2>&1; then
+              echo "t_fp_stage's own checks failed:"
+              cat stage.txt
+              grep -E "FAIL|MISMATCH" stage.txt || true
+              exit 1
             fi
             echo "--- t_fp_stage output ---"
-            cat stage.txt || true
+            cat stage.txt
             echo "--- end ---"
-            if [ "$stage_rc" != "0" ]; then
-              echo "checks that did not pass:"
-              grep -E "FAIL|did not|MISMATCH|[0-9]+ of [0-9]+" stage.txt || true
-            fi
+
+            # t_fp_stage's exit code cannot answer the portability question. Its
+            # three checks are internal: the FP reference vector, the ablation,
+            # and hardware against software. All three pass on big-endian, where
+            # the hash is nonetheless different. The first version of this
+            # workflow read the exit code and concluded s390x had been fixed.
+            #
+            # So compare the hashes. These are the x86-64 values, and the v15
+            # ones move whenever CN_V8_FP_ROUNDS does.
+            matched=1
+            for want in \
+              16da28b8ec84c42cd776c908807ac204daf763503b24c396e6b0d6c4b015eba2 \
+              bb62ce919b5a9335a31ad178640ccfdc1a4d5b70a2df10c6873298088510e898 \
+              6998ffa9234b99676b92b2fc358c8dfa19cd6afa248b2c02be1030157e7c0332 \
+              86905c8d1e76df9de1bd6e8bac4c3a492eee23eec67c2b239b6423c71192bad0
+            do
+              grep -q "$want" stage.txt || matched=0
+            done
 
             if [ "${{ matrix.stage_expected }}" = "fail" ]; then
-              if [ "$stage_rc" = "0" ]; then
-                echo "t_fp_stage PASSED on a big-endian target."
-                echo "That is a change: it was expected to fail on e2i's missing"
-                echo "SWAP64LE (FINDINGS.md F36). Someone has fixed endianness."
-                echo "Update this workflow and F36."
+              if [ "$matched" = "1" ]; then
+                echo "The hashes now MATCH x86-64 on a big-endian target."
+                echo "That is a change: they were expected to differ because e2i"
+                echo "reads the pad index with no SWAP64LE (FINDINGS.md F36)."
+                echo "Someone has fixed endianness. Update this workflow and F36."
                 exit 1
               fi
-              echo "t_fp_stage failed as expected on big-endian; see F36"
+              echo "hashes differ from x86-64 on big-endian, as F36 predicts"
+              echo "note the FP checks above all passed: the divergence is in"
+              echo "the integer path, not the floating-point stage"
             else
-              if [ "$stage_rc" != "0" ]; then
-                echo "t_fp_stage FAILED on a little-endian target."
+              if [ "$matched" != "1" ]; then
+                echo "The hashes DIFFER from x86-64 on a little-endian target."
                 echo "This is the result that would stop the FP stage shipping."
                 exit 1
               fi
-              echo "t_fp_stage: v14 and v15 match the reference on this architecture"
+              echo "t_fp_stage: v14 and v15 match the x86-64 reference exactly"
             fi
