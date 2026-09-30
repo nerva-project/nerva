@@ -73,6 +73,9 @@ on:
 jobs:
   fp:
     runs-on: ubuntu-latest
+    # Emulation is slow and a hung install should fail rather than spin. armv7
+    # and s390x finish in about two minutes; riscv64 is the slow one.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -112,7 +115,12 @@ jobs:
           githubToken: ${{ github.token }}
           install: |
             apt-get update -q
-            apt-get install -q -y build-essential
+            # gcc and libc headers only. build-essential drags in g++, make,
+            # perl and dpkg-dev, and unpacking those inside QEMU is what left the
+            # riscv64 job spinning for 17 minutes at the install step without
+            # reaching any of this project's code. Nothing here needs a C++
+            # compiler or make: the build scripts invoke cc directly.
+            apt-get install -q -y --no-install-recommends gcc libc6-dev
           run: |
             set -e
             echo "::group::t_fp_determinism"
