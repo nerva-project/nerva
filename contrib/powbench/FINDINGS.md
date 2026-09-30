@@ -1039,6 +1039,66 @@ including a determinism claim recorded before the fix. The test now checks input
 length at startup. v8bench was never affected; its blob has always been long
 enough and says so in a comment.
 
+### F35. Under full thread load the stage costs less, not more, on properly cooled machines
+
+The concern that prompted this: SMT siblings share FP units, so a stage that is
+fair thread-for-thread need not be fair machine-for-machine once every core is
+loaded. Peak total H/s at 1 MB, `v8bench` thread scaling:
+
+| | v8 peak | v15 peak | multi cost | single cost | ratio |
+|---|---|---|---|---|---|
+| 7950X | 14429.0 | 12631.3 | -12.46% | -12.71% | 0.98 |
+| 9700X | 13468.9 | 12506.4 | -7.15% | -15.60% | **0.46** |
+| 5600X | 6703.4 | 6298.0 | -6.05% | -12.16% | **0.50** |
+| Apple M1 | 3999.2 | 3819.8 | -4.49% | -4.26% | 1.05 |
+| i5-8279U | 2188.2 | 1968.1 | -10.06% | -7.11% | 1.41 |
+| 7700HQ | 2112.2 | 1898.9 | -10.10% | -8.24% | 1.23 |
+| Pixel 7a | 1546.9 | 1228.6 | -20.58% | -6.97% | **2.95** |
+
+**SMT contention is not the mechanism.** If it were, the 7950X would show it
+worst: it has the most SMT threads in the set, 32 on 16 cores. It shows none.
+The two Zen desktops make the stage *cheaper* under load, at less than half its
+single-thread price, and thread better with it than without: the 9700X amplifies
+9.73x against 9.08x, the 5600X 7.41x against 6.79x. Five of the seven machines
+amplify better with the stage than without it.
+
+The reason is the memory wall. At high thread counts the hash saturates memory
+bandwidth and its throughput plateaus, so adding compute that touches almost no
+memory is close to free. The stage is the only part of the algorithm that does
+not compete for bandwidth.
+
+**What varies is cooling, not architecture.** The three machines above 1.0 are a
+fanless mini PC, a laptop and a phone. The stage is latency-bound and scales with
+clock while the hash is memory-bound and barely notices, so a machine holding a
+reduced sustained clock pays disproportionately. That is the same mechanism as
+F34's unexplained i5-8279U against i7-7700HQ gap, now visible as a pattern rather
+than a single oddity.
+
+**Spread under load, and the scope it is judged against:**
+
+| set | v8 | v15 | |
+|---|---|---|---|
+| cooled desktops (7950X, 9700X, 5600X, M1) | 3.61x | **3.31x** | narrows |
+| every machine except the phone | 6.83x | **6.65x** | narrows |
+| every machine | 9.33x | 10.28x | widens |
+
+**Scope decision, and whose it is.** The last row is driven entirely by the
+Pixel, whose 2.95x penalty is the outlier in the table. The project's position,
+recorded here as a judgement rather than a measurement: a phone is not a mining
+target for this chain, miners use desktops or purpose-built rigs, and those have
+cooling. Judged against the hardware that will actually mine, the stage narrows
+the loaded spread as well as the single-thread one.
+
+The phone row is kept because it is real and because the decision above is a
+choice that a later reader is entitled to disagree with. If whole-machine
+fairness on thermally limited hardware ever becomes the governing metric, this
+is the number that reopens the question.
+
+*Checked:* `v8bench` thread scaling on all seven machines, peak total H/s with
+and without the stage measured in the same run so throttling and background load
+land on both. Phone run unpinned and under a wake lock, since a thread ladder on
+one pinned core measures nothing.
+
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell

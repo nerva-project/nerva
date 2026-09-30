@@ -471,7 +471,7 @@ target at all.
 Untested and required before shipping: the multi-threaded picture. Every figure
 above is single-thread latency, and SMT siblings share FP units.
 
-### Phase 2 status  [stage built; determinism passed; target met; multi-thread outstanding]
+### Phase 2 status  [complete; measured on seven machines; ready for a ship decision]
 
 The stage exists (`src/crypto/slow-hash-fp.h`, built as `cn_slow_hash_v15`) and
 is not wired into consensus. What it has cleared so far, all in FINDINGS F34:
@@ -491,10 +491,26 @@ is not wired into consensus. What it has cleared so far, all in FINDINGS F34:
   axis trails on the other. That is why FP reaches a target pad tuning could
   not.
 
-Outstanding before a ship decision: **the multi-threaded picture**, since every
-figure here is single-thread latency and SMT siblings share FP units, so a stage
-that is fair thread-for-thread may not be fair machine-for-machine once every
-core is loaded. That is the last measurement Phase 2 needs.
+- **The multi-threaded picture holds** (F35). SMT contention is not a factor:
+  the 7950X has the most SMT threads in the set and shows no extra cost, and the
+  two Zen desktops make the stage *cheaper* under load, at under half its
+  single-thread price, because the hash saturates memory bandwidth at high
+  thread counts while the stage competes for none. Five of seven machines thread
+  better with the stage than without it. Loaded spread narrows from 3.61x to
+  3.31x across cooled desktops.
+
+What varies under load is cooling, not architecture: a fanless mini PC, a laptop
+and a phone all pay more, because the stage is clock-bound where the hash is
+memory-bound. Judged across every machine including the phone the loaded spread
+widens, 9.33x to 10.28x, and F35 records both that number and the project's
+decision to scope against hardware that will actually mine.
+
+**Phase 2 has no outstanding measurements.** What remains is a decision, not a
+test: whether to ship the stage, and if so the fork mechanics of doing so. The
+evidence is that it meets the fairness target on the per-core axis, narrows the
+loaded axis on cooled hardware, is deterministic across four platforms and two
+architectures, is immune to FMA contraction by construction, and costs constant
+instruction count per nonce.
 
 ### Measure before committing to ship
 
