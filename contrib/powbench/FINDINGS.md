@@ -863,6 +863,82 @@ in whether the screen was allowed to sleep. The monotonic check was separately
 tested against both real sweeps: it fires on the A55 one and stays quiet on the
 X1 one.
 
+### F33. FP is the most uniform work measured, so it narrows the spread rather than widening it
+
+Net cost per iteration, ns, `contrib/powbench/t_fp_cost.c`, serial dependency
+chains against an identical control. Phone figures are pinned per core type.
+
+| | 7950X | 9700X | 5600X | 7700HQ | X1 | A78 | A55 |
+|---|---|---|---|---|---|---|---|
+| add+sub | 1.562 | 1.737 | 1.984 | 2.699 | 1.311 | 1.572 | 2.941 |
+| mul | 1.087 | 1.234 | 1.342 | 1.079 | 0.918 | 1.064 | 1.258 |
+| div | 2.936 | 3.236 | 3.494 | 3.951 | 4.115 | 4.943 | 11.964 |
+| sqrt | 4.340 | 4.763 | 5.004 | 6.227 | 5.473 | 6.628 | 10.891 |
+| round | 4.978 | 5.874 | 6.160 | 6.396 | 1.200 | 1.427 | 2.895 |
+| **mixed** | **15.131** | **17.075** | **18.143** | **18.533** | **16.592** | **20.164** | **37.896** |
+| control | 1.362 | 1.279 | 1.469 | 2.131 | 2.989 | 3.665 | 16.662 |
+
+`add+sub` performs two operations per iteration where the others perform one, so
+halve it before comparing it against `mul`. The `mixed` row, which is what the
+decision rests on, is unaffected.
+
+**Spread of `mixed` across the machines that can set the CN spread is 1.22x,
+against 2.44x for the hash itself (F31).** Taking the X1 as the phone's figure,
+since a miner pins to the big cores. FP is roughly half as unequal as the work
+it would dilute, so adding it pulls the spread down.
+
+Two rows are worth reading on their own.
+
+**The control.** Plain integer scaffolding, PRNG and bit manipulation, spreads
+12.2x between the 7950X and the A55, and 2.2x between the 7950X and the X1. FP
+on the same machines spreads 2.5x and 1.1x. **FP is more uniform than integer
+work here, not just more uniform than memory work**, which is a stronger claim
+than the plan made and was not anticipated by anyone.
+
+**Rounding is inverted from what PLAN-v8 assumed.** The plan says setting the
+mode is "a register write on x86 and a libc call on ARM, and in a hot loop that
+cost is real", implying ARM pays. Measured, x86 pays 4 to 5 times more, on all
+four x86 machines: 4.978, 5.874, 6.160 and 6.396 ns against 1.200 to 2.895 on
+ARM. An MXCSR write serialises the x86 pipeline while the ARM FPCR write is
+cheap. Data-driven rounding is the single most ARM-favourable component
+measured, and it was recorded as a liability.
+
+Also note the two axes rank machines differently: the 7950X is fastest on FP
+while the 9700X is fastest on the hash. No machine leads both, which is a
+fairness property independent of the spread arithmetic.
+
+**What it costs to reach the 2.2x target.** Treating total cost as the hash plus
+k rounds of the mixed stage, k is about **7,640**:
+
+| | hash only | with FP | change |
+|---|---|---|---|
+| 9700X (fastest) | 0.6642 ms | 0.7947 ms | +19.7% |
+| 7950X | 0.7627 | 0.8783 | +15.2% |
+| 5600X | 1.0179 | 1.1565 | +13.6% |
+| 7700HQ | 1.5827 | 1.7243 | +8.9% |
+| Pixel X1 (slowest) | 1.6215 | 1.7483 | +7.8% |
+
+That is the first lever measured that reaches 2.2x; F showed pad tuning cannot.
+Worst case is +19.7% verify cost against an order of magnitude of headroom. The
+slowest machine changes identity from the phone to the 7700HQ near k = 19,990,
+well above where this lands, and the 5600X cannot set either end at any k.
+
+*Checked:* run on all four x86 machines from one static binary and on three
+pinned Pixel 7a core types, `-ffp-contract=off` throughout. **This refutes the
+prediction recorded in 7c0b8f1**, which was that FP would spread wider than
+2.44x because divide and square root vary most between designs. Divide does vary
+most, 1.35x between the 7950X and the 7700HQ, but not nearly enough to
+outweigh how much more uniform the rest of the mix is than memory access. The
+Skylake divider was called "the weakest in the set by a wide margin" and is
+1.35x, not the 2x assumed.
+
+*Limits:* k assumes cost is linear in rounds and that the mixed block represents
+the shipped stage, which will also fold results into the integer state per
+PLAN-v8 item 6 and so carry scaffolding this probe lacks. Treat 7,640 as a
+design target to re-measure, not a specification. All figures are single-thread
+latency; SMT siblings share FP units, so the multi-threaded picture is untested
+and needs its own pass before anything ships.
+
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell

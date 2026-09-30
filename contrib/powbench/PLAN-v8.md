@@ -434,41 +434,40 @@ If the determinism gate cannot be met, Phase 2 does not ship and v8 goes out as
 it stands at 2.39x. That is an acceptable outcome, not a failure: v8 already
 beats v6 on every measured axis.
 
-### First, whether FP helps fairness at all  [probe built, not yet run]
+### First, whether FP helps fairness at all  [DONE, answered yes]
 
-The fairness argument above rests on one sentence: "FP adds work without adding
-memory, so unlike a larger pad it does not punish small-cache machines." That
-sentence is about memory. It says nothing about whether FP throughput is more or
-less uniform across CPUs than memory latency is, and only the second thing
-decides whether adding FP moves the spread toward 2.2x or away from it.
+The fairness argument rests on one sentence: "FP adds work without adding
+memory, so unlike a larger pad it does not punish small-cache machines." That is
+about memory. It says nothing about whether FP throughput is more or less
+uniform across CPUs than memory latency is, and only the second thing decides
+whether adding FP moves the spread toward 2.2x or away from it.
 
-F31 now puts the spread at 2.44x at 1 MB with an ARM device in the set. If FP
-alone spreads wider than that, adding FP makes the fairness axis worse and this
-phase's second argument is backwards rather than merely unproven.
+`contrib/powbench/t_fp_cost.c` settled it before any consensus code was written.
+**The prediction recorded here and in 7c0b8f1 was that FP would spread wider
+than 2.44x. It was wrong.** Full results and method in FINDINGS F33.
 
-`contrib/powbench/t_fp_cost.c` answers it before any consensus code is written.
-It times add/sub, mul, div, sqrt, the 1-in-16 rounding-mode change and the full
-mixed stage as serial dependency chains, each against an identical control so
-the difference is the operation alone. Serial because a PoW stage has to be
-dependency-chained or a miner reorders it, which makes latency the honest cost.
+- **FP spread is 1.22x against the hash's 2.44x.** FP is roughly half as unequal
+  as the work it would dilute.
+- **FP is more uniform than integer work too**, not merely more uniform than
+  memory. The probe's own integer scaffolding spreads 12.2x between a 7950X and
+  a Cortex-A55 where FP spreads 2.5x. That is a stronger result than this plan
+  claimed.
+- **The rounding-mode cost is backwards in the text above and is corrected
+  here.** x86 pays 4 to 5 times more than ARM, consistently across all four x86
+  machines, because an MXCSR write serialises the pipeline while the ARM FPCR
+  write is cheap. Data-driven rounding is the most ARM-favourable component
+  measured, not a liability. Keep the 1-in-16 rate; there is no reason to lower
+  it and a fairness reason to keep it.
+- **Design target: about 7,640 mixed-FP rounds per hash** reaches 2.2x, costing
+  +19.7% verify time on the fastest machine and +7.8% on the phone. Re-measure
+  once the stage is real, since it will carry scaffolding the probe does not.
 
-**The prediction, stated before measuring, per 1e:** FP will spread wider than
-2.44x. Divide and square root are the least uniform operations a CPU has,
-because divider width and refinement-step count vary far more between designs
-than cache latency does, and an in-order Cortex-A55 is weak at FP64 even by its
-own standards.
+So Phase 2 proceeds, and on a firmer footing than it had: the fairness argument
+is now measured rather than assumed, and it is the first lever that reaches the
+target at all.
 
-**Early signal from the first machine (7950X), net ns per op:** add/sub 1.58,
-mul 1.12, div 2.99, sqrt 4.38, **round 5.14**, mixed 15.32. The rounding-mode
-change is the most expensive item on the list, dearer than sqrt, at only one
-application in sixteen. On x86 that is an MXCSR write serialising the pipeline;
-on ARM it is a libc call. This is a device-dependent cost sitting directly on
-the axis the phase is trying to equalise, and it was not anticipated.
-
-If the spread comes out wider than 2.44x, the decision changes shape: FP would
-have to be justified on GPU resistance alone, with fairness as a cost rather
-than a benefit. That is a different decision from the one this plan currently
-describes and should be made deliberately.
+Untested and required before shipping: the multi-threaded picture. Every figure
+above is single-thread latency, and SMT siblings share FP units.
 
 ### Measure before committing to ship
 

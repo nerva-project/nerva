@@ -51,7 +51,11 @@
  *
  * What is measured, and why each one separately:
  *
- *   add/sub   pipelined, short latency, the most uniform thing here
+ *   add+sub   pipelined, short latency, the most uniform thing here.
+ *             TWO operations per iteration, where every other block
+ *             does one, so halve it before comparing it against mul
+ *             or div. The mixed column, which is what the decision
+ *             rests on, is unaffected.
  *   mul       likewise, with a wider spread historically
  *   div       long latency, poorly pipelined, varies most between designs
  *   sqrt      same family, often sharing the divider
@@ -182,7 +186,7 @@ static volatile uint64_t sink;
 enum { OP_CONTROL, OP_ADD, OP_MUL, OP_DIV, OP_SQRT, OP_ROUND, OP_MIXED, OP_COUNT };
 
 static const char *const op_name[OP_COUNT] = {
-    "control", "add/sub", "mul", "div", "sqrt", "round", "mixed"
+    "control", "add+sub", "mul", "div", "sqrt", "round", "mixed"
 };
 
 /* One block. Identical scaffolding in every case: the same PRNG draw, the same
@@ -299,7 +303,8 @@ int main(int argc, char **argv)
     printf("  arch: other\n");
 #endif
     printf("  serial chains; ns per iteration\n");
-    printf("  net = block minus control\n\n");
+    printf("  net = block minus control\n");
+    printf("  add+sub is 2 ops; the rest are 1\n\n");
 
     printf("  %-8s %9s %9s\n", "op", "ns", "net");
     for (i = 0; i < OP_COUNT; i++) {
