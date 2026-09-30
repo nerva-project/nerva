@@ -939,6 +939,81 @@ design target to re-measure, not a specification. All figures are single-thread
 latency; SMT siblings share FP units, so the multi-threaded picture is untested
 and needs its own pass before anything ships.
 
+### F34. The FP stage is bit-identical across architectures, and its real cost is not what the probe predicted
+
+**Determinism, on the algorithm rather than on a probe.** `cn_slow_hash_v14`
+and `cn_slow_hash_v15` produce identical output on three platforms spanning two
+architectures and three toolchains:
+
+| platform | toolchain |
+|---|---|
+| Windows x86-64 | MinGW gcc |
+| Linux x86-64 | gcc |
+| macOS aarch64 (Apple M1) | clang |
+
+    v14 16da28b8ec84c42cd776c908807ac204daf763503b24c396e6b0d6c4b015eba2
+    v15 c7d123c1993299cbd07bb8a84cc4bb002e35f3cc1240b95b2e663d22318e5edd
+
+This is what F29 could only claim for the primitives. The FP stage crosses the
+architecture boundary inside the real hash, which is the risk that could have
+ended Phase 2 outright.
+
+**Measured cost of the stage**, `contrib/powbench/t_fp_stage.c`, 7,680 rounds:
+
+| | ns/round | hash 1 MB | hash + stage | basis |
+|---|---|---|---|---|
+| 7950X | 11.70 | 0.7755 | 0.8653 | best-of, 3 runs |
+| Apple M1 | **4.82** | 1.3633 | 1.4003 | best-of |
+| i5-8279U | 8.56 | 1.5638 | 1.6296 | lowest of 3 runs |
+| Pixel X1 | 11.77 | 1.5335 | 1.6239 | mean |
+| Pixel A78 | 12.68 | 2.4163 | 2.5137 | mean |
+| Pixel A55 | 35.0 | 7.3022 | 7.5710 | mean |
+
+Still missing: 9700X, 5600X, 7700HQ. The 9700X matters most because it sets the
+fast end of the spread.
+
+**Spread across the machines measured so far goes from 2.02x on the hash alone
+to 1.88x with the stage.** The mechanism is visible in the table and was not
+predicted: **FP cost is anti-correlated with hash cost.** The 7950X is fastest
+at hashing and second-slowest at FP; the M1 is mid-pack at hashing and fastest
+at FP by 2.4x. A machine that leads on one axis trails on the other, which is
+what dilution needs and what a single-axis workload cannot give.
+
+**F33's probe does not predict this stage and should not be used for the
+decision.** The probe called the M1's mixed round 19.186 ns, slower than the
+Pixel X1's 16.592; the real stage is 4.82 against 11.77, the opposite ordering.
+The probe-to-real ratio is 0.78 on x86 and 0.24 on the M1, so it is a different
+answer rather than a constant offset. F33's 1.22x spread, and the 7,640-round
+design target computed from it, are superseded by this entry.
+
+*Checked:* built and run from source on each machine. x86-64 figures come from
+`-static` binaries built on the 7950X; aarch64 from a local clang build.
+
+*Two estimator lessons, both learned by being caught:*
+
+**The mean is wrong on a machine that migrates.** On the M1 the scheduler moves
+work between performance and efficiency cores and macOS offers no affinity call
+to stop it. v8bench's mean read -0.59%, meaning the stage appeared free, while
+its own min column showed 31 us and a direct measurement showed 37.0 us.
+
+**The mean is wrong on a machine that throttles.** The fanless i5-8279U read
+100.4, 65.8 and 73.8 us across three runs. Because the hash is memory-bound
+while this stage is a latency-bound dependency chain, throttling slows the stage
+and barely touches the hash: across the first two runs the stage moved 35% while
+v14 moved 0.7%. Neither effect can make a run faster than its uncontended cost,
+so `t_fp_stage` now reports best-of and warns when the mean exceeds it by more
+than 25%.
+
+*One retraction.* An earlier version of `t_fp_stage.c` used inputs shorter than
+43 bytes, and slow-hash.h's v1 tweak reads `NONCE_POINTER`, which is `data + 35`,
+as a uint64_t. All six inputs therefore read past the end of their literals.
+Windows and macOS agreed with each other because both laid the literals out the
+same way and Linux did not, which presented as v14 producing different hashes on
+different platforms. Any cross-platform hash comparison from that build is void,
+including a determinism claim recorded before the fix. The test now checks input
+length at startup. v8bench was never affected; its blob has always been long
+enough and says so in a comment.
+
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell

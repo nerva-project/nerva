@@ -458,9 +458,11 @@ than 2.44x. It was wrong.** Full results and method in FINDINGS F33.
   write is cheap. Data-driven rounding is the most ARM-favourable component
   measured, not a liability. Keep the 1-in-16 rate; there is no reason to lower
   it and a fairness reason to keep it.
-- **Design target: about 7,640 mixed-FP rounds per hash** reaches 2.2x, costing
-  +19.7% verify time on the fastest machine and +7.8% on the phone. Re-measure
-  once the stage is real, since it will carry scaffolding the probe does not.
+- **The round count from the probe is superseded.** 7,640 was computed from
+  `t_fp_cost`, and F34 shows that probe does not predict the stage: it ranks the
+  M1 slower than a Pixel X1 where the real stage has the M1 2.4x faster. The
+  stage is built and measured now, so the count comes from F34's numbers once
+  the last three machines report.
 
 So Phase 2 proceeds, and on a firmer footing than it had: the fairness argument
 is now measured rather than assumed, and it is the first lever that reaches the
@@ -468,6 +470,27 @@ target at all.
 
 Untested and required before shipping: the multi-threaded picture. Every figure
 above is single-thread latency, and SMT siblings share FP units.
+
+### Phase 2 status  [stage built; determinism passed; cost measurement in progress]
+
+The stage exists (`src/crypto/slow-hash-fp.h`, built as `cn_slow_hash_v15`) and
+is not wired into consensus. What it has cleared so far, all in FINDINGS F34:
+
+- **Determinism on the real algorithm**, not the primitives: v14 and v15 give
+  identical output on Windows x86-64, Linux x86-64 and macOS aarch64, across
+  three toolchains. This was the risk that could have ended the phase.
+- **Contraction immunity is structural**, verified by building with
+  -ffp-contract=off and =fast and getting the same vector, because every FP
+  write passes through integer bit manipulation and no a*b+c pattern exists to
+  fuse.
+- **Cost measured on six cores.** Spread across the machines measured goes from
+  2.02x on the hash alone to 1.88x with the stage, and the mechanism is that FP
+  cost is anti-correlated with hash cost: machines that lead on one axis trail
+  on the other.
+
+Outstanding before a ship decision: the 9700X, 5600X and 7700HQ, then recompute
+the round count; and the multi-threaded picture, since every figure so far is
+single-thread latency and SMT siblings share FP units.
 
 ### Measure before committing to ship
 
