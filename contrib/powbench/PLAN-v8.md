@@ -515,6 +515,69 @@ loaded axis on cooled hardware, is deterministic across four platforms and two
 architectures, is immune to FMA contraction by construction, and costs constant
 instruction count per nonce.
 
+### The GPU question, which is the last one open  [designed, not built]
+
+GPU resistance was half the original justification for adding floating point and
+it has never been measured. F28 already established that the existing GPU table
+cannot support strong conclusions. Two arguments pull in opposite directions and
+the harness cannot currently tell them apart, because it is entirely integer:
+there is no FP64 anywhere in `vm_kernels.cl.h`.
+
+**The argument against, from arithmetic.** Consumer GPUs do rate-limit FP64,
+1/64 on the RTX 3050 and 1/16 on the RX 580, and the Vega FE is the exception at
+1/2. But the GPU is not FP-limited here, it is memory-limited, by roughly three
+orders of magnitude. The stage is 9,600 rounds x 5 ops = 48,000 FP64 operations
+per nonce; call it 300,000 FMA-equivalents once divide and square root are
+counted as the software sequences they are on NVIDIA. An RTX 3050 at about 0.14
+FP64 TFLOPS could sustain roughly 440,000 nonces/s of that, against an actual
+measured hashrate near 720 H/s (0.05x of the 7950X on v5 at 1 MB). It has about
+600x more FP64 capacity than its hashrate can consume, so the stage would cost
+it under 1% while costing a CPU 14 to 18%. On that reading FP makes GPU
+resistance slightly **worse**, and GPU:CPU drifts from 0.05x toward 0.057x.
+
+This is the same mechanism F35 measured on CPUs: the stage costs *less* under
+full thread load on Zen desktops, because the hash saturates memory bandwidth
+while the stage competes for none of it. A GPU is that situation in the extreme.
+
+**The argument for, from what OpenCL cannot express.** The stage changes the
+rounding mode from data, 600 times per nonce. OpenCL has no way to do that:
+round-to-nearest-even is the only mode for arithmetic,
+`cl_khr_select_fprounding_mode` was deprecated in OpenCL 1.1 and is not
+implemented by current vendors, and only the `convert_*` functions take rounding
+suffixes. An OpenCL miner would have to emulate directed rounding in software,
+which for add, mul, div and sqrt means error-free transformations at perhaps 10
+to 50x per operation. CUDA can express it, through `__dadd_rd`, `__dmul_ru` and
+friends, but the mode is per-nonce data and a warp holds 32 nonces, so threads
+select different intrinsics and the branch diverges, up to 4x on top of the FP64
+rate limit.
+
+That is a far stronger resistance mechanism than the rate limit, and it is the
+component measured as cheap on ARM and expensive on x86 (F33). It costs a CPU
+one MXCSR write.
+
+**The test that settles it: three kernels, not one.**
+
+1. `cna_v8` — the existing `cna_v5` kernel with `a & 3`, as the baseline
+2. `cna_v8_fp_rne` — plus the FP stage at fixed round-to-nearest. Isolates the
+   pure arithmetic cost and tests the prediction that it is nearly free
+3. `cna_v8_fp` — plus data-driven rounding, as the algorithm specifies
+
+The gap between 2 and 3 is the answer. **If 3 cannot be written in OpenCL at
+all, the compile failure is the result**, and a stronger one than any timing.
+Comparing the same kernel with and without FP also sidesteps the harness's
+modelling caveats, since the extra-hash approximation cancels in the ratio.
+
+**What building it involves.** The three kernels in `vm_kernels.cl.h`; matching
+CPU references in `vm_ref.h` so the checksum gate still works, noting that gate
+verifies kernel against CPU *model*, not against the real `cn_slow_hash`; the
+harness wiring in `main.cpp`. FP64 in OpenCL needs
+`#pragma OPENCL EXTENSION cl_khr_fp64 : enable`, and the constraint uses
+`as_ulong`/`as_double` rather than memcpy. Both the RTX 3050 and the RX 580
+support FP64.
+
+**Where to run it:** the three machines with discrete GPUs. Not the laptop;
+RESULTS 2.12 records that column as an Intel HD 630 rather than a discrete card.
+
 ### Measure before committing to ship
 
 Prototype, then measure three things, and only then decide:
