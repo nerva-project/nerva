@@ -27,15 +27,11 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-/* CNA v8 plus PLAN-v8 Phase 2's floating-point stage, software-AES arm.
+/* CNA v8 plus the floating-point stage, software-AES arm. Prototype.
  *
- * Same body as slow-hash-v8-impl.h under a different symbol, the pattern
- * contrib/hf14checks/v5pad.inc uses for resized builds. Two translation units
- * rather than a runtime flag so both algorithms exist in one binary and can be
- * measured against each other in the same process, on the same pad, with the
- * same inputs. Nothing here is wired into consensus: get_block_longhash still
- * routes HF14 to cn_slow_hash_v14, and PLAN-v8 says to prototype and measure
- * before deciding whether this ships at all.
+ * Same body as slow-hash-v8-impl.h under a different symbol, so both
+ * algorithms exist in one binary and can be measured against each other.
+ * NOT in consensus: get_block_longhash routes HF14 to cn_slow_hash_v14.
  */
 
 #include "hash-ops.h"

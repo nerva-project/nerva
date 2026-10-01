@@ -159,15 +159,11 @@ _Static_assert(CN_SCRATCHPAD_MEMORY != 1048576
                "at a 1 MB pad the derived stride must be exactly the shipped (% 125) + 4");
 
 /* CNA v8's salt_pad: the macro above with `a % 3` changed to `a & 3`, so the
- * selector reaches all four extra_hashes entries and Skein stops being dead
- * weight in the table.
+ * selector reaches all four extra_hashes entries instead of three.
  *
- * A copy rather than a parameterised salt_pad, because salt_pad is expanded by
- * cn_slow_hash_v10 and v11, which validate heights 341,000 to 4,320,000: a
- * reviewer should diff one token, not prove a refactor left them alone.
- *
- * `& 3` matches finalize_hash's selector and is exactly uniform, where `% 3`
- * leans slightly toward Blake. */
+ * A copy rather than a parameterised salt_pad: the original is expanded by v10
+ * and v11, which validate live heights, so this should be a one-token diff
+ * rather than a refactor to audit. */
 #define salt_pad_v8(salt, salt_hash, a, b, c, d)       \
     extra_hashes[a & 3](salt, 200, salt_hash);         \
     temp_1 = (uint16_t)(iters ^ (b ^ c));              \

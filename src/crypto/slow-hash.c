@@ -165,11 +165,8 @@ void cn_slow_hash_v11(cn_hash_context_t *ctx, const void *data, size_t length, c
                 cn_slow_hash_v11_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy));
 }
 
-/* CNA v8. Same pads and same signature as v11, since it is v11 with a
- * different hash selector inside salt_pad. Nothing routes here yet;
- * get_block_longhash gains a v14 branch in Phase 4 once the pad size is
- * settled. Until then this exists so the benchmark and the self-test can
- * reach it without any consensus path changing. */
+/* CNA v8, the HF14 hash. Same pads and signature as v11, since it is v11 with
+ * a different hash selector inside salt_pad. */
 void cn_slow_hash_v14(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
 {
     /* v8 runs at CN_SCRATCHPAD_MEMORY_V8, which fits the legacy pad. */
@@ -178,11 +175,8 @@ void cn_slow_hash_v14(cn_hash_context_t *ctx, const void *data, size_t length, c
                 cn_slow_hash_v14_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy));
 }
 
-/* CNA v8 plus PLAN-v8 Phase 2's floating-point stage. A prototype: nothing in
- * consensus routes here and get_block_longhash has no v15 branch. It exists so
- * v8bench can measure it against v14 in the same process, on the same pad, with
- * the same inputs, which is what decides whether Phase 2 ships at all. Same
- * pads and signature as v14, since it is v14 with a stage appended. */
+/* CNA v8 plus the floating-point stage. PROTOTYPE: no consensus path routes
+ * here. Exists so it can be measured against v14 in the same process. */
 void cn_slow_hash_v15(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
 {
     cn_pads_require(ctx, 1, 0);
@@ -508,29 +502,16 @@ void cn_hash_context_free(cn_hash_context_t *context)
     free(context);
 }
 
-/* The FP stage's build check, deliberately separate from cn_slow_hash_self_test.
+/* Separate from cn_slow_hash_self_test: that one gates startup and is gated on
+ * hardware AES, and neither fits a prototype that has nothing to do with AES.
+ * Catches a build whose floating point diverges, which would fork rather than
+ * fail to compile.
  *
- * That test gates daemon startup and is gated on hardware AES, and neither fits
- * here. v15 is a prototype that no consensus path calls, so a failure cannot
- * fork anything today and must not stop a node from running; and the FP stage
- * has nothing to do with AES, so it must be checked on software-AES machines
- * too.
+ * Returns 1 on success, inverting cn_slow_hash_v15_selftest, to match
+ * cn_slow_hash_self_test's convention.
  *
- * What it catches is the failure F30 demonstrated: a build whose floating point
- * diverges produces a node that disagrees with the network by forking, not by
- * failing to compile. The stage is immune to FMA contraction by construction
- * and the mode change sits behind a barrier, so this should never fire; it is
- * here because "should never" is not a property anyone can check at runtime.
- *
- * Returns 1 when this build computes the reference vector, 0 otherwise. Note
- * the inversion against cn_slow_hash_v15_selftest, which returns 0 on success;
- * this follows cn_slow_hash_self_test's convention instead, since that is what
- * its caller expects.
- *
- * WHEN v15 SHIPS: this must become fatal at the fork that routes to it, and the
- * v15 hardware-against-software comparison should move into
- * cn_slow_hash_self_test beside v14's. Both are one-line changes and both are
- * wrong to make before consensus actually calls v15. */
+ * WHEN v15 SHIPS: make this fatal and move the hw-vs-sw comparison into
+ * cn_slow_hash_self_test beside v14's. */
 int cn_fp_stage_self_test(void)
 {
     return cn_slow_hash_v15_selftest() == 0 ? 1 : 0;

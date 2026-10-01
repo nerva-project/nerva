@@ -51,8 +51,7 @@ set(crypto_sources
   slow-hash.c
   slow-hash-sw.c
   slow-hash-v8-sw.c
-  # PLAN-v8 Phase 2 prototype. Built so it keeps compiling as the tree moves,
-  # but nothing calls it: get_block_longhash still routes HF14 to v14.
+  # FP prototype. Built so it keeps compiling; no consensus path calls it.
   slow-hash-v8fp-sw.c
   tree-hash.c)
 
@@ -119,12 +118,10 @@ target_link_libraries(cncrypto
   PRIVATE
     ${EXTRA_LIBRARIES})
 
-# The Phase 2 FP stage is immune to contraction by construction: every FP write
-# passes through integer bit manipulation, so no a*b+c pattern exists for a
-# compiler to fuse. Verified by building it both ways and getting the same
-# vector. The flag is set anyway, because saying it costs nothing and a future
-# edit that breaks the structural property would otherwise fork the chain
-# silently. cn_slow_hash_v15_selftest() is the runtime backstop.
+# The FP stage is contraction-immune by construction (every write passes
+# through integer bit manipulation, so no a*b+c exists to fuse). The flag is
+# belt and braces against an edit that breaks that property.
+# cn_slow_hash_v15_selftest() is the runtime backstop.
 set_property(SOURCE slow-hash-v8fp-hw.c slow-hash-v8fp-sw.c APPEND_STRING
   PROPERTY COMPILE_FLAGS " -ffp-contract=off")
 

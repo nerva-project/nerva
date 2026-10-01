@@ -26,32 +26,22 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-/* CNA v8 hash bodies, in their own translation unit so they can run at their
- * own pad size: expand_key, finalize_hash and state_index bake
- * CN_SCRATCHPAD_MEMORY in at compile time. slow-hash-v8-{hw,sw}.c redefine it
- * to CN_SCRATCHPAD_MEMORY_V8 before pulling in slow-hash.h and then this file,
- * the same pattern contrib/hf14checks/v5pad.inc uses for resized builds.
+/* CNA v8 hash bodies. Included by slow-hash-v8-{hw,sw}.c, which set the pad
+ * size first.
  *
- * The two bodies differ at r2, &c here and &b in the software arm. That is
- * deliberate: the software path shipped disagreeing with the hardware one until
- * 4d87b5f fixed it in April 2019, and the fix was that register.
- * cn_slow_hash_self_test compares the pair. FINDINGS.md F3.
+ * THE TWO ARMS DIFFER AT r2: &c here, &b in the software arm. Deliberate, and
+ * load-bearing. cn_slow_hash_self_test compares the pair.
  */
 
-/* Which buffer v8 hashes in. At 1 MB the legacy allocation is large enough;
- * v5pad.inc overrides this so resized benchmark builds read the buffer the
- * harness hands them, and are measured on the same memory as the v5 rows. */
+/* Which buffer v8 hashes in. Overridable so resized benchmark builds can
+ * point it at their own allocation. */
 #if !defined(CN_V8_PAD)
 #define CN_V8_PAD(ctx) ((ctx)->scratchpad)
 #endif
 
 
-/* PLAN-v8 Phase 2's floating-point stage, compiled in only when CN_V8_FP is
- * defined, which only slow-hash-v8fp-{hw,sw}.c do. Without that define these
- * expand to nothing and cn_slow_hash_v14 is byte-identical to what it was
- * before Phase 2 existed, which cn_slow_hash_self_test checks rather than
- * assumes. The two builds run side by side so the spread can be measured on
- * the candidate rather than argued about. */
+/* Floating-point stage, compiled in only by slow-hash-v8fp-{hw,sw}.c.
+ * Without CN_V8_FP this expands to nothing and v8 is unchanged. */
 #if defined(CN_V8_FP)
 #include "slow-hash-fp.h"
 #define CN_FP_STAGE() cn_fp_stage(hp_state, a)
@@ -61,9 +51,8 @@
 
 #if !defined(CN_USE_SOFTWARE_AES)
 
-/* CNA v8, hardware-AES arm. cn_slow_hash_v11 with salt_pad_v8 in place of
- * salt_pad. Separate from v11 because v11 still validates major_version 11 and
- * 12 and its output must stay bit-identical forever. */
+/* Hardware-AES arm. cn_slow_hash_v11 with salt_pad_v8 in place of salt_pad.
+ * Kept separate because v11 still validates major_version 11 and 12. */
 void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
 {
     uint8_t * const hp_state = CN_V8_PAD(context);
@@ -112,8 +101,8 @@ void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t lengt
 
 #else /* CN_USE_SOFTWARE_AES */
 
-/* CNA v8, software-AES arm. Copied from cn_slow_hash_v11, not from the
- * hardware arm above: r2 aliases &b here and &c there, deliberately. */
+/* Software-AES arm. Copied from cn_slow_hash_v11, not from the arm above:
+ * r2 aliases &b here and &c there. */
 void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
 {
     uint8_t * const hp_state = CN_V8_PAD(context);

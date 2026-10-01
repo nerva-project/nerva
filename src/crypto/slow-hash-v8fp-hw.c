@@ -27,15 +27,11 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-/* CNA v8 plus PLAN-v8 Phase 2's floating-point stage, hardware-AES arm.
+/* CNA v8 plus the floating-point stage, hardware-AES arm. Prototype.
  *
- * Same body as slow-hash-v8-impl.h under a different symbol, the pattern
- * contrib/hf14checks/v5pad.inc uses for resized builds. Two translation units
- * rather than a runtime flag so both algorithms exist in one binary and can be
- * measured against each other in the same process, on the same pad, with the
- * same inputs. Nothing here is wired into consensus: get_block_longhash still
- * routes HF14 to cn_slow_hash_v14, and PLAN-v8 says to prototype and measure
- * before deciding whether this ships at all.
+ * Same body as slow-hash-v8-impl.h under a different symbol, so both
+ * algorithms exist in one binary and can be measured against each other.
+ * NOT in consensus: get_block_longhash routes HF14 to cn_slow_hash_v14.
  */
 
 #include "hash-ops.h"
@@ -49,15 +45,12 @@
 #include "slow-hash.h"
 #include "slow-hash-v8-impl.h"
 
-/* Exported so the FP determinism check is reachable rather than dead code.
- * Returns 0 when this build computes the reference vector. Nothing in consensus
- * calls v15 yet, so it is declared here rather than in hash-ops.h; it moves
- * there with the dispatcher entry if Phase 2 ships. */
+/* Returns 0 when this build computes the reference vector. Declared here
+ * rather than hash-ops.h because nothing in consensus calls v15. */
 int cn_slow_hash_v15_selftest(void);
 int cn_slow_hash_v15_selftest(void) { return cn_fp_selftest(); }
 
-/* Exposes the value-safety scan so the no-denormal, no-infinity, no-NaN claim
- * can be checked on the real round rather than argued from the source. */
+/* Value-safety scan over the real round body. */
 void cn_slow_hash_v15_value_scan(unsigned seeds, unsigned rounds, unsigned out[5]);
 void cn_slow_hash_v15_value_scan(unsigned seeds, unsigned rounds, unsigned out[5])
 {

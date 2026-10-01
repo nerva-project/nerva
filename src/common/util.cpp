@@ -828,12 +828,9 @@ std::string get_nix_version_display_string()
     }
 #endif // !defined NO_AES
 
-    /* PLAN-v8 Phase 2's floating-point stage. Checked on every build, including
-     * software-AES ones, because floating point has nothing to do with AES.
-     * Warn rather than refuse: nothing in consensus routes to v15 yet, so a
-     * divergent FP build cannot split the chain today. It could once v15 ships,
-     * which is why the check exists now rather than being added later and
-     * forgotten. */
+    /* Checked on every build, including software-AES ones: floating point has
+     * nothing to do with AES. Warns rather than refuses because no consensus
+     * path routes to v15, so a divergent build cannot fork anything today. */
     if (!crypto::cn_fp_stage_self_test())
     {
       MGUSER_YELLOW(

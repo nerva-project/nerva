@@ -177,24 +177,18 @@ int cn_slow_hash_self_test(void);
 void cn_slow_hash(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters);
 void cn_slow_hash_v11(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 /* v14 (CNA v8): v11 with salt_pad's extra-hash selector widened from three
- * entries to four, so Skein joins Blake, Groestl and JH. Same pad and same
- * parameters as v11. Not reachable from consensus yet.
+ * entries to four, so Skein joins Blake, Groestl and JH. Same pad and
+ * parameters as v11.
  *
- * On the numbering: these functions are named for the hard fork that
- * introduces them, not for the CryptoNight-Adaptive generation, which is why
- * there is no v12 (HF12 changed other rules but not the hash) and why CNA v8
- * is called v14. The name was previously held by CNA v7, a different
- * algorithm written for this same fork. **CNA v7 was never released**: it did
- * not perform well enough to ship, HF14 never activated while it existed, so
- * no block was ever validated with it, and it was removed rather than left in
- * the tree. Reusing the name is therefore safe; no chain history refers to
- * it. */
+ * Named for the hard fork, not the CNA generation, which is why there is no
+ * v12 and why CNA v8 is called v14. The name previously held CNA v7, which was
+ * removed before release and never validated a block, so reuse is safe. */
 void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 /* PLAN-v8 Phase 2 prototype; no consensus path calls this. */
 void cn_slow_hash_v15(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 int cn_slow_hash_v15_selftest(void);
-/* 1 = this build computes the FP reference vector, 0 = it does not. Note the
- * inversion against the line above. */
+/* 1 = this build computes the FP reference vector. Note the inversion against
+ * cn_slow_hash_v15_selftest above, which returns 0 on success. */
 int cn_fp_stage_self_test(void);
 void cn_slow_hash_v13(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
 void cn_slow_hash_v10(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww);

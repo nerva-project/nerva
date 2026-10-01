@@ -29,15 +29,9 @@
 
 /* CNA v8, software-AES arm.
  *
- * Its own translation unit purely so it can run at its own pad size:
- * expand_key, finalize_hash and state_index bake CN_SCRATCHPAD_MEMORY in at
- * compile time, so v8 cannot use a different pad inside the TU that builds
- * v10, v11 and v13. Redefining the constant before slow-hash.h is the same
- * pattern contrib/hf14checks/v5pad.inc uses for resized benchmark builds.
- *
- * The redefine has to happen after hash-ops.h (which defines both constants)
- * and before slow-hash.h (whose macros read it). Everything v8 needs then
- * resolves at 4 MB, including the derived salt stride.
+ * Own translation unit so it can set its own pad size: expand_key,
+ * finalize_hash and state_index bake CN_SCRATCHPAD_MEMORY in at compile time.
+ * The redefine must sit after hash-ops.h and before slow-hash.h.
  */
 
 #include "hash-ops.h"
