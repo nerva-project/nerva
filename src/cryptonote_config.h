@@ -289,7 +289,7 @@ namespace config
             {11, 590},
             {12, 700},
             {13, 800},
-            {14, 1000}  // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v7
+            {14, 1000}  // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v8
         };
     }
 
@@ -314,7 +314,7 @@ namespace config
             {11, 590},
             {12, 700},
             {13, 800},
-            {14, 1000}  // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v7
+            {14, 1000}  // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v8
         };
     }
 }
