@@ -1,8 +1,24 @@
 # CNA v8: plan
 
 A v5-derived PoW for Nerva, aiming to beat the current v6 on all three axes at
-once. Every target below comes from measurements in `RESULTS.md`; read that
-first, especially section 2 (the mistakes) and section 7 (known gaps).
+once.
+
+**Companion documents, all in this directory:**
+
+- [FINDINGS.md](FINDINGS.md) is the evidence. Numbered findings F1 to F41, each
+  stating how it was checked and, where it was later shown wrong, what replaced
+  it. Nothing enters it from a comment or a commit message alone.
+- [RESULTS.md](RESULTS.md) is the v5 / v6 / v7 comparison that set the targets
+  below. Section 2 lists the mistakes made along the way and section 7 the known
+  gaps.
+- [BUILD.txt](BUILD.txt) is how to build and run the benchmark harness.
+
+Every target below comes from measurements in [RESULTS.md](RESULTS.md); read
+that first.
+
+**Where to start if you only read one thing:** F41 for what the floating-point
+stage costs a real miner, F37 for whether it helps against GPUs, and F38 for the
+reason those two answers came out the way they did.
 
 ## Status
 
@@ -57,7 +73,7 @@ load-bearing rather than optional if the target is firm.
 The cost-predictability gate needs `screen.c` adapted, and since v8 has no VM
 the estimator has to be redesigned around v8's cheapest predictor; that choice
 is the whole test and deserves review rather than being picked by whoever writes
-the patch. Note v8 inherits v5's protection here (FINDINGS.md F5): the per-nonce
+the patch. Note v8 inherits v5's protection here ([FINDINGS.md](FINDINGS.md) F5): the per-nonce
 parameters come from an HC128 state that the chain fill re-seeds from its own
 output, so cost cannot be learned without doing the fill.
 
@@ -84,7 +100,7 @@ larger pad narrows cross-CPU spread. Neither survived:
   4x with the launch cap, and the large-pad rows ran starved, so they are floors
   compared against an honest small-pad number.
 
-See FINDINGS.md F24, F27, F28. The one open question is GPU behaviour at 1 MB at
+See [FINDINGS.md](FINDINGS.md) F24, F27, F28. The one open question is GPU behaviour at 1 MB at
 full occupancy, which no measurement has covered and which is being referred to
 someone with the GPU depth to answer it.
 
@@ -117,7 +133,7 @@ This has already been close. HF14 appended v7's `seg_hops` generation to
 today. It is correct only because those draws land after the 512-instruction
 loop, leaving v6's instructions untouched. Note also that `git diff` reported
 it as pure insertion, 255 added and 0 removed, which reads as safe and is not:
-an insertion *inside* a live function changes that function. See FINDINGS.md
+an insertion *inside* a live function changes that function. See [FINDINGS.md](FINDINGS.md)
 F9.
 
 ## The second rule: a nonce's cost must not be knowable in advance
@@ -126,7 +142,7 @@ A PoW is easiest to reason about when every nonce costs the same. Where cost
 varies, it should at least not be estimable more cheaply than the nonce can be
 hashed, or the work a hash represents stops being uniform.
 
-v6 does not hold this. FINDINGS.md F6 measures an estimate built from the
+v6 does not hold this. [FINDINGS.md](FINDINGS.md) F6 measures an estimate built from the
 program alone, no registers and no memory, that tracks real cost at r = 0.88
 to 0.95. Five design rules follow, and they bind every phase below.
 
@@ -150,7 +166,7 @@ to 0.95. Five design rules follow, and they bind every phase below.
    bytes it has already written, so the state that yields `xx`, `yy`,
    `init_size_blk` and `iters_divisor` depends on the salt's content. The
    keystream cannot be fast-forwarded; the salt has to be produced, which needs
-   the block cache, which needs a full node (FINDINGS.md F5). Keep that
+   the block cache, which needs a full node ([FINDINGS.md](FINDINGS.md) F5). Keep that
    feedback. Contrast v6, whose seed reads only `salt[0..32)`, available after
    about one of 4096 fill iterations (F8).
 
@@ -174,7 +190,7 @@ reintroduce the problem unless the operands come from pad loads.
 against a prediction of -0.84% made from the hash costs alone before any run.
 Skein is the cheapest of the four on 200 bytes (290 ns against Groestl's 1758),
 so widening the selector lowers the mean cost per `salt_pad` call. A fourth
-structurally distinct datapath, for nothing. FINDINGS.md F18.
+structurally distinct datapath, for nothing. [FINDINGS.md](FINDINGS.md) F18.
 
 Two things it took to get a trustworthy number, both recorded in F19: the bench
 sampled 60 nonces against a 4.7x work spread with a fixed RNG seed, so a pure
@@ -239,7 +255,7 @@ to `&b` in April 2019 under the message "Fix for non-AES pathway not syncing",
 after it had shipped disagreeing with the HW path for about a month. Copy each
 arm from its own arm and do not reconcile them. Reconciling them forks HW from
 SW, and only on machines without AES-NI, which is where it will be found late.
-See FINDINGS.md F3.
+See [FINDINGS.md](FINDINGS.md) F3.
 
 **No `get_block_longhash_v14` and no dispatcher change in Phase 1.** This
 phase is measurement. The consensus diff stays at zero and the whole phase
@@ -644,26 +660,43 @@ Against the three things this algorithm is for:
 
 | | effect of the FP stage | evidence |
 |---|---|---|
-| GPU resistance | slightly worse, 1 to 4% | measured, F37 |
+| GPU resistance | slightly worse, 1 to 4% | measured on 3 cards, F37 |
 | ASIC resistance | slightly worse, Amdahl bound 1.6x to 1.8x | argued, F38 |
-| CPU fairness | better: 2.39x to 2.20x on the hash, 2.17x to 2.10x per nonce | measured, F34 |
+| CPU fairness | better by **2.7%** | measured on the daemon, F41 |
 | Sync speed | +0.12 ms per block, about 6 s for a month offline | measured, F39 |
+| **Cost to hashrate** | **about 6%, plus or minus 2** | measured on the daemon, F41 |
 
-So the stage helps one of the three, and the 2.2x figure was a target to aim at
-rather than a requirement. Note the fairness number depends on the denominator:
-measured against `cn_slow_hash` alone it is an 8% narrowing, measured against a
-whole nonce, which is what a miner pays, it is 3%.
+So the stage helps one of the three things the algorithm is for, and costs about
+6% of hashrate to do it. The 2.2x figure was a target to aim at rather than a
+requirement.
+
+**The fairness number depends entirely on the denominator, and this is the most
+important thing to understand about it.** Measured against `cn_slow_hash` alone
+it is an 8% narrowing, 2.388x to 2.201x, which is the right basis for
+verification cost and is what F34 reports. But a miner's nonce is the chain fill
+plus the hash, and the fill dilutes the stage, so what a miner experiences is
+**2.7%**, measured on three machines through the shipped daemon in F41. The
+headline number is three times the real one.
 
 The cost side is a new floating-point code path in consensus on a fork with no
 successor planned for a long time. The determinism work is thorough: seven
 targets, four instruction sets, both byte orders, structural FMA immunity and a
 startup self-test. The risk is not zero.
 
-**Recommendation: ship v14, keep v15 on the branch.** The measurement is what has
-value here. It retired the GPU justification with numbers rather than argument,
-and that result stands whichever way the decision goes. If fairness later matters
-more than it looks now, the stage is built and tested and the work is not lost.
-The decision is the maintainer's, not a measurement.
+**Recommendation: ship v14, keep v15 on the branch.** The trade is about 6% of
+every miner's hashrate for a 2.7% narrowing of the spread, with GPU and ASIC
+resistance each moving slightly the wrong way, bought at the price of the first
+floating-point code in this chain's consensus on a fork with no successor planned
+for a long time.
+
+The measurement is what has value here regardless. It retired the GPU
+justification with numbers rather than argument, and F38 generalises why: work
+added to the hash core is work a specialised attacker can specialise, while the
+chain fill is the part they cannot. That result stands whichever way the decision
+goes. If fairness later matters more than it looks now, the stage is built,
+tested on seven targets and ready.
+
+**No decision has been made. It is the maintainer's, not a measurement.**
 
 ### The three gates this phase set itself  [all answered]
 
@@ -684,7 +717,7 @@ GPU and ASIC resistance both move slightly the wrong way (F37, F38).
 
 ## Phase 3: pad and parameter tuning  [DONE]
 
-**Result: 1 MB.** See "Starting point" above and FINDINGS.md F24, F27, F28.
+**Result: 1 MB.** See "Starting point" above and [FINDINGS.md](FINDINGS.md) F24, F27, F28.
 
 The salt stride and pad-init step now derive from `CN_SCRATCHPAD_MEMORY` rather
 than being hardcoded, so a future pad change cannot silently read past the salt.
@@ -699,7 +732,7 @@ What was done, and what it settled.
 
 - **The pad was swept at 1, 2, 4 and 8 MB on all four machines, single- and
   multi-threaded.** The single-thread sweep separates only 8 MB; the
-  multi-thread one is what decided it. FINDINGS.md F24, F27.
+  multi-thread one is what decided it. [FINDINGS.md](FINDINGS.md) F24, F27.
 
 - **HF13's reasoning was tested rather than talked past.** HF13 went 4 MB to
   8 MB arguing that 8 MB per thread overflows L3-per-core on nearly every
@@ -717,7 +750,7 @@ What was done, and what it settled.
   `3145728/12` and `1048576/4` are both exactly that. The macro names carry the
   same invariant. So both now derive from the pad, and the AND-wrap stays where
   it belongs, in the benchmark: at 4 MB it makes the salt repeat four times per
-  sweep, a different algorithm rather than a resized one. FINDINGS.md F4, F22.
+  sweep, a different algorithm rather than a resized one. [FINDINGS.md](FINDINGS.md) F4, F22.
 
 - **`state_index` masks with `(pad / 16 - 1)`**, which addresses the whole pad
   only when `pad / 16` is a power of two. Fine at 1 MB; relevant again only if a
@@ -739,7 +772,7 @@ independent of the v6 algorithm and had to be kept: it biases ~95% of block read
 into the last 100k blocks so per-nonce cost stops growing with chain length,
 while the other ~5% still draw from the whole history so pool resistance is
 unchanged. The v6 fill re-seeds its HC128 state from its own output exactly as
-v5's does, so the property in FINDINGS.md F5 carries over.
+v5's does, so the property in [FINDINGS.md](FINDINGS.md) F5 carries over.
 
 The dispatcher routes `case 13:` to v6 and `default:` to v8. No hard-fork table
 entry was added: v8 inherits HF14.
@@ -835,7 +868,7 @@ a wrong `random_values` bound would split them.
 1. **GPU behaviour at 1 MB at full occupancy is unmeasured**, and it is the only
    evidence that would justify moving off 1 MB. Every GPU figure swings 2.8x
    with nonce count and 4x with the launch cap, and the large-pad rows ran
-   starved. Being referred outward. FINDINGS.md F28 records the route to
+   starved. Being referred outward. [FINDINGS.md](FINDINGS.md) F28 records the route to
    measuring it in-house: chunk the **work** rather than the nonces, which
    `main.cpp`'s objection does not rule out.
 2. **The cost-predictability gate has not been run against v8.** v6 measures
@@ -863,7 +896,7 @@ a wrong `random_values` bound would split them.
   linear in pad size by construction. It was used as a tiebreaker twice here and
   both decisions were later reversed by measurement.
 - Do not quote the GPU table as a pad comparison. Its large-pad rows ran starved
-  against a launch cap and are floors, not measurements (FINDINGS.md F28).
+  against a launch cap and are floors, not measurements ([FINDINGS.md](FINDINGS.md) F28).
 - Do not ship any phase whose verification cost is not measured on the weakest
   machine in the set, not the fastest.
 - Do not add a hard-fork version for v8. It inherits HF14, which has never
@@ -874,8 +907,8 @@ a wrong `random_values` bound would split them.
 - Do not reconcile the HW and SW `r2` difference. It is the fix, not the bug.
 - Do not trust a comment in `src/crypto` or a figure in a commit message
   without checking the code. Several comments here describe behaviour the
-  adjacent code does not have, and FINDINGS.md exists because of that.
+  adjacent code does not have, and [FINDINGS.md](FINDINGS.md) exists because of that.
 - Do not change a pad-aware or buffer-aware macro without updating its mirror in
   `contrib/hf14checks/v5pad.inc`, or the benchmark and the daemon diverge
-  silently. That happened four times in one session (FINDINGS.md F26); prefer
+  silently. That happened four times in one session ([FINDINGS.md](FINDINGS.md) F26); prefer
   making the shipped macro general enough that the override can be deleted.

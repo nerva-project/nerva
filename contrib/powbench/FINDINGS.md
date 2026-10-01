@@ -139,7 +139,7 @@ first run and refused to report.
 F6 counts operations. `contrib/powbench/screen_time.c` measures time, on a
 7950X with AES-NI and huge pages confirmed at runtime:
 
-    full cn_slow_hash_v13 : 7.70 ms   (RESULTS.md section 3 says 6.95 for the
+    full cn_slow_hash_v13 : 7.70 ms   ([RESULTS.md](RESULTS.md) section 3 says 6.95 for the
                                        same function, so this agrees)
     its 2048 VM passes    : 5.19 ms   (67.4% of the hash)
     everything else       : 2.51 ms   (32.6%, does not vary with the program)
@@ -158,7 +158,7 @@ generation plus the walk, takes 10.4 us. That gives:
 
 Two runs of 3000 nonces agree within 0.01x.
 
-**`screen_time.c` omits the chain fill, which is the same mistake RESULTS.md
+**`screen_time.c` omits the chain fill, which is the same mistake [RESULTS.md](RESULTS.md)
 section 2.9 records the powbench port making.** The real per-nonce path also
 runs `get_blob_hash`, `HC128_Init` and `get_cna_v6_data`, about 2.2 ms for v6.
 Adding it to both sides, with a rejected nonce owing only the ~1/4096 of the
@@ -544,7 +544,7 @@ sets the spread, and a ranking that flips when one machine is re-run is not a
 ranking. What this table supports is narrower: **8 MB is disqualified; 1, 2 and
 4 MB cannot be separated single-threaded.** The decision comes from F27.
 
-*Caveats:* this harness excludes the chain fill, which RESULTS.md charges to
+*Caveats:* this harness excludes the chain fill, which [RESULTS.md](RESULTS.md) charges to
 the CPU and which is machine-dependent, so the real spread may differ. And no
 pad reaches 2.2x, so if that target is firm then pad tuning alone cannot get
 there and Phase 2 stops being optional.
@@ -706,7 +706,7 @@ chain's size an ASIC is not a plausible economic threat.
 
 **The GPU comparison cannot support a pad comparison.** The table reads 0.17x
 worst-case at 1 MB against 0.06x at 4 MB, which looks like a 3x argument for the
-larger pad. RESULTS.md's own caveats undo it:
+larger pad. [RESULTS.md](RESULTS.md)'s own caveats undo it:
 
 - the ratio swings **2.8x with nonce count** (v6 at 1 MB: 0.17x at 1984 nonces,
   0.48x at 8128)
@@ -1272,7 +1272,7 @@ which is the `rne` row at 0.2%.
 So 0.4% is an upper bound and the verdict can only get worse for the stage.
 
 *What the model does not support* is the absolute GPU:CPU figure, which carries
-every caveat in F28 and section 7 of RESULTS.md. The ratio change is the claim,
+every caveat in F28 and section 7 of [RESULTS.md](RESULTS.md). The ratio change is the claim,
 and it holds because numerator and denominator differ by the stage and nothing
 else. Note also that the absolute figure is mostly a statement about the CPU it
 is paired with: the three GPUs are within 7% of each other while their CPUs
@@ -1530,6 +1530,115 @@ the initial draft README at commit `07a8318`; `monero-project/monero`
 CryptoNight v2 square root; docs.getmonero.org for the CryptoNight operation
 list.
 
+## Real daemon
+
+### F41. Measured on the shipped miner: the stage costs about 6% of hashrate and buys 2.7% of fairness
+
+Everything before this entry measured the FP stage through a harness. This
+measures it through `nervad` itself, mining on an isolated two-node testnet at
+fork version 14, with `cn_slow_hash_v15` reached by a local toggle that was
+never committed. Three machines, both rounds, `--offline
+--fixed-difficulty 100000000` so no block is ever found and the height never
+moves.
+
+#### What the stage costs
+
+| machine | 1 thread | peak threads |
+|---|---|---|
+| 7950X, 16C/32T | 7.6% | 5.1% at 30T |
+| 5600X, 6C/12T | 8.0% | 3.7% at 11T |
+| i7-7700HQ, 4C/8T | 5.0% | 2.8% at 7T |
+
+**Every machine pays less under full thread load than on one thread.** That is
+F35's mechanism, measured through a completely different instrument: the hash
+saturates memory bandwidth at high thread counts while the stage competes for
+none of it. The laptop pays least in both columns, matching F34, where the
+7700HQ's stage is 9.1% of its hash against the 9700X's 18.2%.
+
+#### Cross-CPU fairness, which is the only argument for the stage
+
+| basis | v14 | v15 | narrowing |
+|---|---|---|---|
+| single thread, three x86 machines | 1.934x | 1.880x | **2.7%** |
+| peak threads | 8.782x | 8.572x | 2.4% |
+
+F34 reports 2.388x to 2.201x, an 8% narrowing. That is not wrong: it is measured
+against `cn_slow_hash` alone, which is the right basis for verification cost. A
+miner's nonce is the chain fill plus the hash, and the fill dilutes the stage, so
+**what a miner experiences is about a third of the headline.** Predicted 3.2%
+from that reasoning before the test; measured 2.7%.
+
+The peak-thread spread of 8.8x is not a fairness figure. It compares a 16-core
+desktop against a 4-core laptop and is dominated by core count.
+
+#### The chain-length series, and why most of it is not usable
+
+The testnet was grown from 724 blocks to 1.96M to see whether chain length
+changes the answer, since the chain fill reads a 56-byte cache entry per pick and
+that cache is 0.04 MB at 724 blocks and 236 MB at mainnet's height.
+
+| height | cache | order | measured | status |
+|---|---|---|---|---|
+| 724 | 0.04 MB | v14 first | 7.6% | sound, nothing can warm at 40 KB |
+| 103,553 | 5.5 MB | v14 first | 7.9% | low risk |
+| 501,472 | 26.8 MB | v14 first | 6.5% | moderate risk |
+| 921,051 | 49.2 MB | v14 first | 4.1% | **understated** |
+| 1,850,993 | 103.6 MB | v14 first | v15 came out *faster* | **rejected** |
+| **1,961,955** | 109.8 MB | **v15, v14, v15** | **6.3%** | **usable** |
+
+**The 1.85M attempt reported v15 as 11.7 to 13.6% faster than v14, which is
+impossible**: v15 is v14 plus 9,600 FP rounds on the same code path. Binaries
+were verified, not swapped. Running the same binary twice gave 503 and 589 H/s,
+**17.1% apart**, against an effect of about 4%. The machine was settling after a
+night of mining: a 103 MB block cache to fault in, LMDB pages to pull back, and
+the previous daemon's working set being reclaimed.
+
+**Every earlier pair ran v14 first and v15 second**, so a warm-up bias makes v14
+look slow and v15 look fast and therefore understates the stage, and the bias
+grows with cache size. The reported decline from 7.6% to 4.1% has exactly that
+shape.
+
+Re-measured at 1.96M with the order controlled, **v15 to v14 to v15**: 564, 596,
+549 H/s at one thread. v14 is above *both* v15 runs at every thread count, and
+the sequence is not monotonic in time, so there is no systematic drift. FP cost
+6.63% at 1 thread, 8.18% at 8, 4.06% at 16.
+
+**Centre about 6%, and it cannot be pinned tighter than plus or minus 2 points.**
+The two v15 runs differ by 2.7 to 4.6%, which is the real run-to-run noise and is
+the same order as the effect.
+
+#### Three claims withdrawn
+
+1. **"The cost converges on F37's mainnet estimate of 4.4% as the chain grows."**
+   Withdrawn. With the order controlled at twice the height, it returns to about
+   6%. Some genuine decline may remain, 7.6% at 724 against 6.3% at 1.96M, but it
+   is within the noise.
+2. **"The stage costs a constant 0.127 ms per nonce."** True where it was
+   checked, and the 8-thread figures at 724 and 103k agree to 0.3%, but the
+   apparent fall to 0.068 ms at 921k was the same artefact seen from the other
+   side, not a real effect.
+3. **The clock-boost hypothesis offered for that fall.** Withdrawn, and the
+   frequency measurement proposed to test it is not needed.
+
+#### Unresolved
+
+F37 models a mainnet-shaped nonce and gets 4.4%. This measures a real nonce on a
+2M-block testnet and gets about 6%. They differ by more than either error bar,
+and a 2M-block chain is still not a 4.4M-block one. Which is right for mainnet is
+open. The daemon figure is the more direct measurement; the model is the one
+shaped like mainnet.
+
+#### Method notes worth keeping
+
+The GPU harness needed interleaving and order reversal for exactly this reason,
+and the same discipline is needed here. For any further run: start and stop a
+throwaway daemon first so the LMDB pages are resident, then order **A, B, A**,
+and treat the middle reading as usable only if the two outer ones agree.
+
+A `--fixed-difficulty` high enough that no block is ever found is what makes the
+reading clean; at difficulty 1 the miner finds a block per hash and the figure
+becomes block-template rebuild time.
+
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell
@@ -1559,7 +1668,7 @@ body and reports a v6 hash at about **38 ms instead of about 7.7 ms on a
 
 This happened here, and the first throughput answer it produced (VM = 14.5% of
 the hash, screening worth 1.1x) was wrong in a way that looked plausible. What
-caught it was the 10.11 ms baseline in RESULTS.md: a number that far off the
+caught it was the 10.11 ms baseline in [RESULTS.md](RESULTS.md): a number that far off the
 record is a reason to stop, not to publish.
 
 `screen_time.c` now prints the AES path and the page tier in its banner. Keep
@@ -1578,7 +1687,7 @@ Working build line:
         src/crypto/skein.c src/crypto/hash-extra-*.c \
         contrib/epee/src/memwipe.c -o screen_time -lm
 
-### F17. RESULTS.md carries two different v6 numbers, measured differently
+### F17. [RESULTS.md](RESULTS.md) carries two different v6 numbers, measured differently
 
 Section 3 ("CPU results, real hash functions") reports v6 at 8 MB as 6.95 ms on
 the 7950X. Section 4 ("Four machines, faithful port") reports v6 8MB as 10.11
@@ -1616,17 +1725,22 @@ control row (`v5ref` vs `v5ctl` at ~1.00x) exists to catch it, and if it is not
    except that the 3% lesson is the one worth carrying into Phase 2: a
    construction can look strong while almost none of its randomness is
    load-bearing.
-4. **No GPU number is trustworthy at full occupancy.** Carried from
+4. **How far does the FP cost really fall with chain length?** F41 measured
+   about 6% at 1.96M blocks with the order controlled, where F37's model of a
+   mainnet-shaped nonce says 4.4%. They differ by more than either error bar and
+   a 2M-block chain is not a 4.4M-block one. Resolving it needs either a much
+   longer testnet or the daemon-side split timing in F38's open question.
+5. **No GPU number is trustworthy at full occupancy.** Carried from
    `RESULTS.md`: every large-pad row on every machine hit the launch cap
    because a display-attached GPU trips TDR. Still true of the large-pad
    rows, which are now off by default. It does not affect F37, whose rows
    are all 1 MB, all ran their full nonce count, and are compared against a
    measured cross-row floor rather than against each other in isolation.
-5. **Why the RX 580 dispatches without writing output.** F37. Not pursued,
+6. **Why the RX 580 dispatches without writing output.** F37. Not pursued,
    because it cannot change that conclusion, but it is unexplained and the
    next person to meet it should know it is a known device failure and not
    a property of the kernel.
-6. **The real cost of `get_cna_v6_data` against LMDB is unmeasured.** F38
+7. **The real cost of `get_cna_v6_data` against LMDB is unmeasured.** F38
    puts the ASIC bound at 1.6x using a modelled fill; the real one should
    be more expensive and the bound stronger. Timing
    `get_block_longhash_v14`'s two halves in the daemon would settle it and

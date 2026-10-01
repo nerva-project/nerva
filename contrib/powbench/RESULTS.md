@@ -277,7 +277,7 @@ gets competitive AES.
 
 **This document covers v5, v6 and v7 only.** The v8 kernels, the Phase 2
 floating-point stage and the GPU measurement that settled it are in
-FINDINGS.md F37 to F39, not here. `contrib/powbench/BUILD.txt` describes how to
+[FINDINGS.md](FINDINGS.md) F37 to F39, not here. `contrib/powbench/BUILD.txt` describes how to
 run the current harness, whose default variant set is the four 1 MB rows rather
 than the pad sweep below; pass `all` to reproduce this document.
 
