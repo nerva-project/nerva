@@ -1217,7 +1217,7 @@ thing that tests what this entry is about.
 | 7950X, 32T | RTX 3050 | 20 | 3264 | 511.1 | 1.004x | 1.043x | 0.0433 → 0.0450 | worse 4% |
 | 5600X, 12T | Vega FE | 64 | 3264 | 545.8 | 1.006x | 1.038x | 0.1609 → 0.1660 | worse 3% |
 | i7-7700HQ, 8T | GTX 1050 Ti | 6 | 1600 | 222.5 | 1.004x | 1.015x | 0.2078 → 0.2101 | worse 1% |
-| 9700X, 16T | RX 580 | 36 | — | — | — | 1.048x | — | device failed, see below |
+| 9700X, 16T | RX 580 | 36 | n/a | n/a | n/a | 1.048x | n/a | device failed, see below |
 
 **The stage costs a GPU about 0.4% of a nonce and a CPU about 4.4%.** A cost
 falling almost entirely on one side moves the ratio toward the other, so GPU
@@ -1639,6 +1639,207 @@ A `--fixed-difficulty` high enough that no block is ever found is what makes the
 reading clean; at difficulty 1 the miner finds a block per hash and the figure
 becomes block-template rebuild time.
 
+## Screening and offload
+
+### F42. `init_size_blk` is a third screenable axis, and v8's cost spread is 3.7x in time, not 1.62x
+
+A review of PR #162 modelled v8's per-nonce cost as `P + s*N` with
+`N = (xx-1)*yy`, fitted `P = 0.457 ms` and `s = 0.0042 ms` over the `(xx, yy)`
+grid, and concluded that the screenable share of a nonce is 9.8%, that the
+ceiling for a screener with a free fill is 1.29x, and that screening would pay
+only below a 0.15 ms fill.
+
+The correction in that review is right and is most of the answer: the 4.67x
+spread in `salt_pad_v8` **calls** is not a 4.67x spread in time, because two
+full AES passes over the pad and the 262144-byte randomize sweep are paid by
+every nonce. F38 makes the same point from the other direction.
+
+But the fill draws **three** parameters, not two.
+[`cryptonote_tx_utils.cpp:746`](../../src/cryptonote_core/cryptonote_tx_utils.cpp#L746)
+draws `init_size_blk` from the same post-fill HC-128 state as `xx` and `yy`, two
+lines apart, so it is screenable on identical terms. It sits inside `P`.
+
+#### It changes no operation count, and changes the time by up to 2.2x
+
+`aes_pseudo_round` runs `nblocks` blocks of 10 rounds, and `init_hash` calls it
+`CN_SCRATCHPAD_MEMORY / (nblocks * 16)` times, so both pad passes perform
+`pad/16` AES blocks at any width. `init_size_blk` changes only the width of the
+dependency chain and the granularity of the `memcpy` either side of it.
+
+Median ms per hash, 7950X, one thread, shipped `cn_slow_hash_v14`:
+
+| N = (xx-1)*yy | blk=2 | blk=4 | blk=8 | blk2/blk8 |
+|---|---|---|---|---|
+| 12 (4,4) | 0.782 | 0.487 | 0.349 | 2.24x |
+| 18 (4,6) | 0.859 | 0.552 | 0.391 | 2.20x |
+| 20 (6,4) | 0.906 | 0.595 | 0.429 | 2.11x |
+| 24 (4,8) | 0.932 | 0.646 | 0.474 | 1.97x |
+| 28 (8,4) | 0.964 | 0.671 | 0.532 | 1.81x |
+| 30 (6,6) | 1.015 | 0.700 | 0.549 | 1.85x |
+| 40 (6,8) | 1.077 | 0.800 | 0.678 | 1.59x |
+| 42 (8,6) | 1.118 | 0.830 | 0.685 | 1.63x |
+| 56 (8,8) | 1.286 | 0.993 | 0.835 | 1.54x |
+
+This is F38's lesson inverted. There, work that looked large in operations was
+small in time. Here, an axis that is **identical** in operations is worth up to
+2.24x in time. A model fitted on operation counts cannot see it, and a model
+fitted on time but binned only on `N` averages it into the floor, which is
+presumably what produced the 1.62x and the stable `P`.
+
+#### The grid, and what a screen is worth on it
+
+All 75 reachable cells are equiprobable: `xx` and `yy` uniform on [4,8],
+`init_size_blk` uniform on {2,4,8}. `iters` is at most 63 AES rounds against
+65536 blocks of pad fill and is ignored here.
+
+|  | review | measured |
+|---|---|---|
+| spread in time | 1.62x | **3.6 to 3.7x** |
+| screenable share of a nonce | 9.8% | **24 to 27%** |
+| ceiling with a free fill | 1.29x | **2.12 to 2.17x** |
+| break-even fill cost | 0.15 ms | **0.534 ms** |
+
+Break-even is better stated as a ratio, because it is scale free:
+**screening pays below `F / E[H]` = 0.71.**
+
+#### It still does not pay, with less margin than claimed
+
+A screener pays the fill on every candidate and the hash only on accepted ones,
+`F/p + E[H | accepted]`, against an honest `F + E[H]`.
+
+| fill | `F / E[H]` | best screen |
+|---|---|---|
+| 0.927 ms, implied by F41's daemon figure | 1.23 | **1.000x** |
+| 0.721 ms, the review's synthetic probe | 0.96 | **1.000x** |
+| 0.343 ms, the same fill 2.7x faster (F43) | 0.46 | 1.006x |
+
+The verdict is unchanged. The margin is not: against break-even it is
+**1.35x to 1.74x**, not the 4.8x the review reported. The range is the
+disagreement between the two fill measurements below.
+
+The consequence for review priorities: the prize for breaking the draw ordering
+at
+[`cryptonote_tx_utils.cpp:741-751`](../../src/cryptonote_core/cryptonote_tx_utils.cpp#L741)
+is **about 2.1x**, not 1.29x. That ordering is the entire defence and it is currently
+load-bearing commentary. It should be a unit test: same blob hash, two different
+salt contents, assert `xx`, `yy`, `init_size_blk` and `iters_divisor` all differ.
+A hoist for "clarity", or someone caching `rng_state` across nonces as a mining
+optimization, would not fork the chain. It would quietly make v8 screenable.
+
+#### The fill cost, which partly answers open question 7
+
+F41 measured 596 H/s at one thread for v14 on a 1.96M-block testnet, so
+1.678 ms per nonce. The grid mean hash here is 0.751 ms on the same machine,
+implying a **0.927 ms fill, 55% of a nonce**. The review's synthetic probe got
+0.721 of 1.305, also 55%. The absolutes disagree by 29% and the ratio agrees to
+a tenth of a point, which is the quantity the economics use.
+
+Treat 0.927 as an **upper bound**: the daemon's hash runs under block-cache
+pressure that this probe does not have, so some of that 0.927 is really hash.
+A smaller fill means a smaller margin, which is why the range above is quoted
+from both ends rather than from the more favourable one. Timing the two halves
+inside the daemon would still settle it.
+
+#### Method
+
+75 cells, 51 rounds, one timed call per cell per round, grid order reversed on
+alternate rounds, median per cell. Three runs, the third from a separately
+compiled binary: means 0.752, 0.751 and 0.757 ms, break-evens 0.5340, 0.5344
+and 0.5337, spreads 3.68x, 3.72x and 3.61x. Under 1% apart on everything the
+conclusion uses. Mining and browsers stopped for all three, per F35 and F41's
+method notes. The probe times the shipped
+`cn_slow_hash_v14` and reads the joint distribution off the cells, so no model
+is fitted and no third axis can hide in a residual.
+
+### F43. The published v6 miner breaks v6 by screening; v8 removes that, and what is left is fill offload
+
+A document circulated by its author describes a v6 miner at 8.5x to 13.4x over
+the stock miner, with a GPU hybrid adding a further 74 to 80%. None of its
+numbers are reproduced here. Its **structural** claims were checked against the
+code, and those are what is used below.
+
+#### The break, and why it is a v6 property
+
+> The program seed is `blob_hash XOR salt[0..32)`, which needs only the first of
+> the salt's 2048 sequential iterations.
+
+v6's cost is a property of the VM program, the program seed is readable from the
+first 32 bytes of the salt, and those are written by the first of 4096
+iterations. The screen therefore costs about **1/2048 of a fill** and resolves a
+spread the document gives as 16 MB to 100 MB of DRAM traffic per hash, at
+roughly 1% acceptance. Its own progression attributes 319 to 976 H/s to
+screening alone, a **3.1x algorithmic break**; the rest of the 13.4x is
+engineering.
+
+On v8 the same screen costs a **full fill**. `get_cna_v6_data` reseeds its
+HC-128 state 256 times from bytes it has already written, so the keystream
+cannot be fast-forwarded, and `xx`, `yy` and `init_size_blk` are drawn only
+afterwards. A 55%-of-a-nonce oracle resolving F42's 3.7x spread never pays, at
+any fill speed this document demonstrates.
+
+#### What carries into v8, and what dies with the VM
+
+Carries over, and applies to the stock miner equally, so it is implementation
+quality rather than a break: K-way nonce interleaving (+23%), fused pad init
+(+7%, and worth less at v8's 1 MB pad than at v6's 8 MB), non-temporal stores
+(+4%), large pages (+5%), four-way AVX2 Keccak, eight-lane AVX2 HC-128, and the
+SMT pairing work. Compounded, roughly **1.4x on the hash**.
+
+The eight-lane HC-128 also takes the chain fill from 4.6M to 1.7M cycles,
+**2.7x**, and v8 calls the same `get_cna_v6_data`, so that carries over whole.
+
+Dies with the VM, because v8 has none: trace JIT, JIT-driven virtual pad,
+recompute-final, deopt abandonment, and the GPU hybrid. That hybrid hunts
+"the ~1 in 950 whose VM never touches the pad" and hashes them with no pad at
+all. **v8 has no such nonce**: both AES passes and every `salt_pad_v8` sweep
+touch the whole 1 MB pad on every nonce.
+
+Note that the fill speedup and the hash speedup move `F / E[H]` in opposite
+directions. Applying the 2.7x without the 1.4x, as the review did, overstates
+the screener's position:
+
+| | `F / E[H]` | best screen |
+|---|---|---|
+| stock | 1.23 | 1.000x |
+| fill 2.7x, hash unchanged | 0.46 | 1.006x |
+| fill 2.7x, hash 1.4x | 0.64 | **1.000x** |
+
+#### The residual: offloading the fill, which the ordering fix does not touch
+
+The document's last line on the GPU hybrid is the one that matters for v8:
+
+> The 234 MB block cache lives in VRAM and is uploaded incrementally per height.
+
+The chain fill's working set is already on the card, driven by an eight-lane
+HC-128 kernel. A GPU can therefore compute v8's fill and hand finished salts to
+the CPU. **This is not screening and v8's draw ordering does nothing against
+it**: offloading does not need to predict the cost, it pays it elsewhere. At a
+55% fill share the uplift is **2.0x to 2.2x** for a GPU-equipped miner, larger
+than screening ever bought on v6 and comparable to v8's whole 2.39x cross-CPU
+spread.
+
+What limits it is bandwidth, and that appears to be luck rather than design.
+`CN_SALT_MEMORY` is 262144 bytes, `salt_pad_v8` sweeps all of it, and the salt
+is HC-128 output so it will not compress. The card must ship **256 KB per
+nonce**. A 7950X at 32 threads needs about **11 GB/s** at stock hash speed and
+**16 GB/s** with the 1.4x above, against roughly 20 GB/s practical on
+PCIe 4.0 x16. It fits with little headroom and does not fit on PCIe 3.0 x16.
+
+Those two figures are arithmetic from the salt size and the measured hash cost,
+**not measurements**. Nothing here has been built. They are recorded because
+they identify a constant as load-bearing that is not documented as such:
+**shrinking `CN_SALT_MEMORY` would look like a harmless optimization and would
+hand this attack its headroom.** Any future change to it is a GPU-resistance
+change, in the same way F38 and `CNA_V6_WINDOW_BLOCKS` are coupled.
+
+#### What would settle it
+
+Pointing the existing fill kernel at v8 and measuring salts per second against
+PCIe throughput. The document's author has every component needed and has been
+asked directly whether he will try to improve v8's hashrate. That measurement is
+worth more than anything in this file, because it is the attacker's own number
+on the shipped algorithm.
+
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell
@@ -1742,9 +1943,14 @@ control row (`v5ref` vs `v5ctl` at ~1.00x) exists to catch it, and if it is not
    a property of the kernel.
 7. **The real cost of `get_cna_v6_data` against LMDB is unmeasured.** F38
    puts the ASIC bound at 1.6x using a modelled fill; the real one should
-   be more expensive and the bound stronger. Timing
-   `get_block_longhash_v14`'s two halves in the daemon would settle it and
-   would also say exactly where sync time goes.
+   be more expensive and the bound stronger. F42 narrows this by
+   subtraction, 0.927 ms as an upper bound against the harness's 0.721 ms,
+   but timing `get_block_longhash_v14`'s two halves in the daemon is still
+   what settles it, and would also say exactly where sync time goes.
+8. **Whether a GPU can feed v8's chain fill to a CPU.** F43. The uplift
+   would be 2.0x to 2.2x and the limit is PCIe bandwidth at 256 KB of salt
+   per nonce. Estimated from the salt size and the measured hash cost;
+   nothing has been built.
 
 ## Reproducing
 
@@ -1753,6 +1959,29 @@ control row (`v5ref` vs `v5ctl` at ~1.00x) exists to catch it, and if it is not
         contrib/powbench/screen.c src/crypto/cna-vm.c src/crypto/hc128.c \
         -o screen -lm
     ./screen 200000 200 2048      # static programs, live nonces, passes each
+
+    # F42's screening grid: all 75 (xx, yy, init_size_blk) cells of v8, timed.
+    # Same flags and sources as build-v8bench.sh, because it times the same
+    # shipped hash; -DSLOW_HASH_HW_AES_BUILT=1 and -maes are not optional and
+    # the numbers are about 5x slow without them.
+    gcc -O2 -maes -march=x86-64 -fno-strict-aliasing -ffp-contract=off \
+        -DSLOW_HASH_HW_AES_BUILT=1 -I contrib/powbench/noboost \
+        -I src -I src/crypto -I contrib/epee/include \
+        contrib/powbench/screen_grid.c \
+        src/crypto/slow-hash.c src/crypto/slow-hash-hw.c \
+        src/crypto/slow-hash-sw.c src/crypto/slow-hash-v8-hw.c \
+        src/crypto/slow-hash-v8-sw.c src/crypto/slow-hash-v8fp-hw.c \
+        src/crypto/slow-hash-v8fp-sw.c src/crypto/cna-vm.c \
+        src/crypto/hc128.c src/crypto/oaes_lib.c src/crypto/aesb.c \
+        src/crypto/keccak.c src/crypto/hash.c src/crypto/blake256.c \
+        src/crypto/groestl.c src/crypto/jh.c src/crypto/skein.c \
+        src/crypto/hash-extra-blake.c src/crypto/hash-extra-groestl.c \
+        src/crypto/hash-extra-jh.c src/crypto/hash-extra-skein.c \
+        contrib/epee/src/memwipe.c -pthread -o screen_grid -lm
+    ./screen_grid 51 0.927        # rounds, chain fill cost in ms
+
+Stop mining and close browsers before running it. F41's method notes apply
+unchanged: a contaminated run of this probe reads as a cell effect.
 
 `screen.c` aborts rather than report if its instrumented interpreter stops
 matching `cn_vm_execute`. Keep that gate. It has already caught one error.
