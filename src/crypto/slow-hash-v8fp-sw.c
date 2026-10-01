@@ -45,3 +45,17 @@
 
 #include "slow-hash.h"
 #include "slow-hash-v8-impl.h"
+
+/* Defined in the software TU, which is built on every target. The hardware one
+ * is compiled only where AES-NI or ARMv8 crypto exists, and the FP stage has
+ * nothing to do with AES: ARMv7 is exactly where this check needs to run.
+ * Returns 0 when this build computes the reference vector. */
+int cn_slow_hash_v15_selftest(void);
+int cn_slow_hash_v15_selftest(void) { return cn_fp_selftest(); }
+
+/* Value-safety scan over the real round body. */
+void cn_slow_hash_v15_value_scan(unsigned seeds, unsigned rounds, unsigned out[5]);
+void cn_slow_hash_v15_value_scan(unsigned seeds, unsigned rounds, unsigned out[5])
+{
+    cn_fp_value_scan(seeds, rounds, out);
+}

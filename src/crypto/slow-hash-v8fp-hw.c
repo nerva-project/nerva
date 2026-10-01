@@ -44,15 +44,3 @@
 
 #include "slow-hash.h"
 #include "slow-hash-v8-impl.h"
-
-/* Returns 0 when this build computes the reference vector. Declared here
- * rather than hash-ops.h because nothing in consensus calls v15. */
-int cn_slow_hash_v15_selftest(void);
-int cn_slow_hash_v15_selftest(void) { return cn_fp_selftest(); }
-
-/* Value-safety scan over the real round body. */
-void cn_slow_hash_v15_value_scan(unsigned seeds, unsigned rounds, unsigned out[5]);
-void cn_slow_hash_v15_value_scan(unsigned seeds, unsigned rounds, unsigned out[5])
-{
-    cn_fp_value_scan(seeds, rounds, out);
-}
