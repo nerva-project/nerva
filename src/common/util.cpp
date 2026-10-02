@@ -806,11 +806,12 @@ std::string get_nix_version_display_string()
 
   bool check_aesni()
   {
-#if !defined NO_AES
-    // Before the HW-vs-SW comparison, and outside it: the known-answer vectors
-    // run on every platform, including the software-AES-only ones where the
-    // self-test below returns early. They are also the only check that can see
-    // a change which moves both arms together.
+    /* Before the HW-vs-SW comparison and outside it, and outside the NO_AES
+     * guard as well: NO_AES drops only the hardware translation units, so such
+     * a build still computes consensus hashes through the software path, and it
+     * is the build with the least other checking, because there is no hardware
+     * arm left for the self-test below to compare against. The vectors are the
+     * only check that can see a change which moves both arms together. */
     if (!crypto::cn_slow_hash_known_answer_test())
     {
         MGUSER_RED(
@@ -820,6 +821,7 @@ std::string get_nix_version_display_string()
         return false;
     }
 
+#if !defined NO_AES
     if (crypto::cn_hardware_aes_supported())
     {
         if (!crypto::cn_slow_hash_self_test())
