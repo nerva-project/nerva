@@ -22,7 +22,8 @@ reason those two answers came out the way they did.
 
 ## Status
 
-**Phases 1, 3 and 4 are done. Phase 6 is planned and not started.**
+**Phases 1, 3, 4 and 5 are done. Phase 6 is done except A1b, the sweep
+deferral, which is specified but not built.**
 
 | phase | state |
 |---|---|
@@ -867,10 +868,23 @@ hash, and F49's round did not provoke it.
   estimator with the cheapest predictor that v8's structure allows, and the
   choice of estimator is the whole test, so it deserves review rather than
   being picked by whoever writes the patch.
-- Reverify a range of historical blocks with `--fast-block-sync 0` across the
-  v10, v11 and v13 height ranges, and confirm the hashes are bit-identical to
-  a build from master. This is the direct test of the rule above, and it is a
-  merge blocker.
+- Reverify historical blocks across the v10, v11 and v13 height ranges. This is
+  the direct test of the rule above, and it is a merge blocker. **Owed to a
+  mainnet sync from zero on the release candidate**, which is the exhaustive
+  form of it: every block through the real consensus path.
+
+  **It only counts with `--fast-block-sync 0`.** The flag defaults on, and at
+  `blockchain.cpp`'s `assume_valid` line that makes every block below
+  `ASSUME_VALID_HEIGHT` (4,320,000) skip PoW recomputation entirely, with
+  quicksync gated the same way. A default sync from zero therefore succeeds
+  whether or not this branch perturbed v10, v11 or v13, and proves nothing
+  about them. With the flag at 0 both paths are disabled and every proof of
+  work is recomputed and checked against its recorded difficulty.
+
+  Popping blocks cannot reach v10 or v11: they are roughly 4 million blocks
+  back. `blockchain_import --verify` does not substitute, because it never
+  registers `arg_fast_block_sync`, so `m_fast_sync` stays true and it skips the
+  same range.
 - Testnet round with the full HF14 test procedure from the runbook. Note that
   testnet HF14 is at height 1000 on a fresh net, so a testnet restart exercises
   the fork itself rather than a placeholder.
@@ -1083,6 +1097,43 @@ bytes each sweep actually consumed, or reconstruct the patch history, not just
 which is exactly the failure F44 warns about. The extra-hash memoization
 already landed makes the patch sequence easier to reason about, since only the
 patch offsets vary, not the digests.
+
+Reconstruction is cheap in practice because the patches cover almost nothing:
+~30 patches of 32 bytes is under 1 KB of a 256 KB salt, so a sorted list of
+patched ranges answers "does this index need correcting" with a miss nearly
+every time. `salt_k[x]` is `salt_final[x]` XOR every patch `p > k` covering `x`.
+
+#### Two corrections to the above, found before building (2026-10-02)
+
+**The sweep sequence is not schedulable.** `r2` aliases `c`:
+
+    uint16_t *r2 = (uint16_t *)&c;
+    salt_pad_v8(salt, r2[0], r2[2], r2[4], r2[6]);
+
+`c` is the CN state that `post_aes_variant` has just written from the AES
+output, so every sweep's offset and stride depend on the pad at that moment.
+Nothing can be precomputed, and the log has to be built as the loop runs. The
+deferral is still correct, by induction: reconstructing the logical value at
+each read makes `c` identical, so the parameters are identical. But it means
+**an error in `comp()` changes the sweep parameters themselves**, so a wrong
+implementation does not produce a recognisably corrupt hash, it produces a
+different self-consistent one. This is why gate 1 is the known-answer test.
+
+**`VARIANT1_1` is nonlinear and XOR does not commute with it.** It reads byte
+11 of the pad cell, indexes a table with bits of it, and writes the byte back.
+So the deferral cannot be bolted on as an XOR at each end of the existing
+macros. The convention has to be that `hp_state` always holds
+`logical ^ comp`, and every read materialises `logical` before anything
+nonlinear sees it, with the store re-masking afterwards.
+
+That convention is self-correcting across time and this is the part worth
+checking rather than trusting: a cell stored at step `m` holds
+`logical_m ^ comp_m`, and a read at step `m' > m` recovers
+`logical_m ^ comp_m ^ comp_m'`, which is `logical_m` XOR exactly the sweeps
+between `m` and `m'` that hit the cell. That is what the eager version would
+have applied. The same identity makes the finalize pass correct: applying the
+**full** sweep set to every cell turns `logical_m ^ comp_m` into `logical_N`,
+including for cells no CN step ever touched.
 
 #### Gates, in order
 
