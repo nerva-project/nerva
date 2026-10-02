@@ -1167,6 +1167,18 @@ already produce different proof-of-work on big-endian than on little-endian.
 So the s390x entry in `CMakeLists.txt` buys a build, not a working node. A node
 built there would reject the chain. **Big-endian support is nominal.**
 
+*Since the known-answer vectors landed, that failure is at least legible.*
+`cn_slow_hash_known_answer_test` runs unconditionally at startup and goes
+through the dispatchers, so on a big-endian machine it fails and nervad refuses
+to start saying this build does not compute the same hashes as the network.
+Previously such a node started normally and then rejected every block as bad
+proof of work, which looks like a network problem rather than a port problem.
+The bug is unchanged and still unfixed; only the diagnostic improved.
+
+The fp-portability workflow is unaffected: it cross-builds and runs
+`t_fp_determinism.c` under qemu and never starts a daemon, which is why its
+s390x row can still expect the full hash to differ.
+
 Two consequences worth separating.
 
 **For Phase 2:** the FP stage inherits this rather than causing it, and the same
