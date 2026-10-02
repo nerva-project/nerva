@@ -463,7 +463,8 @@ This follows from the invariant rather than from anything new: pinning
 worst-case salt consumption at `CN_SALT_MEMORY` means **the salt sweep does
 roughly constant work whatever the pad size**. The pad still grows the AES
 fill, the finalize pass and the random-access footprint; it no longer grows
-the sweep. The author's own 3 MB version had the same property.
+the sweep. The original algorithm author's own 3 MB version (`5671f9f`,
+2018) had the same property.
 
 ### F23. The salt stays fully consumed at every pad size, so chain binding is unchanged
 
@@ -1772,10 +1773,10 @@ is fitted and no third axis can hide in a residual.
 
 ### F43. The published v6 miner breaks v6 by screening; v8 removes that, and what is left is fill offload
 
-A document circulated by its author describes a v6 miner at 8.5x to 13.4x over
-the stock miner, with a GPU hybrid adding a further 74 to 80%. None of its
-numbers are reproduced here. Its **structural** claims were checked against the
-code, and those are what is used below.
+A document by [0xROOTPLS](https://github.com/0xROOTPLS) describes a v6 miner at 8.5x to 13.4x over the
+stock miner, with a GPU hybrid adding a further 74 to 80%. None of its numbers
+are reproduced here. Its **structural** claims were checked against the code,
+and those are what is used below.
 
 #### The break, and why it is a v6 property
 
@@ -1854,19 +1855,25 @@ change, in the same way F38 and `CNA_V6_WINDOW_BLOCKS` are coupled.
 #### What would settle it
 
 Pointing the existing fill kernel at v8 and measuring salts per second against
-PCIe throughput. The document's author has every component needed and has been
-asked directly whether he will try to improve v8's hashrate. That measurement is
-worth more than anything in this file, because it is the attacker's own number
-on the shipped algorithm.
+PCIe throughput. [0xROOTPLS](https://github.com/0xROOTPLS) has every component needed and has been
+asked directly whether he will try to improve v8's hashrate. That measurement is worth
+more than anything in this file, because it would come from the miner that
+actually exists, run against the shipped algorithm.
 
 ## The measured miner
 
-The findings below come from a report by the author of an optimized v8 miner,
-dated 2026-10-02, measured on a Ryzen 5 5600G: reference 2,529 H/s at T=12
-against his 6,150 H/s, 2.43x, broken down as ~2.0x implementation, ~1.18x sweep
-deferral and ~1.06x extra-hash memoization. **None of his timings are reproduced
-here.** Every structural claim below was re-derived from the code in this tree,
-and that is what is recorded.
+**Phase 6 of this work exists because of [0xROOTPLS](https://github.com/0xROOTPLS)**, a security
+researcher who built optimized miners for CNA v6 and v8, measured them, and
+reported the results in full rather than quietly mining with them. The v6 report
+documents a screening break worth 3.1x on its own (F43); the v8 report is what
+F44 to F48 are checked against. Where this file is adversarial about v8, it is
+adversarial because his work made it possible to be.
+
+The findings below come from his v8 report, dated 2026-10-02 and measured on a
+Ryzen 5 5600G: reference 2,529 H/s at T=12 against his 6,150 H/s, 2.43x, broken
+down as ~2.0x implementation, ~1.18x sweep deferral and ~1.06x extra-hash
+memoization. **None of his timings are reproduced here.** Every structural claim
+below was re-derived from the code in this tree, and that is what is recorded.
 
 His cost breakdown of the shipped code, from an instrumented copy over 52,833
 nonces, is used throughout: salt 59.5%, sweeps 17.9%, AES fill 6.5%, randomize
@@ -2080,6 +2087,92 @@ verification for a GPU effect that is somewhere between slightly favourable and
 slightly unfavourable, on top of F38's argument that it loosens the ASIC bound
 by growing the specialisable share. **Recorded closed. If anyone proposes it
 again, the cost is measured and the burden is on the GPU side of the argument.**
+## Testnet
+
+### F49. The testnet fork round: v8 validated real blocks for the first time, on two machines
+
+Run 2026-10-02 at `9390998`. Until this round `get_block_longhash_v14` had never
+validated a block anywhere, because HF14 is not active on any live network. Every
+earlier gate checked the hash primitive in isolation or checked that pre-v8
+consensus was undisturbed. This is the first evidence that the consensus path
+around it works.
+
+#### Setup
+
+Fresh private testnet, genesis upward, testnet HF14 at height 1000. Two nodes on
+one machine isolated with `--add-exclusive-node` at non-default ports, mined to
+height 1048 with 8 threads, then a third node with an empty database, then a
+second physical machine. All four ran the same binary, `v0.3.0.0-93909988a`,
+verified with `--version` rather than assumed: the version number alone does not
+distinguish builds, only the git hash does.
+
+#### Why `--fixed-difficulty 1000` and not 1
+
+A fixed difficulty is needed because a fresh net at real difficulty would take
+roughly a day to reach height 1000. The value matters more than it looks.
+
+**At difficulty 1 every hash meets the target.** A node computing a completely
+wrong longhash would still accept every block, so the round would pass while
+being blind to the one failure it exists to detect. At 1000 the PoW is binding:
+a systematically wrong validator rejects about 999 blocks in 1000. The cost is
+that the real LWMA difficulty path is not exercised, which is acceptable here
+because difficulty is not what this branch changed.
+
+#### Results
+
+- HF14 activates at exactly height 1000 on every node, `enabled=true`
+- 998 and 999 are `major_version=13`; 1000, 1001, 1005, 1020 and 1047 are
+  `major_version=14`, so everything past the boundary routes through
+  `get_block_longhash_v14`
+- the two mining nodes held identical block hashes at every height checked
+- a third node with an **empty database** revalidated all 1048 blocks from
+  genesis in under 25 seconds and matched the top hash exactly. This is the
+  first validation of v8 blocks by a node that took no part in producing them
+- a **second physical machine**, i7-7700HQ against the 7950X that mined them,
+  synced from 0 and reported block 1047 as
+  `fc2ed1b074918e50e62a287662218b9ed0648651cf0e77217287835626456a71`,
+  identical to the miner's. Same for the top hash and `cumulative difficulty`
+
+The cross-machine result is the one that carries weight. Nodes sharing a CPU, a
+binary image and a build agree with each other almost by construction; a
+microarchitecture-dependent bug in the hash would pass every single-machine test
+here and fail only this one.
+
+#### A corroborating observable, not a measurement
+
+While mining at fixed difficulty, heights 800 to 999 (CNA v6) ran about 4 s per
+block. Crossing into v8 the chain produced 12 blocks inside one 5-second poll.
+That is consistent with v8 costing roughly an order of magnitude less than v6,
+and it is independent of `v8bench`. It is **mining rate under fixed difficulty,
+not a verify measurement**, so it corroborates F24's ratio and must not be
+quoted as one.
+
+#### What this round does not establish
+
+- real difficulty retargeting across the fork, suppressed by `--fixed-difficulty`
+- any transaction behaviour; the chain carried no transactions, so CLSAG and
+  Bulletproofs+ at v14 were untouched here and rest on round 3
+- a contested reorg across the boundary. Two miners racing near height 1000 is
+  still worth provoking, since that is where a wrong `random_values` bound would
+  split nodes rather than merely produce a wrong hash
+- `--fast-block-sync 0` reverification of the v10, v11 and v13 ranges on mainnet,
+  which remains a separate merge blocker
+
+#### A defect this round found, in the branch's own work
+
+`cn_slow_hash_known_answer_test` was called from inside `#if !defined NO_AES` in
+`check_aesni`. `NO_AES` drops only the hardware translation units: such a build
+still computes consensus hashes through the software path, and it is the build
+with the **least** other checking, because there is no hardware arm left for
+`cn_slow_hash_self_test` to compare against. The vectors were being skipped
+exactly where they were the only remaining check. Moved outside the guard, where
+the floating-point self-test already sat for the same reason.
+
+Note the status of that fix honestly: the symbol has no `NO_AES` guard in
+`slow-hash.c` and the call is now unconditional, both confirmed by inspection,
+but **a `-DNO_AES=ON` build has not been run**. It is an explicit opt-in that
+nothing in CI exercises.
+
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell
@@ -2153,6 +2246,42 @@ list builds at the directory default, which is `-O0`, and compares against
 `libcncrypto.a` built at `-O2`. This has reversed a conclusion twice. The
 control row (`v5ref` vs `v5ctl` at ~1.00x) exists to catch it, and if it is not
 ~1.00x nothing else in the run means anything.
+
+### F50. Running a local multi-node testnet on Windows: two traps
+
+Both cost time during F49 and neither is in the runbook.
+
+**The daemon exits instantly if you redirect its stdout.** `Start-Process` with
+`-RedirectStandardOutput` leaves stdin at EOF and the daemon takes that as a
+shutdown request: `I EOF on stdin, exiting`, before it even opens the database.
+It looks exactly like a crash on startup. Launch it detached with
+`-WindowStyle Hidden` and **no redirection**, then read
+`<data-dir>\testnet\nerva.log`, which has everything anyway. This affects any
+build, not just this branch.
+
+**Testnet allows only one inbound connection per host**, so a third node on
+loopback is refused. From `net_node.inl`:
+
+```c
+// for testing networks we allow more than 1 connection
+const size_t max_connections = m_nettype == cryptonote::STAGENET ? 3 : 1;
+```
+
+The comment says "testing networks" but only STAGENET is exempt, so TESTNET
+inherits the mainnet limit. The symptom is misleading: TCP connects fine and the
+dialing node logs `COMMAND_HANDSHAKE invoke failed. (-3,
+LEVIN_ERROR_CONNECTION_DESTROYED)` in a loop, which reads like a protocol or
+version mismatch rather than a refusal. The limit is **per host**, so nodes on
+other machines are unaffected; it only bites multiple nodes on 127.0.0.1.
+
+**Fixed here**, as `MAINNET ? 1 : 3`. This is not a policy change: `cc02066`,
+which introduced the cap in January 2020, is titled "Only allow multiple
+connections from the same IP on testing networks" and exempted stagenet alone,
+so the code never matched its own stated intent. Mainnet behaviour is untouched,
+and there the cap is doing real work: it is what stops one host taking several
+of a node's inbound slots. The one visible production effect, that two nodes
+behind a single public IP cannot both hold an inbound connection from the same
+remote peer, is the intended anti-Sybil behaviour and is unchanged.
 
 ## Open questions
 

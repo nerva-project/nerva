@@ -30,12 +30,13 @@ reason those two answers came out the way they did.
 | 2, floating point | built and measured, **not shipped**; leaning against |
 | 3, pad and parameters | done, pad is 1 MB |
 | 4, plumbing | done, `get_block_longhash_v14` live at major_version >= 14 |
-| 5, validation | self-test and mainnet sync pass; testnet round outstanding |
-| 6, hardening vs the measured miner | **planned**, see below |
+| 5, validation | done; the testnet fork round passed on two machines, F49 |
+| 6, hardening vs the measured miner | B1, B2 and B3 landed; A1b not built |
 
-Phase 6 exists because an optimized miner was built and measured by its author
-at 2.43x the reference, and its breakdown showed that once the deferrable parts
-are removed the chain fill is the only irreducible work v8 has.
+Phase 6 exists because [0xROOTPLS](https://github.com/0xROOTPLS) built an optimized miner, measured it
+at 2.43x the reference and reported it in full. Its breakdown showed that once
+the deferrable parts are removed the chain fill is the only irreducible work v8
+has.
 
 What v8 is, in one sentence: **v5 with `salt_pad`'s extra-hash selector widened
 from three entries to four, at v5's 1 MB pad, using v6's windowed chain fill.**
@@ -829,7 +830,7 @@ entry was added: v8 inherits HF14.
   away. And `get_cna_v6_data` **stays**: it is v6's chain fill and v6 is live on
   mainnet, so only v7's own code goes.
 
-## Phase 5: validation  [IN PROGRESS]
+## Phase 5: validation  [DONE, except the contested reorg]
 
 Passed so far:
 
@@ -840,10 +841,16 @@ Passed so far:
 - `t_salt_bounds`: no out-of-bounds salt index, exhaustive over the input space
 - the stride derivation is a no-op at 1 MB, 400 hashes compared old against new
 
-Outstanding: the testnet round. Testnet HF14 is at height 1000 on a fresh net,
-so a restart exercises the fork itself. Worth provoking deliberately: two miners
-racing near height 1000, confirming both nodes converge, which is the case where
-a wrong `random_values` bound would split them.
+The testnet round ran on 2026-10-02 and passed; [FINDINGS.md](FINDINGS.md) F49
+has the method and the limits. A fresh private net crossed HF14 at height 1000,
+a node with an empty database revalidated the chain from genesis, and a second
+physical machine on a different microarchitecture reported bit-identical block
+hashes. That is the first time `get_block_longhash_v14` validated a real block.
+
+Still outstanding: **a contested reorg across the boundary**, two miners racing
+near height 1000 and confirming both nodes converge. That is the case where a
+wrong `random_values` bound splits nodes rather than merely producing a wrong
+hash, and F49's round did not provoke it.
 
 
 - Extend `contrib/hf14checks/t_bench_v5v6.cpp` with v8; the control row must
@@ -868,12 +875,13 @@ a wrong `random_values` bound would split them.
   testnet HF14 is at height 1000 on a fresh net, so a testnet restart exercises
   the fork itself rather than a placeholder.
 
-## Phase 6: hardening against the measured miner  [PLANNED]
+## Phase 6: hardening against the measured miner  [B1, B2, B3 LANDED; A1b NOT BUILT]
 
 Phases 1 to 5 were designed against reasoning. This phase is designed against a
-working optimized miner, measured by its author on a 5600G and reported in full:
-2.43x the reference miner, with a breakdown of where every part of it comes
-from. [FINDINGS.md](FINDINGS.md) F44 to F48 record what was verified from it.
+working optimized miner, built and measured on a 5600G by [0xROOTPLS](https://github.com/0xROOTPLS) and
+reported in full: 2.43x the reference miner, with a breakdown of where every
+part of it comes from. [FINDINGS.md](FINDINGS.md) F44 to F48 record what was
+verified from it.
 
 ### The fact that drives this phase
 
