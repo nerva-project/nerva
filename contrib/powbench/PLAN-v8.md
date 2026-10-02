@@ -22,8 +22,8 @@ reason those two answers came out the way they did.
 
 ## Status
 
-**Phases 1, 3, 4 and 5 are done. Phase 6 is done except A1b, the sweep
-deferral, which is specified but not built.**
+**Phases 1 and 3 to 6 are done. Phase 2, floating point, is built and measured
+but not shipped and not decided.**
 
 | phase | state |
 |---|---|
@@ -32,7 +32,7 @@ deferral, which is specified but not built.**
 | 3, pad and parameters | done, pad is 1 MB |
 | 4, plumbing | done, `get_block_longhash_v14` live at major_version >= 14 |
 | 5, validation | done; the testnet fork round passed on two machines, F49 |
-| 6, hardening vs the measured miner | B1, B2 and B3 landed; A1b not built |
+| 6, hardening vs the measured miner | B1, B2, B3 and A1b all landed |
 
 Phase 6 exists because [0xROOTPLS](https://github.com/0xROOTPLS) built an optimized miner, measured it
 at 2.43x the reference and reported it in full. Its breakdown showed that once
@@ -1035,13 +1035,20 @@ surface permanently for a cosmetic gain. Record it in the fork notes.
    person holds is a fairness problem; the same 2.0x everyone holds is the
    baseline.
 
-### A1b. Sweep deferral, the implementation plan
+### A1b. Sweep deferral, the implementation plan  [BUILT 2026-10-02]
 
-Not started. ~1.18x of verification, non-consensus, output must be
-bit-identical. F44 has the measurement and the reasoning; this is how to build
-it. Written down before starting because it is the one piece of Phase 6 most
-likely to be got wrong on a first attempt, and because a half-finished version
-leaves no safe intermediate state to commit.
+**Built, measured and verified bit-identical over 1600 vectors.**
+[FINDINGS.md](FINDINGS.md) F51 has the result and the two places this plan was
+wrong. The headline correction: the gain is set by L2 size, not by the
+algorithm, so F44's 1.18x is a 512 KB-L2 machine at a 1 MB pad and the shipped
+configuration sees 1.04x on a 7950X and 1.14x on an i7-7700HQ. That asymmetry
+is the reason to ship it: it narrows the cross-CPU spread from 2.58x to 2.35x.
+
+The plan as written below is kept because it is what the work was done against.
+Non-consensus, output must be bit-identical. F44 has the measurement and the
+reasoning. Written down before starting because it is the one piece of Phase 6
+most likely to be got wrong on a first attempt, and because a half-finished
+version leaves no safe intermediate state to commit.
 
 #### What makes it possible
 

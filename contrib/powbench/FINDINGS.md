@@ -2173,6 +2173,110 @@ Note the status of that fix honestly: the symbol has no `NO_AES` guard in
 but **a `-DNO_AES=ON` build has not been run**. It is an explicit opt-in that
 nothing in CI exercises.
 
+### F51. The sweep deferral is built, and its gain is set by L2 size, not by the algorithm
+
+*Built and measured 2026-10-02. Non-consensus: the hash is bit-identical, which
+is the only reason it is allowed to exist.* F44 proposed it, PLAN-v8 Phase 6
+A1b specifies it, and two of that specification's assumptions were wrong.
+
+#### What the design had to change
+
+**The sweep sequence is not schedulable.** `r2` aliases `c`, the CN state that
+`post_aes_variant` has just written from the AES output, so every sweep's
+offset and stride depend on the pad at that instant. Nothing precomputes. The
+deferral still holds by induction, because reconstructing the logical value at
+each read makes `c` identical, but the consequence is sharp: **an error in the
+reconstruction changes the sweep parameters themselves**, so a wrong build does
+not produce a visibly corrupt hash, it produces a different self-consistent
+one.
+
+**`VARIANT1_1` is nonlinear.** It indexes a table with bits of pad byte 11 and
+writes the byte back, so XOR does not commute with it and the deferral cannot
+be an XOR bolted onto each end of the existing macros. The pad holds
+`logical ^ comp` and every read materialises `logical` before anything
+nonlinear sees it.
+
+That convention is self-correcting across time, which is what makes it
+tractable: a cell stored at step `m` holds `logical_m ^ comp_m`, and a read at
+step `m'` recovers it XOR exactly the sweeps between `m` and `m'` that hit the
+cell, which is what the eager form would have applied. The same identity makes
+the finalize pass correct for cells no CN step ever touched.
+
+#### The mistake that would have made it slower
+
+Reconstructing a historical salt byte by scanning the patch list costs ~56
+comparisons per byte, and the finalize pass touches ~476K salt bytes, so a
+naive `comp()` is ~26M operations per nonce: **slower than the sweeps it
+replaces.** What makes it work is tiling the pad and walking the sweeps in
+reverse within each tile, undoing patches as the salt rewinds and redoing them
+after. Patch traffic is ~2*npt*32 bytes per tile, about 114K byte-XORs in all,
+against 476K of real work.
+
+#### The measurement, and why F44's 1.18x is not the shipped number
+
+A/B on one machine, same conditions, reading v8:v5 because v5 does not use
+`salt_pad_v8` and is therefore a control inside the same run.
+
+| pad | v8:v5 eager | v8:v5 deferred | v8 speedup |
+|---|---|---|---|
+| 1 MB | -5.53% | -9.01% | 1.04x |
+| 2 MB | -23.81% | -31.65% | 1.11x |
+| 4 MB | -32.57% | -41.07% | 1.14x |
+| 8 MB | -37.28% | -47.42% | 1.19x |
+
+The gain rises with pad size, which is the signature of a cache effect. The
+7950X has **1 MB of L2 per core**, so at the shipped 1 MB pad the eager sweeps
+were already resident and tiling had little to win. The 8 MB row reproduces
+F44's 1.18x almost exactly, and F44 was measured on a 5600G with 512 KB of L2
+at a 1 MB pad. **The two agree once compared at equal pad-to-L2 ratio.** F44's
+figure is not wrong and is not the shipped configuration's figure either.
+
+#### The cross-machine result, which is the reason to ship it
+
+Predicted before measuring: a smaller L2 should gain more, so the i7-7700HQ
+(256 KB L2) should show 12 to 18% where the 7950X shows 3.8%. Measured A-B-A on
+the laptop: **-4.06%, -15.97%, -4.07%**. The two eager runs differ by 0.01
+points, so the gap is not drift, and the v5 control held within 0.4%.
+
+| | eager | deferred |
+|---|---|---|
+| 1 MB 1T, 7950X | 0.5569 ms | 0.5349 ms (1.04x) |
+| 1 MB 1T, i7-7700HQ | 1.4346 ms | 1.2574 ms (1.14x) |
+| cross-CPU verify spread | 2.58x | **2.35x** |
+
+Multi-threaded the laptop's 1 MB peak goes 2404.5 to 2840.1 H/s (+18.1%) while
+the 7950X is flat (31134.3 to 31082.4), moving that spread 12.9x to 10.9x.
+
+**Worth setting against the floating-point stage** (F41), which costs 6 to 9%
+of hashrate, buys 2.7% of spread, makes GPU resistance slightly worse, and is a
+consensus change. The deferral narrows the spread several times further, costs
+nothing, and changes no hash.
+
+*Two caveats, because this is a verification measurement.* Miners batch nonces,
+which changes the cache picture, so the mining magnitude may differ from the
+single-nonce figures above; that is unmeasured. And the laptop's multi-thread
+tail is thermally noisy, with the peak moving from 4T to 8T between runs, so
+the single-thread rows carry more weight than the throughput ones.
+
+#### What was verified, and how
+
+- **1600 digests, eager against deferred, byte-identical.** All 25 `(xx, yy)`
+  cells crossed with **every** `iters` value 0 to 63, which is the whole drawn
+  parameter space. A one-shot harness compiled twice against the same tree; not
+  kept, because the known-answer vectors are the standing guard.
+- `cn_slow_hash_known_answer_test` passes. This is the gate that matters:
+  **both** AES arms changed together, so the HW-equals-SW self-test structurally
+  could not have caught a symmetric error.
+- `cn_slow_hash_self_test` passes, which is what covers the software arm: the
+  harness dispatches to hardware AES, and HW equals SW equals eager.
+- `t_v8_chain` passes, all 9 assertions. **It had never built**: it was
+  registered in `24a120b`, but `${NERVA_ROOT}/src/crypto` was never on the
+  hf14checks include path, so `#include "hash-ops.h"` could not resolve.
+  `git log -S` confirms the path was never there and no artifact exists in the
+  tree. A test that cannot build reports nothing and is indistinguishable from
+  one that passes. Fixed in the same commit.
+- `v8bench`'s own gate, shipped against recompiled on 24 inputs, passes.
+
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell
