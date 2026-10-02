@@ -49,7 +49,16 @@
 #include <string.h>
 #include <stdint.h>
 
-/* (xx-1)*yy sweeps, and xx, yy are each drawn in [4,8], so 7*8 = 56. */
+/* (xx-1)*yy sweeps, and consensus draws xx, yy in [4,8], so 7*8 = 56.
+ *
+ * This bound is NOT a consensus guarantee at this level. cn_slow_hash_v14 is
+ * an exported symbol taking uint16_t xx and yy with no validation, and the
+ * benchmarks and checks in contrib/ already call it directly, so xx=yy=100
+ * would want 9900 entries. salt_pad_v8_defer therefore flushes and restarts
+ * the log when it fills rather than running off the end of these arrays. That
+ * keeps the hash correct for any parameters instead of merely turning a stack
+ * smash into a visible failure, and costs an extra pad pass only for values
+ * consensus never draws. */
 #define CN_V8_MAX_SWEEPS 64
 
 /* Tile for the finalize pass. Small enough to stay resident while ~56 sweeps
@@ -87,7 +96,16 @@ static inline unsigned char cn_v8_salt_at(const char *salt, const cn_v8_patch_t 
 /* The deferred contribution to the 16 bytes at [j, j+16), over the sweeps
  * logged so far. A CN step reads pad^comp and writes result^comp, so a cell
  * stored at step m and read at step m' picks up exactly the sweeps in between,
- * which is what the eager form would have applied to it. */
+ * which is what the eager form would have applied to it.
+ *
+ * COST: O(nsw * npt) per 16-byte read, both of which are (xx-1)*yy. At the
+ * drawn maximum xx=yy=8 that is 56 sweeps by ~28 patches, roughly 200K
+ * iterations per nonce, and it is a net win at every cell of the drawn grid.
+ * It is superlinear, though, and the draw range that bounds it lives in
+ * cryptonote_tx_utils.cpp, not here. **Widening xx or yy past [4,8] can flip
+ * the deferral from a win to a loss, silently**: it would still be
+ * bit-identical, just slower, so no test would fail. Re-measure against the
+ * eager form before changing that range. */
 static inline void cn_v8_comp16(unsigned char out[16], const cn_v8_sweep_t *sw, uint32_t nsw,
                                 const char *salt, const cn_v8_patch_t *pt, uint32_t npt,
                                 uint32_t j)
@@ -153,6 +171,12 @@ static inline void cn_v8_apply_sweeps(uint8_t *hp_state, const cn_v8_sweep_t *sw
  * offsets are read back out of the salt. */
 #define salt_pad_v8_defer(salt, a, b, c, d)                                     \
     do {                                                                        \
+        if (cn_v8_nsw >= CN_V8_MAX_SWEEPS || cn_v8_npt >= CN_V8_MAX_SWEEPS)     \
+        {                                                                       \
+            CN_V8_FLUSH_SWEEPS();                                               \
+            cn_v8_nsw = 0;                                                      \
+            cn_v8_npt = 0;                                                      \
+        }                                                                       \
         const unsigned sel_ = (unsigned)((a) & 3);                              \
         if (!((salt_hash_valid >> sel_) & 1u))                                  \
         {                                                                       \

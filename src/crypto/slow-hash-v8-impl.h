@@ -61,17 +61,19 @@
  * the caller's parameters alone, which is what the benchmarks and the
  * self-test want. PLAN-v8 Phase 6 B2. */
 #define CN_V8_FETCH_SALT()                                   \
-    if (salt_fn != NULL)                                     \
-    {                                                        \
-        cn_v8_draw_t draw;                                   \
-        draw.xx = xx;                                        \
-        draw.yy = yy;                                        \
-        draw.iters = iters;                                  \
-        salt_fn(salt_user, text, salt, &draw);               \
-        xx = draw.xx;                                        \
-        yy = draw.yy;                                        \
-        iters = draw.iters;                                  \
-    }
+    do {                                                     \
+        if (salt_fn != NULL)                                 \
+        {                                                    \
+            cn_v8_draw_t draw;                               \
+            draw.xx = xx;                                    \
+            draw.yy = yy;                                    \
+            draw.iters = iters;                              \
+            salt_fn(salt_user, text, salt, &draw);           \
+            xx = draw.xx;                                    \
+            yy = draw.yy;                                    \
+            iters = draw.iters;                              \
+        }                                                    \
+    } while (0)
 
 #if !defined(CN_USE_SOFTWARE_AES)
 
