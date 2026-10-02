@@ -491,6 +491,13 @@ time back and buys repeated salt with less entropy per pad byte.
 
 ### F24. Single-thread pad measurements: 8 MB is disqualified, 1/2/4 MB are close
 
+**The absolute figures below are stale.** They were taken while `v8bench`
+drew `init_size_blk` per nonce, as consensus then did. B1 pinned it, and
+`v8bench` now pins it too, which takes the 7950X 1 MB row from 0.7627 to
+0.6038 ms. The pad decision this finding reached is unaffected, because every
+row moves together and the comparison is between pads at a common blk; only
+the absolute costs need re-reading. Re-measure before quoting any number here.
+
 v8 verify cost, single thread, four machines, `contrib/powbench/v8bench.c`.
 The laptop is the machine that sets the spread, so its column is the mean of
 two agreeing runs; a third, earlier run read 12% high at 4 MB and 4% high at

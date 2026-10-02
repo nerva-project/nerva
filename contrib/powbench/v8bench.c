@@ -275,7 +275,16 @@ static struct params draw(void)
     struct params p;
     p.xx  = (uint16_t)(4 + rnd() % 5);
     p.yy  = (uint16_t)(4 + rnd() % 5);
-    p.blk = (uint8_t)(2u << (rnd() % 3));
+    /* Pinned, not drawn: get_block_longhash_v14 passes CN_V8_INIT_SIZE_BLK.
+     * Drawing it here measured an algorithm the daemon stopped running when
+     * blk was pinned, and every figure would have drifted silently.
+     *
+     * One sample feeds every variant in the interleaved pass, which is what
+     * makes the comparison controlled, so the v5/v11 control rows run at
+     * blk=8 too. Those rows are therefore the selector control, not v11 as
+     * deployed: v11 still draws blk in consensus. Sweeping blk is
+     * screen_grid.c's job. FINDINGS.md F42. */
+    p.blk = CN_V8_INIT_SIZE_BLK;
     p.iters = rnd() % (1 + rnd() % 64);
     return p;
 }
@@ -542,7 +551,7 @@ static void *worker_main(void *arg)
         seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
         p.xx  = (uint16_t)(4 + seed % 5);
         p.yy  = (uint16_t)(4 + (seed >> 8) % 5);
-        p.blk = (uint8_t)(2u << ((seed >> 16) % 3));
+        p.blk = CN_V8_INIT_SIZE_BLK;   /* as above: consensus pins it */
         p.iters = (seed >> 20) % 64;
         w->fn(ctx, blob, sizeof(blob) - 1, out, p.iters, p.blk, p.xx, p.yy);
     }
