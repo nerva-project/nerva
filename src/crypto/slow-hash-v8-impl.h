@@ -39,6 +39,11 @@
 #define CN_V8_PAD(ctx) ((ctx)->scratchpad)
 #endif
 
+/* The salt sweeps are recorded and applied once instead of ~56 times over the
+ * pad. Verification-only: the hash is bit-identical either way, which the
+ * known-answer vectors are what actually prove. PLAN-v8 Phase 6 A1b. */
+#include "slow-hash-v8-defer.h"
+
 
 /* Floating-point stage, compiled in only by slow-hash-v8fp-{hw,sw}.c.
  * Without CN_V8_FP this expands to nothing and v8 is unchanged. */
@@ -78,6 +83,7 @@ static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t leng
     char * const salt = context->salt;
     char salt_hash_memo[4][HASH_SIZE];
     unsigned salt_hash_valid = 0;
+    CN_V8_DEFER_LOCALS();
     init_hash();
     expand_key();
     CN_V8_FETCH_SALT();
@@ -94,27 +100,30 @@ static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t leng
     uint16_t *r2 = (uint16_t *)&c;
     for (k = 1; k < xx; k++)
     {
-        pre_aes();
+        pre_aes_v8();
         _c = _mm_aesenc_si128(_c, _a);
-        post_aes_variant();
-        salt_pad_v8(salt, r2[0], r2[2], r2[4], r2[6]);
+        post_aes_variant_v8();
+        salt_pad_v8_defer(salt, r2[0], r2[2], r2[4], r2[6]);
 
         for (l = 1; l < yy; l++)
         {
-            pre_aes();
+            pre_aes_v8();
             _c = _mm_aesenc_si128(_c, _a);
-            post_aes_variant();
-            salt_pad_v8(salt, r2[1], r2[3], r2[5], r2[7]);
+            post_aes_variant_v8();
+            salt_pad_v8_defer(salt, r2[1], r2[3], r2[5], r2[7]);
         }
     }
+
+    CN_V8_FLUSH_SWEEPS();
+    cn_v8_nsw = 0;
 
     CN_FP_STAGE();
 
     for (i = 0; i < iters; i++)
     {
-        pre_aes();
+        pre_aes_v8();
         _c = _mm_aesenc_si128(_c, _a);
-        post_aes_variant();
+        post_aes_variant_v8();
     }
 
     finalize_hash();
@@ -130,6 +139,7 @@ static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t leng
     char * const salt = context->salt;
     char salt_hash_memo[4][HASH_SIZE];
     unsigned salt_hash_valid = 0;
+    CN_V8_DEFER_LOCALS();
     init_hash();
     expand_key();
     CN_V8_FETCH_SALT();
@@ -144,20 +154,23 @@ static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t leng
     uint16_t *r2 = (uint16_t *)&b;
     for (k = 1; k < xx; k++)
     {
-        aes_sw_variant();
-        salt_pad_v8(salt, r2[0], r2[2], r2[4], r2[6]);
+        aes_sw_variant_v8();
+        salt_pad_v8_defer(salt, r2[0], r2[2], r2[4], r2[6]);
 
         for (l = 1; l < yy; l++)
         {
-            aes_sw_variant();
-            salt_pad_v8(salt, r2[1], r2[3], r2[5], r2[7]);
+            aes_sw_variant_v8();
+            salt_pad_v8_defer(salt, r2[1], r2[3], r2[5], r2[7]);
         }
     }
+
+    CN_V8_FLUSH_SWEEPS();
+    cn_v8_nsw = 0;
 
     CN_FP_STAGE();
 
     for (i = 0; i < iters; i++) {
-        aes_sw_variant();
+        aes_sw_variant_v8();
     }
 
     finalize_hash();
