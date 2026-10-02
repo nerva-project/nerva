@@ -2242,7 +2242,12 @@ points, so the gap is not drift, and the v5 control held within 0.4%.
 |---|---|---|
 | 1 MB 1T, 7950X | 0.5569 ms | 0.5349 ms (1.04x) |
 | 1 MB 1T, i7-7700HQ | 1.4346 ms | 1.2574 ms (1.14x) |
-| cross-CPU verify spread | 2.58x | **2.35x** |
+| cross-CPU verify spread, hash core only | 2.58x | **2.35x** |
+
+**Those two rows exclude the chain fill**, because `v8bench` supplies its own
+salt and never calls `get_cna_v6_data`, which is ~60% of a real nonce. On real
+nonces the spread is 2.23x against 2.13x, so the deferral is worth about half
+what this table implies. F52 measured it; read that before quoting these.
 
 Multi-threaded the laptop's 1 MB peak goes 2404.5 to 2840.1 H/s (+18.1%) while
 the 7950X is flat (31134.3 to 31082.4), moving that spread 12.9x to 10.9x.
@@ -2276,6 +2281,154 @@ the single-thread rows carry more weight than the throughput ones.
   tree. A test that cannot build reports nothing and is indistinguishable from
   one that passes. Fixed in the same commit.
 - `v8bench`'s own gate, shipped against recompiled on 24 inputs, passes.
+
+### F52. The real cross-machine spread is 2.13x, and every earlier spread figure excluded 60% of a nonce
+
+*Measured 2026-10-02 on a 1,962,207-block testnet chain at fork version 14, one
+mining thread, `--offline`, `--fixed-difficulty 100000000` so the miner grinds
+instead of churning block templates.*
+
+Every cross-CPU number in this file before now, including F51's fairness
+argument and the figure in PR #162, comes from `v8bench`. **`v8bench` hands the
+hash a synthetic salt and never calls `get_cna_v6_data`.** The chain fill is
+~60% of a real nonce, so those figures are computed from the 40% that excludes
+the dominant term.
+
+| | 7950X | i7-7700HQ | spread |
+|---|---|---|---|
+| hash core, `v8bench` | 0.535 ms | 1.257 ms | 2.35x |
+| chain fill, by subtraction | ~0.81 ms | ~1.62 ms | ~1.99x |
+| **real nonce, daemon** | **1.348 ms** | **2.874 ms** | **2.13x** |
+| | 742 H/s | ~348 H/s | |
+
+**The real spread is narrower than the published one**, because the chain fill
+is more uniform across machines than the hash core. That is the opposite of the
+direction a reviewer would guess, and it is good news: the algorithm is fairer
+in practice than the benchmark says.
+
+The 60% share is now confirmed three independent ways: the instrumented profile
+at 59.5%, the external review's unscreenable prefix at 63%, and this run's
+1.348 ms against `v8bench`'s 0.535 ms.
+
+#### What it does to the deferral's fairness claim
+
+Reconstructing F51 on real nonces, using its own eager hash-core times:
+
+| | eager | deferred |
+|---|---|---|
+| 7950X | ~1.370 ms | 1.348 ms |
+| i7-7700HQ | ~3.052 ms | 2.874 ms |
+| real spread | 2.23x | **2.13x** |
+
+So the deferral narrows the real spread by about **4.3%**, not the 8.7% F51
+claims from hash-core numbers. It only acts on the 40% of a nonce that is not
+the chain fill. The direction is unchanged and it still costs nothing; the
+magnitude was overstated by roughly 2x.
+
+#### The caveat on the decomposition
+
+The chain-fill row is a subtraction of two different harnesses, and the external
+review's item 4 points out that the daemon's pad is cold where `v8bench`'s is
+warm, because the block-cache walk now runs between the AES fill and the pad's
+first use. That makes the daemon's hash portion the more expensive one, so the
+subtracted fill is an **upper bound** and the true fill is cheaper. The totals
+and the 2.13x are measured directly and do not depend on the split.
+
+That also disposes of item 4 in practice: whatever the cold pad costs, it is
+already inside the 2.874 ms, and the spread that results is better than what was
+being claimed, not worse.
+
+#### Method note worth keeping
+
+`--fixed-difficulty` has to be set **high** here, not low. At the chain's own
+difficulty of 3 the miner finds a block almost every hash, so `mining_status`
+measures block-template construction rather than hashing. The run above used
+100000000, at which no block is found and the reported rate is the hash rate.
+
+### F53. External review of the Phase 6 batch, what it found and what was verified
+
+*Second independent review, 2026-10-02, against `bc42c85`. Recorded with the
+distinction between what was re-derived here and what is being carried on the
+reviewer's word, because that distinction is the point.*
+
+#### Defects found in this branch's own work, all confirmed here before acting
+
+**The sweep log was unbounded, and overflowing it is a stack smash.**
+`salt_pad_v8_defer` wrote `cn_v8_swlog[cn_v8_nsw++]` with no guard, and
+`nsw = (xx-1)*yy`. Consensus draws `xx, yy` in [4,8] so 56 fits in 64, but
+`cn_slow_hash_v14` is exported with unvalidated `uint16_t` and `contrib/`
+already calls it, so `xx=yy=100` wants 9900 entries. **Latent rather than live**:
+no current caller passes anything above 8.
+
+Fixed by flushing and restarting the log when it fills, rather than clamping or
+returning early as suggested, which keeps the hash *correct* at any parameters
+instead of merely failing visibly. Verified: at `xx=yy=100`, about 155 mid-hash
+flushes, the output is byte-identical to the eager form. The regression set is
+now 1615 vectors, the 25x64 grid plus 15 overflow cases.
+
+**A C++ exception could unwind through a C frame.** `v14_fetch_salt` is C++
+called from `cn_v8_core`, which is C. Confirmed reachable rather than assumed:
+`build_block_cache` does `throw0(DB_ERROR(...))` at `db_lmdb.cpp:2450` and
+`get_cna_v6_data` calls it at 2762. Worse than reported: `init_hash()` mallocs
+`text` and `finalize_hash()` frees it, so an unwind leaks it as well as being
+ABI-dependent. The callback body is now wrapped and the failure becomes a
+`false` return from `get_block_longhash_v14`.
+
+**The self-test ignored the seed.** `cn_selftest_salt` took `(void)seed`, so the
+two arms' agreement on the AES fill's final chain state, which is consensus
+input to HC-128, was inferred from the hashes matching rather than checked. Now
+compared directly, with the two capture buffers pre-filled differently so a
+callback that never writes fails instead of passing on two zeroed buffers.
+
+Also taken: `comp()`'s O(sweeps x patches) cost is documented at both ends,
+including that widening the [4,8] draw range flips the deferral from a win to a
+loss **silently**, since it stays bit-identical and no test fails.
+`CN_V8_FETCH_SALT` gained its `do/while(0)`.
+
+#### A real defect in `get_cna_v6_data`, which is deliberately not fixed
+
+Two oddities, the first reported by 0xROOTPLS and the second found by the
+reviewer, both confirmed here by reading the code:
+
+1. `db_lmdb.cpp:2814` is the last statement of the `while (count < 2048)` body,
+   so on loop exit the four `HC128_U32` draws that follow run with no
+   `HC128_NextKeys` between. `HC128_Init` does not touch `state->keystream`, so
+   those draws read the previous key's block.
+2. All four `memcpy` in those lines write to `msg` at offset 0, so three are
+   dead stores and 48 of the 64 bytes handed to `HC128_EncryptMessage` are left
+   over from the previous iteration. Almost certainly meant to be `msg`,
+   `msg+16`, `msg+32`, `msg+48`.
+
+**Neither is being fixed, and "before the fork" would be the wrong call.**
+`get_cna_v6_data` is called by `get_block_longhash_v13` at
+`cryptonote_tx_utils.cpp:689`, so changing it breaks revalidation of every block
+since 4,320,000. Fixing it would mean a v8-private copy, a whole new consensus
+surface, to buy back entropy nobody can predict anyway without doing the fill.
+Both are deterministic, both arms do them, neither is exploitable. Documented
+and left.
+
+#### What is NOT carried over from the review
+
+The reviewer withdrew their earlier "spread is 1.62x" after finding their probe
+never reset `ctx->salt` between hashes, so `salt_pad`'s in-place patches
+accumulated across 750 hashes and `min-of-N` selected whichever accumulated
+state produced large strides. Their corrected figures are a 3.2x screening
+margin and a 1.71x ceiling against an attacker with both fills free.
+
+**Those are their numbers, not reproduced here.** F42's measured figures stand
+as this file's own. The two agree in direction and both say screening does not
+pay, which is the conclusion that matters; the magnitudes have not been
+reconciled and should not be quoted as ours. Their 50-80 ms estimate for the
+startup KAT is likewise unmeasured here.
+
+#### The pattern worth extracting
+
+That salt-reset bug is the **third** time in this effort a confident wrong
+number came from a harness diverging from the thing it measured: the `-O0` build
+trap that reversed the pad conclusion twice, `v8bench` still drawing
+`init_size_blk` after B1 pinned it, and now a probe that never reset the salt.
+All three were caught by a control row or an A/B, none by reading the code.
+F52 is a fourth instance of the same family, found the same way.
 
 ## Working environment
 
