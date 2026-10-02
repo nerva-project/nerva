@@ -570,12 +570,17 @@ static const struct { uint16_t xx, yy; uint32_t iters; unsigned char want[32]; }
 
 /* Fixed salt and fixed draws, so the chain entry's self-test compares the two
  * AES arms rather than the callback. draw_out is NULL when it is called just to
- * fill a salt buffer. */
+ * fill a salt buffer.
+ *
+ * `user`, when non-NULL, is a 32-byte buffer that receives the seed the hash
+ * handed in. The seed is the AES fill's final chain state and is consensus
+ * input to HC-128, so the two arms must agree on it; comparing the resulting
+ * hashes covers it only indirectly. */
 static void cn_selftest_salt(void *user, const unsigned char seed[32], char *salt_out, cn_v8_draw_t *draw_out)
 {
     size_t i;
-    (void)user;
-    (void)seed;
+    if (user != NULL && seed != NULL)
+        memcpy(user, seed, 32);
     for (i = 0; i < CN_SALT_MEMORY; i++)
         salt_out[i] = (char)(i * 31u + 7u);
     if (draw_out != NULL)
@@ -743,11 +748,18 @@ int cn_slow_hash_self_test(void)
      * It shares cn_v8_core with the call above, but the callback hook sits
      * between the fill and the salt, so an arm that mishandled it would be
      * invisible to every check that does not go through it. */
-    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
-    cn_slow_hash_v14_chain_hw(ctx, input, sizeof(input) - 1, hw, 8, cn_selftest_salt, NULL);
-    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
-    cn_slow_hash_v14_chain_sw(ctx, input, sizeof(input) - 1, sw, 8, cn_selftest_salt, NULL);
-    if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
+    {
+        unsigned char seed_hw[32], seed_sw[32];
+        memset(seed_hw, 0, sizeof(seed_hw));
+        memset(seed_sw, 0xff, sizeof(seed_sw));
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        cn_slow_hash_v14_chain_hw(ctx, input, sizeof(input) - 1, hw, 8, cn_selftest_salt, seed_hw);
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        cn_slow_hash_v14_chain_sw(ctx, input, sizeof(input) - 1, sw, 8, cn_selftest_salt, seed_sw);
+        if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
+        /* directly, not inferred from the hashes agreeing */
+        if (memcmp(seed_hw, seed_sw, sizeof(seed_hw)) != 0) ok = 0;
+    }
 
     /* and it must agree with the caller-supplied-salt entry given the same
      * salt and the same draws, which is what stops the two from drifting */
