@@ -105,6 +105,22 @@ void cn_fast_hash(const void *data, size_t length, char *hash);
  * at every (xx, yy) and fills state.init exactly. FINDINGS.md F42. */
 #define CN_V8_INIT_SIZE_BLK 8
 
+/* v8 fetches its chain salt from inside the hash, after the AES fill, and the
+ * seed it passes out is the fill's final chain state. A device that wants to
+ * produce salts for a CPU therefore has to run the whole 1 MB fill per
+ * candidate first, which on anything without an AES unit is ~655K software
+ * block rounds. The per-nonce draws come back with the salt because they are
+ * taken from the salt-advanced keystream and are not knowable any earlier.
+ * PLAN-v8 Phase 6 B2, FINDINGS.md F46. */
+typedef struct {
+    uint16_t xx;
+    uint16_t yy;
+    size_t   iters;
+} cn_v8_draw_t;
+
+typedef void (*cn_v8_salt_fn)(void *user, const unsigned char seed[32],
+                              char *salt_out, cn_v8_draw_t *draw_out);
+
 #define CN_SALT_MEMORY 262144
 
 #define CNA_V6_WINDOW_BLOCKS     100000U        // recent-block window for sliding reads (~5.6 MB)
@@ -191,6 +207,9 @@ void cn_slow_hash_v11(cn_hash_context_t *context, const void *data, size_t lengt
  * v12 and why CNA v8 is called v14. The name previously held CNA v7, which was
  * removed before release and never validated a block, so reuse is safe. */
 void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
+/* Consensus entry for v8: salt fetched inside the hash via salt_fn, seeded
+ * from the AES fill. iters/xx/yy come back through the callback. */
+void cn_slow_hash_v14_chain(cn_hash_context_t *context, const void *data, size_t length, char *hash, uint8_t init_size_blk, cn_v8_salt_fn salt_fn, void *salt_user);
 /* PLAN-v8 Phase 2 prototype; no consensus path calls this. */
 void cn_slow_hash_v15(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 int cn_slow_hash_v15_selftest(void);

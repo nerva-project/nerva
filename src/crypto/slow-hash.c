@@ -61,6 +61,7 @@ extern void cn_slow_hash_v10_hw(cn_hash_context_t *context, const void *data, si
 extern void cn_slow_hash_v11_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 extern void cn_slow_hash_v13_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
 extern void cn_slow_hash_v14_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
+extern void cn_slow_hash_v14_chain_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, uint8_t init_size_blk, cn_v8_salt_fn salt_fn, void *salt_user);
 extern void cn_slow_hash_v15_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 #endif
 
@@ -71,6 +72,7 @@ extern void cn_slow_hash_v10_sw(cn_hash_context_t *context, const void *data, si
 extern void cn_slow_hash_v11_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 extern void cn_slow_hash_v13_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
 extern void cn_slow_hash_v14_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
+extern void cn_slow_hash_v14_chain_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, uint8_t init_size_blk, cn_v8_salt_fn salt_fn, void *salt_user);
 extern void cn_slow_hash_v15_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 extern int cn_slow_hash_v15_selftest(void);
 
@@ -173,6 +175,15 @@ void cn_slow_hash_v14(cn_hash_context_t *ctx, const void *data, size_t length, c
     cn_pads_require(ctx, 1, 0);
     CN_DISPATCH(cn_slow_hash_v14_hw(ctx, data, length, hash, iters, init_size_blk, xx, yy),
                 cn_slow_hash_v14_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy));
+}
+
+/* The consensus entry: the salt is fetched inside the hash, seeded from the
+ * AES fill, and the per-nonce draws come back with it. PLAN-v8 Phase 6 B2. */
+void cn_slow_hash_v14_chain(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, uint8_t init_size_blk, cn_v8_salt_fn salt_fn, void *salt_user)
+{
+    cn_pads_require(ctx, 1, 0);
+    CN_DISPATCH(cn_slow_hash_v14_chain_hw(ctx, data, length, hash, init_size_blk, salt_fn, salt_user),
+                cn_slow_hash_v14_chain_sw(ctx, data, length, hash, init_size_blk, salt_fn, salt_user));
 }
 
 /* CNA v8 plus the floating-point stage. PROTOTYPE: no consensus path routes
@@ -517,6 +528,24 @@ int cn_fp_stage_self_test(void)
     return cn_slow_hash_v15_selftest() == 0 ? 1 : 0;
 }
 
+/* Fixed salt and fixed draws, so the chain entry's self-test compares the two
+ * AES arms rather than the callback. draw_out is NULL when it is called just to
+ * fill a salt buffer. */
+static void cn_selftest_salt(void *user, const unsigned char seed[32], char *salt_out, cn_v8_draw_t *draw_out)
+{
+    size_t i;
+    (void)user;
+    (void)seed;
+    for (i = 0; i < CN_SALT_MEMORY; i++)
+        salt_out[i] = (char)(i * 31u + 7u);
+    if (draw_out != NULL)
+    {
+        draw_out->xx = 3;
+        draw_out->yy = 3;
+        draw_out->iters = 64;
+    }
+}
+
 int cn_slow_hash_self_test(void)
 {
 #if !defined(SLOW_HASH_HW_AES_BUILT)
@@ -591,6 +620,24 @@ int cn_slow_hash_self_test(void)
     cn_slow_hash_v14_hw(ctx, input, sizeof(input) - 1, hw, 64, 8, 3, 3);
     memset(ctx->salt, 0, CN_SALT_MEMORY);
     cn_slow_hash_v14_sw(ctx, input, sizeof(input) - 1, sw, 64, 8, 3, 3);
+    if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
+
+    /* The chain entry, which is the one consensus uses and the one nothing
+     * else can reach: HF14 is not active, so no daemon calls it in anger yet.
+     * It shares cn_v8_core with the call above, but the callback hook sits
+     * between the fill and the salt, so an arm that mishandled it would be
+     * invisible to every check that does not go through it. */
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+    cn_slow_hash_v14_chain_hw(ctx, input, sizeof(input) - 1, hw, 8, cn_selftest_salt, NULL);
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+    cn_slow_hash_v14_chain_sw(ctx, input, sizeof(input) - 1, sw, 8, cn_selftest_salt, NULL);
+    if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
+
+    /* and it must agree with the caller-supplied-salt entry given the same
+     * salt and the same draws, which is what stops the two from drifting */
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+    cn_selftest_salt(NULL, NULL, ctx->salt, NULL);
+    cn_slow_hash_v14_hw(ctx, input, sizeof(input) - 1, sw, 64, 8, 3, 3);
     if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
 
     /* v14 must also differ from v11 on the same inputs, which catches a build

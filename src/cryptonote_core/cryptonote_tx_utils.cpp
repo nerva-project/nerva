@@ -702,6 +702,48 @@ namespace cryptonote
   }
   //---------------------------------------------------------------
   //---------------------------------------------------------------
+  namespace
+  {
+    struct v14_salt_ctx
+    {
+      BlockchainDB *db;
+      uint64_t stable_height;
+      uint64_t height;
+    };
+
+    // Called from inside cn_slow_hash_v14, after the AES fill and before
+    // anything reads the salt. `seed` is the fill's final chain state, so a
+    // device cannot produce salts without first running the whole 1 MB fill.
+    //
+    // The draws stay here, after the fill, because get_cna_v6_data re-seeds its
+    // HC128 state from bytes it has already written: they depend on the salt's
+    // content and cannot be reached by fast-forwarding the keystream. That is
+    // what makes v5's variable work per nonce safe. FINDINGS.md F5, F42.
+    void v14_fetch_salt(void *user, const unsigned char seed[32], char *salt_out, cn_v8_draw_t *draw)
+    {
+      v14_salt_ctx *c = static_cast<v14_salt_ctx *>(user);
+
+      HC128_State rng_state;
+      HC128_Init(&rng_state, const_cast<unsigned char *>(seed), const_cast<unsigned char *>(seed) + 16);
+
+      // v6's windowed fill: ~95% of block reads come from the most recent
+      // CNA_V6_WINDOW_BLOCKS so they stay cache-resident, which stops per-nonce
+      // cost growing with chain length. The other ~5% still draw from the whole
+      // history, so a miner still needs the full block cache.
+      c->db->get_cna_v6_data(salt_out, &rng_state, c->stable_height);
+
+      HC128_NextKeys(&rng_state);
+      size_t rng_key_idx = 0;
+      // xx: [4, 8]
+      draw->xx = (uint16_t)((uint32_t)4U + HC128_U32(&rng_state, &rng_key_idx, 5U));
+      // yy: [4, 8]
+      draw->yy = (uint16_t)((uint32_t)4U + HC128_U32(&rng_state, &rng_key_idx, 5U));
+      // iters_divisor: [1, 64]
+      const uint32_t iters_divisor = (uint32_t)1U + HC128_U32(&rng_state, &rng_key_idx, 64U);
+      draw->iters = (size_t)((c->height + 1) % iters_divisor);
+    }
+  }
+  //---------------------------------------------------------------
   bool get_block_longhash_v14(crypto::cn_hash_context_t *context, BlockchainDB &db, const blobdata &blob, crypto::hash &res, uint64_t height)
   {
     // CryptoNight-Adaptive v8: v5 at v5's pad, with salt_pad's extra-hash
@@ -719,39 +761,17 @@ namespace cryptonote
     db.get_cna_v2_data(&context->random_values, stable_height, CN_SCRATCHPAD_MEMORY_V8);
     context->cached_height = (uint64_t)-1;
 
-    // Make the hashing context unique per nonce by seeding it with a hash
-    // of the hashing blob for a given nonce.
-    crypto::hash h;
-    get_blob_hash(blob, h);
+    // The salt is fetched from inside the hash, not here, so its seed can be
+    // the AES fill's final chain state. See v14_fetch_salt above and
+    // CN_V8_FETCH_SALT. init_size_blk is pinned, not drawn, so it is known
+    // before the fill, which is what makes that ordering possible at all.
+    v14_salt_ctx sctx;
+    sctx.db = &db;
+    sctx.stable_height = stable_height;
+    sctx.height = height;
 
-    HC128_State rng_state;
-    HC128_Init(&rng_state, (unsigned char*)h.data, (unsigned char*)h.data+16);
-
-    // v6's windowed fill: ~95% of block reads come from the most recent
-    // CNA_V6_WINDOW_BLOCKS so they stay cache-resident, which stops per-nonce
-    // cost growing with chain length. The other ~5% still draw from the whole
-    // history, so a miner still needs the full block cache. That was a sync
-    // fix, independent of which hash follows it.
-    db.get_cna_v6_data(context->salt, &rng_state, stable_height);
-
-    // Drawn AFTER the fill, and that ordering is load-bearing: get_cna_v6_data
-    // re-seeds its HC128 state from bytes it has written, so these depend on the
-    // salt's content and cannot be reached by fast-forwarding the keystream.
-    // That is what makes v5's variable work per nonce safe. FINDINGS.md F5.
-    HC128_NextKeys(&rng_state);
-    size_t rng_key_idx = 0;
-    // xx: [4, 8]
-    const uint32_t xx = (uint32_t)4U + HC128_U32(&rng_state, &rng_key_idx, 5U);
-    // yy: [4, 8]
-    const uint32_t yy = (uint32_t)4U + HC128_U32(&rng_state, &rng_key_idx, 5U);
-    // iters_divisor: [1, 64]
-    const uint32_t iters_divisor = (uint32_t)1U + HC128_U32(&rng_state, &rng_key_idx, 64U);
-    const uint32_t iters = ((height + 1) % iters_divisor);
-
-    // init_size_blk is pinned, not drawn: see CN_V8_INIT_SIZE_BLK. Not drawing
-    // it also shifts iters_divisor one keystream word earlier than v11, which
-    // is intended and is part of what makes v14's output its own.
-    crypto::cn_slow_hash_v14(context, blob.data(), blob.size(), res, iters, CN_V8_INIT_SIZE_BLK, xx, yy);
+    crypto::cn_slow_hash_v14_chain(context, blob.data(), blob.size(), res,
+                                   CN_V8_INIT_SIZE_BLK, v14_fetch_salt, &sctx);
 
     return true;
   }

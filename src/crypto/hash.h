@@ -79,6 +79,10 @@ namespace crypto {
     cn_slow_hash_v14(context, data, length, reinterpret_cast<char *>(&hash), iters, init_size_blk, xx, yy);
   }
 
+  inline void cn_slow_hash_v14_chain(cn_hash_context_t *context, const void *data, size_t length, hash &hash, uint8_t init_size_blk, cn_v8_salt_fn salt_fn, void *salt_user) {
+    cn_slow_hash_v14_chain(context, data, length, reinterpret_cast<char *>(&hash), init_size_blk, salt_fn, salt_user);
+  }
+
   inline void cn_slow_hash_v10(cn_hash_context_t *context, const void *data, size_t length, hash &hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww) {
     cn_slow_hash_v10(context, data, length, reinterpret_cast<char *>(&hash), iters, init_size_blk, xx, yy, zz, ww);
   }

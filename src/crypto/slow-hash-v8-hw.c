@@ -40,6 +40,8 @@
 #define CN_SCRATCHPAD_MEMORY CN_SCRATCHPAD_MEMORY_V8
 
 #define cn_slow_hash_v14 cn_slow_hash_v14_hw
+#define cn_slow_hash_v14_chain cn_slow_hash_v14_chain_hw
+#define CN_V8_EMIT_CHAIN 1
 
 #include "slow-hash.h"
 #include "slow-hash-v8-impl.h"

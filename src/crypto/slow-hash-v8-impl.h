@@ -49,17 +49,37 @@
 #define CN_FP_STAGE() do { } while (0)
 #endif
 
+/* Runs between the AES fill and the first thing that reads the salt. `text`
+ * holds the fill's final chain state at this point, so the seed cannot be
+ * produced without the fill; init_size_byte is 32 at the smallest blk, so
+ * text[0..32) is always there. A NULL salt_fn leaves the context's salt and
+ * the caller's parameters alone, which is what the benchmarks and the
+ * self-test want. PLAN-v8 Phase 6 B2. */
+#define CN_V8_FETCH_SALT()                                   \
+    if (salt_fn != NULL)                                     \
+    {                                                        \
+        cn_v8_draw_t draw;                                   \
+        draw.xx = xx;                                        \
+        draw.yy = yy;                                        \
+        draw.iters = iters;                                  \
+        salt_fn(salt_user, text, salt, &draw);               \
+        xx = draw.xx;                                        \
+        yy = draw.yy;                                        \
+        iters = draw.iters;                                  \
+    }
+
 #if !defined(CN_USE_SOFTWARE_AES)
 
 /* Hardware-AES arm. cn_slow_hash_v11 with salt_pad_v8 in place of salt_pad.
  * Kept separate because v11 still validates major_version 11 and 12. */
-void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
+static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, cn_v8_salt_fn salt_fn, void *salt_user)
 {
     uint8_t * const hp_state = CN_V8_PAD(context);
     char * const salt = context->salt;
     char salt_hash[HASH_SIZE];
     init_hash();
     expand_key();
+    CN_V8_FETCH_SALT();
     randomize_scratchpad_256k_v8(context->random_values, salt, hp_state);
     xor_u64();
 
@@ -103,13 +123,14 @@ void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t lengt
 
 /* Software-AES arm. Copied from cn_slow_hash_v11, not from the arm above:
  * r2 aliases &b here and &c there. */
-void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
+static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, cn_v8_salt_fn salt_fn, void *salt_user)
 {
     uint8_t * const hp_state = CN_V8_PAD(context);
     char * const salt = context->salt;
     char salt_hash[HASH_SIZE];
     init_hash();
     expand_key();
+    CN_V8_FETCH_SALT();
     randomize_scratchpad_256k_v8(context->random_values, salt, hp_state);
     xor_u64();
 
@@ -141,3 +162,21 @@ void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t lengt
 }
 
 #endif /* CN_USE_SOFTWARE_AES */
+
+/* Salt supplied by the caller. Benchmarks, the self-test and the resized
+ * builds use this; nothing in consensus does. */
+void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
+{
+    cn_v8_core(context, data, length, hash, iters, init_size_blk, xx, yy, NULL, NULL);
+}
+
+#if defined(CN_V8_EMIT_CHAIN)
+/* The consensus entry point. It takes no iters/xx/yy because the callback
+ * supplies them, which is the whole point: they are drawn from the keystream
+ * the chain fill advanced, so they cannot be known before the fill and the
+ * fetch have both happened. */
+void cn_slow_hash_v14_chain(cn_hash_context_t *context, const void *data, size_t length, char *hash, uint8_t init_size_blk, cn_v8_salt_fn salt_fn, void *salt_user)
+{
+    cn_v8_core(context, data, length, hash, 0, init_size_blk, 0, 0, salt_fn, salt_user);
+}
+#endif

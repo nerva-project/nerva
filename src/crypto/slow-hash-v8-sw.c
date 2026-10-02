@@ -40,6 +40,8 @@
 #define CN_SCRATCHPAD_MEMORY CN_SCRATCHPAD_MEMORY_V8
 
 #define cn_slow_hash_v14 cn_slow_hash_v14_sw
+#define cn_slow_hash_v14_chain cn_slow_hash_v14_chain_sw
+#define CN_V8_EMIT_CHAIN 1
 
 #define CN_FORCE_SOFTWARE_AES 1
 

@@ -934,6 +934,38 @@ With B1 done this is a pure reorder: fill, seed, salt fetch, rest.
 what keeps live HF13 safe, and it is not optional: that function is shared with
 `get_block_longhash_v13`, live since 4,320,000.
 
+**Implemented as a callback, not as the `_fill`/`_rest` split the report
+proposes.** `init_hash()` declares every local as a macro, `state`, `text`,
+`expandedKey`, `a`, `b`, `c` and `tweak1_2`, so a split would have to marshal
+all of it across the boundary in both AES arms, which is where a HW/SW
+divergence would hide. Instead `cn_slow_hash_v14` takes a `cn_v8_salt_fn` and
+calls it between `expand_key()` and `randomize_scratchpad_256k_v8`, in one
+stack frame with nothing marshalled.
+
+Two entry points, so the benchmarks and the resized `v5pad.inc` builds keep
+compiling untouched, which matters because `contrib/` is not in the daemon
+build and breakage there would not be caught:
+
+- `cn_slow_hash_v14(...)` keeps its exact signature and passes NULL.
+- `cn_slow_hash_v14_chain(ctx, data, len, hash, blk, salt_fn, user)` is the
+  consensus entry and takes **no** `iters`, `xx` or `yy`, because the callback
+  supplies them. It is therefore structurally impossible to call the consensus
+  path with parameters known before the fill and the fetch have both run.
+
+The blob hash is no longer used to seed the salt and does not need to be:
+`expand_key()` opens with `hash_process(&state.hs, data, length)`, so the fill
+is already keccak'd from the blob and the seed depends on it transitively. The
+nonce's dependency chain is now blob, keccak, 1 MB AES fill, seed, chain salt,
+draws, rest of hash, with every link forced.
+
+**Tested by `contrib/hf14checks/t_v8_chain.c` and by `cn_slow_hash_self_test`.**
+HF14 is not active, so nothing else reaches the chain entry and without these it
+would ship having never run. The load-bearing assertion is that the seed moves
+with `init_size_blk`: that is what distinguishes "the fill produced this" from
+"`keccak(blob)` produced this", since `blk` changes how the fill chains but
+cannot change `keccak(blob)`. A future simplification back to the blob hash
+would pass every test that only compares hashes.
+
 Stated limits, which are real: it does not stop a device that has AES, so FPGA
 and ASIC are unaffected, and it does not stop a GPU computing the whole hash,
 which rests on the ordinary argument instead.
