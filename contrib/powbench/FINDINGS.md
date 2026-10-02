@@ -2224,6 +2224,18 @@ control row (`v5ref` vs `v5ctl` at ~1.00x) exists to catch it, and if it is not
         contrib/epee/src/memwipe.c -pthread -o screen_grid -lm
     ./screen_grid 51 0.927        # rounds, chain fill cost in ms
 
+    # regenerate the known-answer vectors in cn_slow_hash_known_answer_test.
+    # Same source list as screen_grid above, swapping in t_gen_kat.c. Paste the
+    # output over the tables in slow-hash.c. ONLY do this when the algorithm is
+    # meant to change, and say so in the commit: the whole point of the vectors
+    # is that regenerating them is a deliberate act.
+    #
+    # The v10/v11/v13 tables were generated from master, so regenerating them
+    # from a branch that touches those algorithms would hide exactly what they
+    # exist to catch. Generate those from master, in a worktree if need be.
+    gcc ... contrib/powbench/t_gen_kat.c <same sources> -o t_gen_kat
+    ./t_gen_kat
+
 Stop mining and close browsers before running it. F41's method notes apply
 unchanged: a contaminated run of this probe reads as a cell effect.
 
