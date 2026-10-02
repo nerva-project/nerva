@@ -1013,6 +1013,88 @@ surface permanently for a cosmetic gain. Record it in the fork notes.
    person holds is a fairness problem; the same 2.0x everyone holds is the
    baseline.
 
+### A1b. Sweep deferral, the implementation plan
+
+Not started. ~1.18x of verification, non-consensus, output must be
+bit-identical. F44 has the measurement and the reasoning; this is how to build
+it. Written down before starting because it is the one piece of Phase 6 most
+likely to be got wrong on a first attempt, and because a half-finished version
+leaves no safe intermediate state to commit.
+
+#### What makes it possible
+
+`salt_pad_v8`'s second loop is `hp_state[j] ^= salt[x++]`. XOR commutes and the
+written value never feeds a branch or an address, so the pad after N sweeps is
+the pad before them XOR the union of their contributions, in any order. The
+sweeps can therefore be recorded and applied once.
+
+The only thing that observes the pad between sweeps is the CN step, and it
+touches exactly two 16-byte cells: `pre_aes` at `state_index(a)` and
+`post_aes_variant` at `state_index(c)`. At 12 to 56 k/l steps plus at most 63
+`iters` steps that is at most ~238 cells per nonce, ~100 typically.
+
+#### Why it cannot be done by editing the shared macros
+
+`pre_aes` and `post_aes_variant` live in `slow-hash.h` and are expanded by
+`cn_slow_hash_v10`, `v11` and `v13`, all of which validate mainnet today.
+PLAN-v8's standing rule applies: do not edit them in place. **v8 needs private
+copies**, the same way `salt_pad_v8` is a copy of `salt_pad` rather than a
+parameterisation of it.
+
+Name them `pre_aes_v8` and `post_aes_variant_v8`, put them in `slow-hash.h`
+beside `salt_pad_v8`, and have only `slow-hash-v8-impl.h` expand them. The
+diff to the shared macros must be zero.
+
+#### The four pieces
+
+1. **The log.** Per nonce, at most 56 entries of `{ uint32_t o, s; }`, the
+   sweep's start offset and stride, plus the patch bytes each sweep consumed.
+   `salt_pad_v8` stops touching the pad and appends instead.
+
+2. **Reconstruction.** `comp(log, salt, j)` returns the XOR of every logged
+   sweep's contribution landing in `[j, j+16)`. For sweep k with start `o` and
+   stride `s`, the first index at or after `j` is
+   `x = (j <= o) ? 0 : (j - o + s - 1) / s`, and it walks `pos = o + x*s` while
+   `pos < j + 16`. Cost is one pass over the log per cell, ~30 entries, ~100
+   cells per nonce.
+
+3. **The CN step reads and writes through it.** `pre_aes_v8` loads
+   `pad[j] ^ comp(j)`; `post_aes_variant_v8` stores `result ^ comp(j)`. The
+   same `comp(j)` value serves both, so compute it once per cell.
+
+4. **Finalise.** Before `finalize_hash`, walk the pad in L1-sized tiles and
+   apply every logged sweep to each tile, so the byte traffic happens with the
+   tile resident instead of ~30 times over 1 MB.
+
+#### The trap
+
+The salt is **patched in place** by `salt_pad_v8` between sweeps, so sweep k
+reads a different salt than sweep k+1. The log must therefore record the salt
+bytes each sweep actually consumed, or reconstruct the patch history, not just
+`(o, s)`. Getting this wrong produces a hash that is self-consistent and wrong,
+which is exactly the failure F44 warns about. The extra-hash memoization
+already landed makes the patch sequence easier to reason about, since only the
+patch offsets vary, not the digests.
+
+#### Gates, in order
+
+1. `cn_slow_hash_known_answer_test` must pass unchanged. It is the whole reason
+   this is attempted at all: the edit moves both AES arms together, so HW == SW
+   cannot see an error in it.
+2. `cn_slow_hash_self_test` still passes, both arms.
+3. `contrib/hf14checks/t_v8_chain` still passes.
+4. `screen_grid` over all 75 cells, old against new, hashes identical. The KAT
+   is six vectors; this is the exhaustive version and should be run once before
+   committing even though it is not kept.
+5. Measure with `v8bench`, reading the **v8:v5 ratio** rather than the absolute,
+   since v5 does not use `salt_pad_v8` and is therefore the control.
+
+#### If it does not work out
+
+It is non-consensus and the algorithm does not depend on it. Dropping it costs
+1.18x of verification on a hash that is already 11x cheaper than v6. Do not let
+it hold up the testnet round, which is the only thing that has never run.
+
 ### Gates before merge, since nothing pre-HF14 may break
 
 Every B item touches only `get_block_longhash_v14` and the v14 hash bodies.
