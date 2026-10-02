@@ -98,6 +98,13 @@ void cn_fast_hash(const void *data, size_t length, char *hash);
  * change if that is ever revisited. */
 #define CN_SCRATCHPAD_MEMORY_V8 (1024*1024)
 
+/* v8 pins init_size_blk instead of drawing it per nonce. The draw changes the
+ * AES operation count by zero (pad/(blk*16) iterations of blk blocks is pad/16
+ * blocks at any width) and the time by up to 2.24x, so it was the largest
+ * screenable axis in the algorithm and bought nothing. 8 is the fastest width
+ * at every (xx, yy) and fills state.init exactly. FINDINGS.md F42. */
+#define CN_V8_INIT_SIZE_BLK 8
+
 #define CN_SALT_MEMORY 262144
 
 #define CNA_V6_WINDOW_BLOCKS     100000U        // recent-block window for sliding reads (~5.6 MB)

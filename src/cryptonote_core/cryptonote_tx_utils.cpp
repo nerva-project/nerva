@@ -744,13 +744,14 @@ namespace cryptonote
     const uint32_t xx = (uint32_t)4U + HC128_U32(&rng_state, &rng_key_idx, 5U);
     // yy: [4, 8]
     const uint32_t yy = (uint32_t)4U + HC128_U32(&rng_state, &rng_key_idx, 5U);
-    // init_size_blk: 2, 4, or 8  (2 << [0, 2])
-    const uint8_t init_size_blk = (uint8_t)2U << ((uint8_t)HC128_U32(&rng_state, &rng_key_idx, 3U));
     // iters_divisor: [1, 64]
     const uint32_t iters_divisor = (uint32_t)1U + HC128_U32(&rng_state, &rng_key_idx, 64U);
     const uint32_t iters = ((height + 1) % iters_divisor);
 
-    crypto::cn_slow_hash_v14(context, blob.data(), blob.size(), res, iters, init_size_blk, xx, yy);
+    // init_size_blk is pinned, not drawn: see CN_V8_INIT_SIZE_BLK. Not drawing
+    // it also shifts iters_divisor one keystream word earlier than v11, which
+    // is intended and is part of what makes v14's output its own.
+    crypto::cn_slow_hash_v14(context, blob.data(), blob.size(), res, iters, CN_V8_INIT_SIZE_BLK, xx, yy);
 
     return true;
   }

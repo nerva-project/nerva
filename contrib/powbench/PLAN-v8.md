@@ -908,10 +908,15 @@ protecting it matters; everything else is cost.
 to 2.24x** (F42). It is the largest screenable axis in the algorithm and it buys
 nothing.
 
-Pinning it removes that axis, cuts verify cost by roughly 35% because blk=8 is
-the fastest cell at every `(xx, yy)`, removes a cross-machine variance source
-because narrow cores suffer most at blk=2, and resolves B2's circular dependency
-for free.
+Pinning it removes that axis and **cuts verify cost by a measured 26.3%**,
+0.554 ms against 0.751 ms for the uniform draw, at identical AES work. blk=8 is
+the fastest width at every `(xx, yy)`: the column means are 0.997, 0.701 and
+0.554 ms for blk 2, 4 and 8. It also removes a cross-machine variance source,
+because narrow cores suffer most at blk=2, and cuts the free-fill screening
+ceiling from 2.15x to 1.59x by removing the dominant band. And it resolves B2's
+circular dependency for free.
+
+7950X, one thread, 51 interleaved rounds, medians, mining and browsers stopped.
 
 Preferred over making it per-block, which would leave some blocks 2.24x slower
 to verify than others for no gain.

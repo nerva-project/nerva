@@ -124,6 +124,20 @@ int main(int argc, char **argv) {
                    (4+i-1)*(4+j), 4+i, 4+j, v[0], v[1], v[2], v[0]/v[2]);
         }
 
+    /* B1's A/B: drawing blk uniformly from {2,4,8} against pinning it to 8.
+     * The AES operation count is identical either way, so the gap is pure
+     * scheduling width. PLAN-v8 Phase 6 B1. */
+    printf("\nmean ms per hash by init_size_blk, 25 (xx,yy) cells each\n");
+    double blkmean[NBLK];
+    for (int b = 0; b < NBLK; b++) {
+        double s = 0;
+        int n2 = 0;
+        for (int k = 0; k < NCELL; k++)
+            if (c[k].blk == blks[b]) { s += c[k].med; n2++; }
+        blkmean[b] = s / n2;
+        printf("  blk=%d  %6.3f ms  (%d cells)\n", blks[b], blkmean[b], n2);
+    }
+
     double mn = 1e9, mx = 0, sum = 0;
     int kmin = 0;
     for (int k = 0; k < NCELL; k++) {
@@ -137,6 +151,9 @@ int main(int argc, char **argv) {
     printf("  mean %6.3f ms\n", mean);
     printf("  max  %6.3f ms\n", mx);
     printf("  spread %.2fx\n", mx / mn);
+    printf("\nB1: pinning blk=8 costs %.3f ms against %.3f ms for the uniform\n"
+           "    draw over {2,4,8}, a %.1f%% saving per hash at the same AES work\n",
+           blkmean[NBLK - 1], mean, 100.0 * (1.0 - blkmean[NBLK - 1] / mean));
 
     /* --- best achievable screen, over the real joint distribution --- */
     for (int a = 0; a < NCELL; a++)       /* sort cells by cost, cheapest first */
