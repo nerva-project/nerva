@@ -709,6 +709,7 @@ namespace cryptonote
       BlockchainDB *db;
       uint64_t stable_height;
       uint64_t height;
+      bool failed;
     };
 
     // Called from inside cn_slow_hash_v14, after the AES fill and before
@@ -723,6 +724,14 @@ namespace cryptonote
     {
       v14_salt_ctx *c = static_cast<v14_salt_ctx *>(user);
 
+      // Everything below is wrapped because this is a C++ function called from
+      // C: cn_v8_core is a C frame, and get_cna_v6_data reaches build_block_cache,
+      // which does throw0(DB_ERROR(...)). Letting that unwind through cn_v8_core
+      // is ABI-dependent and would skip the frame's cleanup, including the
+      // malloc'd `text` that init_hash owns and finalize_hash frees. Record the
+      // failure instead; get_block_longhash_v14 turns it into a false return.
+      try
+      {
       HC128_State rng_state;
       HC128_Init(&rng_state, const_cast<unsigned char *>(seed), const_cast<unsigned char *>(seed) + 16);
 
@@ -734,6 +743,11 @@ namespace cryptonote
 
       HC128_NextKeys(&rng_state);
       size_t rng_key_idx = 0;
+      // These two bound the sweep count, (xx-1)*yy, which the deferral in
+      // slow-hash-v8-defer.h reconstructs at O(sweeps * patches) per pad read.
+      // Widening either range makes the deferral slower superlinearly while
+      // keeping it bit-identical, so nothing would fail; re-measure it against
+      // the eager form before changing these.
       // xx: [4, 8]
       draw->xx = (uint16_t)((uint32_t)4U + HC128_U32(&rng_state, &rng_key_idx, 5U));
       // yy: [4, 8]
@@ -741,6 +755,17 @@ namespace cryptonote
       // iters_divisor: [1, 64]
       const uint32_t iters_divisor = (uint32_t)1U + HC128_U32(&rng_state, &rng_key_idx, 64U);
       draw->iters = (size_t)((c->height + 1) % iters_divisor);
+      }
+      catch (const std::exception &e)
+      {
+        MERROR("v14 salt fetch failed: " << e.what());
+        c->failed = true;
+      }
+      catch (...)
+      {
+        MERROR("v14 salt fetch failed with an unknown exception");
+        c->failed = true;
+      }
     }
   }
   //---------------------------------------------------------------
@@ -769,9 +794,15 @@ namespace cryptonote
     sctx.db = &db;
     sctx.stable_height = stable_height;
     sctx.height = height;
+    sctx.failed = false;
 
     crypto::cn_slow_hash_v14_chain(context, blob.data(), blob.size(), res,
                                    CN_V8_INIT_SIZE_BLK, v14_fetch_salt, &sctx);
+
+    // The hash ran to completion either way, so the C frame cleaned up after
+    // itself; res is simply meaningless if the salt never arrived.
+    if (sctx.failed)
+      return false;
 
     return true;
   }
