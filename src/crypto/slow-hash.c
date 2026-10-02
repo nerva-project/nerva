@@ -534,6 +534,28 @@ int cn_fp_stage_self_test(void)
     return cn_slow_hash_v15_selftest() == 0 ? 1 : 0;
 }
 
+/* Known-answer vectors for the algorithms that validate mainnet today,
+ * generated from master. v8 must not move these: the branch carries them
+ * unchanged so CI proves on every platform that v10, v11 and v13 are
+ * untouched, rather than a reviewer taking a byte-identical claim on
+ * trust. Input is "nerva live-algorithm known-answer vector".
+ * v13's seed is seed[i] = i * 7 + 3. */
+static const struct { uint32_t iters; uint8_t blk; uint16_t xx, yy, zz, ww;
+                     unsigned char want[32]; } cn_v10_kat[] = {
+    { 0, 8, 2, 2, 2, 2, {0xd4,0xb2,0xe4,0x3a,0x9e,0xa2,0x76,0x56,0x43,0x67,0x5c,0x95,0x90,0xf3,0xa4,0x67,0x05,0x47,0x19,0x08,0x39,0x73,0x4d,0x5d,0x51,0x82,0xf7,0x2d,0x97,0xdb,0x21,0x89} },
+    { 17, 4, 3, 2, 2, 3, {0xaa,0x28,0x47,0x97,0x29,0xb0,0xb7,0xb2,0x52,0x51,0x4c,0xab,0x6a,0xde,0xd6,0x64,0xc2,0x1c,0x0b,0x27,0xad,0x17,0xab,0xef,0xb0,0xb7,0xbc,0x40,0x78,0xf9,0xcc,0x7d} },
+    { 64, 2, 2, 3, 3, 2, {0x6c,0x81,0x0d,0x87,0xcd,0xe4,0xcf,0x51,0x32,0x7f,0xa9,0x68,0x63,0xee,0x74,0xcc,0x31,0x8a,0x24,0x35,0x10,0x07,0x51,0x84,0xcc,0x77,0x1d,0xf7,0xc9,0xbc,0xf4,0x76} },
+};
+
+static const struct { uint32_t iters; uint8_t blk; uint16_t xx, yy;
+                     unsigned char want[32]; } cn_v11_kat[] = {
+    { 0, 8, 4, 4, {0x0f,0xbd,0xf1,0x9f,0x9c,0xfc,0x63,0x40,0x11,0x14,0xe4,0x2a,0x02,0xd0,0x45,0x6b,0xc0,0x8c,0xab,0x20,0xc2,0x18,0x89,0x94,0xf4,0xa7,0x50,0xf7,0xfa,0x67,0xfa,0xc2} },
+    { 17, 4, 5, 6, {0x7d,0xf4,0xca,0xdf,0xfe,0x45,0x85,0x9d,0xd9,0x87,0xbd,0x28,0xfd,0xb5,0xad,0xa1,0x46,0xf1,0xe5,0xf5,0x5b,0xa6,0xa0,0xc2,0x21,0xc6,0x33,0xd9,0x7a,0x0c,0x9a,0x67} },
+    { 63, 2, 8, 8, {0xc8,0x4d,0x83,0xfc,0x47,0xda,0x91,0xb2,0xfa,0xab,0xc8,0xf9,0x13,0xc6,0xbe,0x26,0x93,0x4e,0xee,0x8f,0x22,0x75,0x6a,0x57,0x77,0xc3,0x59,0x99,0xdb,0x33,0x20,0xc5} },
+};
+
+static const unsigned char cn_v13_kat[32] = {0xa0,0x64,0x2e,0x89,0x8c,0x90,0x08,0x4f,0x5c,0x7c,0x08,0x4d,0xc0,0x6d,0x4a,0x32,0x3c,0xf2,0x78,0x06,0x23,0xa7,0xc5,0x67,0x67,0xc7,0xcf,0xe4,0x02,0x8d,0x0e,0x3c};
+
 /* v8 known-answer vectors, generated from the shipped implementation.
  * salt and random_values are zeroed before each case so the vector
  * depends only on (input, iters, blk, xx, yy). */
@@ -562,6 +584,82 @@ static void cn_selftest_salt(void *user, const unsigned char seed[32], char *sal
         draw_out->yy = 3;
         draw_out->iters = 64;
     }
+}
+
+/* Known-answer vectors, checked on every build and every platform.
+ *
+ * Separate from cn_slow_hash_self_test on purpose: that one compares the two
+ * AES arms against each other, so it returns early when there is no hardware
+ * AES, which is exactly the platform where a divergence is most likely and
+ * where nothing else would notice. This runs through the dispatchers, so it
+ * checks whichever arm the platform actually uses.
+ *
+ * It also catches what HW == SW structurally cannot: a change that moves both
+ * arms together, which is what editing a macro they share does.
+ *
+ * Returns 1 on pass. An allocation failure returns 1 as well, since it says
+ * nothing about whether the hashes are right. */
+int cn_slow_hash_known_answer_test(void)
+{
+    static const char live_in[] = "nerva live-algorithm known-answer vector";
+    static const char v8_in[] = "nerva cna v8 known-answer vector";
+    cn_hash_context_t *ctx = cn_hash_context_create();
+    char h[HASH_SIZE];
+    uint8_t seed[32];
+    size_t k;
+    int ok = 1, i;
+
+    if (ctx == NULL)
+        return 1;
+    for (i = 0; i < 32; i++)
+        seed[i] = (uint8_t)(i * 7u + 3u);
+
+    /* the dispatchers allocate lazily, so run one hash before zeroing anything */
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+    cn_slow_hash_v11(ctx, live_in, sizeof(live_in) - 1, h, 8, 8, 4, 4);
+    if (ctx->salt == NULL)
+    {
+        cn_hash_context_free(ctx);
+        return 1;
+    }
+
+    for (k = 0; k < sizeof(cn_v10_kat) / sizeof(cn_v10_kat[0]); k++)
+    {
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        memset(ctx->salt, 0, CN_SALT_MEMORY);
+        cn_slow_hash_v10(ctx, live_in, sizeof(live_in) - 1, h,
+                         cn_v10_kat[k].iters, cn_v10_kat[k].blk, cn_v10_kat[k].xx,
+                         cn_v10_kat[k].yy, cn_v10_kat[k].zz, cn_v10_kat[k].ww);
+        if (memcmp(h, cn_v10_kat[k].want, HASH_SIZE) != 0) ok = 0;
+    }
+
+    for (k = 0; k < sizeof(cn_v11_kat) / sizeof(cn_v11_kat[0]); k++)
+    {
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        memset(ctx->salt, 0, CN_SALT_MEMORY);
+        cn_slow_hash_v11(ctx, live_in, sizeof(live_in) - 1, h,
+                         cn_v11_kat[k].iters, cn_v11_kat[k].blk,
+                         cn_v11_kat[k].xx, cn_v11_kat[k].yy);
+        if (memcmp(h, cn_v11_kat[k].want, HASH_SIZE) != 0) ok = 0;
+    }
+
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+    memset(ctx->salt, 0, CN_SALT_MEMORY);
+    cn_slow_hash_v13(ctx, live_in, sizeof(live_in) - 1, h, seed);
+    if (memcmp(h, cn_v13_kat, HASH_SIZE) != 0) ok = 0;
+
+    for (k = 0; k < sizeof(cn_v14_kat) / sizeof(cn_v14_kat[0]); k++)
+    {
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        memset(ctx->salt, 0, CN_SALT_MEMORY);
+        cn_slow_hash_v14(ctx, v8_in, sizeof(v8_in) - 1, h,
+                         cn_v14_kat[k].iters, CN_V8_INIT_SIZE_BLK,
+                         cn_v14_kat[k].xx, cn_v14_kat[k].yy);
+        if (memcmp(h, cn_v14_kat[k].want, HASH_SIZE) != 0) ok = 0;
+    }
+
+    cn_hash_context_free(ctx);
+    return ok;
 }
 
 int cn_slow_hash_self_test(void)
@@ -657,26 +755,6 @@ int cn_slow_hash_self_test(void)
     cn_selftest_salt(NULL, NULL, ctx->salt, NULL);
     cn_slow_hash_v14_hw(ctx, input, sizeof(input) - 1, sw, 64, 8, 3, 3);
     if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
-
-    /* Known-answer vectors. HW == SW cannot catch a change that moves both
-     * arms together, which is what editing a shared macro like salt_pad_v8
-     * does, and neither can the v14-against-v11 check below. These pin what
-     * v8 computes so an unintended change to it fails the build's own
-     * self-test rather than the chain. Regenerate them only when the
-     * algorithm is meant to change, and say so in the commit. */
-    {
-        static const char kat_in[] = "nerva cna v8 known-answer vector";
-        size_t ki;
-        for (ki = 0; ki < sizeof(cn_v14_kat) / sizeof(cn_v14_kat[0]); ki++)
-        {
-            memset(&ctx->random_values, 0, sizeof(ctx->random_values));
-            memset(ctx->salt, 0, CN_SALT_MEMORY);
-            cn_slow_hash_v14(ctx, kat_in, sizeof(kat_in) - 1, hw,
-                             cn_v14_kat[ki].iters, CN_V8_INIT_SIZE_BLK,
-                             cn_v14_kat[ki].xx, cn_v14_kat[ki].yy);
-            if (memcmp(hw, cn_v14_kat[ki].want, HASH_SIZE) != 0) ok = 0;
-        }
-    }
 
     /* v14 must also differ from v11 on the same inputs, which catches a build
      * where the variant silently failed to take effect (stale macro, bad copy,

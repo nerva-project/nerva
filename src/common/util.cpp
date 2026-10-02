@@ -807,6 +807,19 @@ std::string get_nix_version_display_string()
   bool check_aesni()
   {
 #if !defined NO_AES
+    // Before the HW-vs-SW comparison, and outside it: the known-answer vectors
+    // run on every platform, including the software-AES-only ones where the
+    // self-test below returns early. They are also the only check that can see
+    // a change which moves both arms together.
+    if (!crypto::cn_slow_hash_known_answer_test())
+    {
+        MGUSER_RED(
+            "Hash known-answer test FAILED: this build does not compute the same "
+            "hashes as the network. Refusing to start; it would reject valid "
+            "blocks or mine invalid ones.");
+        return false;
+    }
+
     if (crypto::cn_hardware_aes_supported())
     {
         if (!crypto::cn_slow_hash_self_test())

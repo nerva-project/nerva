@@ -196,6 +196,10 @@ int cn_hardware_aes_supported(void);
  * on success or when the HW path isn't built/active (nothing to verify), and
  * 0 if HW and SW disagree, which would mean wrong PoW. */
 int cn_slow_hash_self_test(void);
+/* Known-answer vectors for v10, v11, v13 and v14. Runs on every platform,
+ * unlike cn_slow_hash_self_test which needs hardware AES to compare against.
+ * Returns 1 on pass. */
+int cn_slow_hash_known_answer_test(void);
 
 void cn_slow_hash(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters);
 void cn_slow_hash_v11(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
