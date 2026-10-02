@@ -30,6 +30,11 @@ endif ()
 
 include_directories(
   "${NERVA_ROOT}/src"
+  # t_v8_chain.c includes "hash-ops.h" the way the crypto sources do, rather
+  # than "crypto/hash-ops.h". Without this the target does not compile, which
+  # is how it sat from the commit that registered it until this one: a test
+  # that cannot build reports nothing and looks like a test that passes.
+  "${NERVA_ROOT}/src/crypto"
   "${NERVA_ROOT}/contrib/epee/include"
   "${NERVA_ROOT}/external/easylogging++"
   "${NERVA_ROOT}/external"
