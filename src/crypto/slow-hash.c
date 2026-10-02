@@ -248,13 +248,19 @@ int cn_page_tier_actual(const void *p, size_t size, int requested_tier)
 
 /* The page tier of whichever buffer carries the hashrate at this fork version,
  * as the kernel actually backed it: the 8 MB v6 pad at v13, the 1 MB legacy
- * pad before that. Call it after a hash of that
- * version has run, or the buffer will not be allocated yet. */
+ * pad everywhere else, v14 included. Call it after a hash of that
+ * version has run, or the buffer will not be allocated yet.
+ *
+ * v13 exactly, not >= 13: v14 hashes from the legacy pad (CN_V8_PAD) and its
+ * dispatcher asks for cn_pads_require(ctx, 1, 0), so cna_scratchpad is never
+ * allocated at v14. Reading its tier returned the is_mapped field of a NULL
+ * buffer, which is CN_PAGES_MALLOC, so every v14 miner was told it was on
+ * normal pages no matter what the 1 MB pad actually got. */
 int cn_page_tier_for_version(const cn_hash_context_t *ctx, uint8_t major_version)
 {
     if (ctx == NULL)
         return CN_PAGES_MALLOC;
-    if (major_version >= 13)
+    if (major_version == 13)
         return cn_page_tier_actual(ctx->cna_scratchpad, CN_SCRATCHPAD_MEMORY_V13, ctx->cna_scratchpad_is_mapped);
     return cn_page_tier_actual(ctx->scratchpad, CN_SCRATCHPAD_MEMORY, ctx->scratchpad_is_mapped);
 }

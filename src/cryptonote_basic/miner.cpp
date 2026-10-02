@@ -886,8 +886,8 @@ namespace cryptonote
       // v14 that is the 24 MB chase buffer, at v13 the 8 MB pad, before that
       // the 1 MB one.
       // re-report when the fork version moves: a miner that started before the
-      // fork reported a different buffer, and the one that carries the hashrate
-      // from v14 on is the 24 MB chase buffer
+      // fork reported a different buffer. v13 carries its hashrate in the 8 MB
+      // pad; v14 is back on the 1 MB legacy pad, same as v9 to v12.
       if (tier_reported_version != b.major_version)
       {
         tier_reported_version = b.major_version;
@@ -904,11 +904,11 @@ namespace cryptonote
 #else
         const int good_tier = CN_PAGES_THP;
 #endif
-        // no point nagging pre-v13 miners, but from v13 on the page tier is
-        // real hashrate: the v13 8 MB pad, and even more the v14 24 MB
-        // per-nonce chase, where every hop on 4 KB pages likely eats a TLB
-        // miss and a page walk on top of the DRAM load
-        if (tier < good_tier && b.major_version >= 13 && !m_slow_pages_warned.exchange(true))
+        // Only v13 is worth nagging about: its 8 MB pad is big enough that the
+        // page tier is real hashrate. v14 hashes from the same 1 MB pad as v9
+        // to v12, which fits in a single huge page and which nothing has ever
+        // warned about, so warning there would be noise.
+        if (tier < good_tier && b.major_version == 13 && !m_slow_pages_warned.exchange(true))
           MGUSER_YELLOW("Mining is running on normal memory pages, hashrate will be lower. "
               "Windows: run 'nervad --setup-large-pages' once as administrator, then log out and back in. "
               "Linux: set vm.nr_hugepages or leave transparent hugepages enabled. "
