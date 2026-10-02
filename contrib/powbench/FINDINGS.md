@@ -1926,7 +1926,19 @@ hash cores, because any of the four selectors can appear. What it creates is a
 *Why the proposed fix is rejected.* Hashing a different 200-byte window per call
 would make all 30 mandatory, costing about 2.8% of verification. Its stated
 benefit, forcing the whole 256 KB salt to stay live, is redundant once F46's fix
-means the salt cannot leave the device. **Memoize in the daemon instead.**
+means the salt cannot leave the device. **Memoized in the daemon instead.**
+
+*Adopted and measured.* `salt_pad_v8` now keeps one digest per selector and
+drops all four when a patch lands in `salt[0..200)`. v8bench interleaves v5 and
+v8 in one pass and v5 does not use `salt_pad_v8`, so its row is a control for
+exactly this change: **v8:v5 moves from -0.96% to -5.80%**, about 4.9 points of
+v5's cost. Four runs, two with a browser open and two without, all read -5.74%
+to -5.81%; the absolute figures moved 2.7% with the load and the ratio did not,
+which is what interleaving against a control is for.
+
+The hash is unchanged, proved by the known-answer vectors on both AES arms.
+That is why those vectors were added first: this edit moves both arms together,
+so HW == SW could not have caught an error in it.
 
 *Checked:* the macro, and the arithmetic above.
 

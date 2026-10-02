@@ -76,7 +76,8 @@ static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t leng
 {
     uint8_t * const hp_state = CN_V8_PAD(context);
     char * const salt = context->salt;
-    char salt_hash[HASH_SIZE];
+    char salt_hash_memo[4][HASH_SIZE];
+    unsigned salt_hash_valid = 0;
     init_hash();
     expand_key();
     CN_V8_FETCH_SALT();
@@ -96,14 +97,14 @@ static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t leng
         pre_aes();
         _c = _mm_aesenc_si128(_c, _a);
         post_aes_variant();
-        salt_pad_v8(salt, salt_hash, r2[0], r2[2], r2[4], r2[6]);
+        salt_pad_v8(salt, r2[0], r2[2], r2[4], r2[6]);
 
         for (l = 1; l < yy; l++)
         {
             pre_aes();
             _c = _mm_aesenc_si128(_c, _a);
             post_aes_variant();
-            salt_pad_v8(salt, salt_hash, r2[1], r2[3], r2[5], r2[7]);
+            salt_pad_v8(salt, r2[1], r2[3], r2[5], r2[7]);
         }
     }
 
@@ -127,7 +128,8 @@ static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t leng
 {
     uint8_t * const hp_state = CN_V8_PAD(context);
     char * const salt = context->salt;
-    char salt_hash[HASH_SIZE];
+    char salt_hash_memo[4][HASH_SIZE];
+    unsigned salt_hash_valid = 0;
     init_hash();
     expand_key();
     CN_V8_FETCH_SALT();
@@ -143,12 +145,12 @@ static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t leng
     for (k = 1; k < xx; k++)
     {
         aes_sw_variant();
-        salt_pad_v8(salt, salt_hash, r2[0], r2[2], r2[4], r2[6]);
+        salt_pad_v8(salt, r2[0], r2[2], r2[4], r2[6]);
 
         for (l = 1; l < yy; l++)
         {
             aes_sw_variant();
-            salt_pad_v8(salt, salt_hash, r2[1], r2[3], r2[5], r2[7]);
+            salt_pad_v8(salt, r2[1], r2[3], r2[5], r2[7]);
         }
     }
 
