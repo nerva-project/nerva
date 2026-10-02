@@ -1840,6 +1840,179 @@ asked directly whether he will try to improve v8's hashrate. That measurement is
 worth more than anything in this file, because it is the attacker's own number
 on the shipped algorithm.
 
+## The measured miner
+
+The findings below come from a report by the author of an optimized v8 miner,
+dated 2026-10-02, measured on a Ryzen 5 5600G: reference 2,529 H/s at T=12
+against his 6,150 H/s, 2.43x, broken down as ~2.0x implementation, ~1.18x sweep
+deferral and ~1.06x extra-hash memoization. **None of his timings are reproduced
+here.** Every structural claim below was re-derived from the code in this tree,
+and that is what is recorded.
+
+His cost breakdown of the shipped code, from an instrumented copy over 52,833
+nonces, is used throughout: salt 59.5%, sweeps 17.9%, AES fill 6.5%, randomize
+6.2%, AES finalize 6.2%, extra hashes 3.2%, **CN inner loop 0.05%**.
+
+That last figure is not a v8 regression. `get_block_longhash_v11` has derived
+`iters` as `(height + 1) % iters_divisor` with `iters_divisor` in [1,64] since
+HF11, so the CryptoNight loop has been at most 63 steps since then, against
+pre-HF7's 262,144. **v8's memory hardness is the chain fill, not the pad.**
+
+### F44. The `salt_pad` sweeps can be deferred, so they are not memory-hard work
+
+`salt_pad_v8`'s second loop is:
+
+    for (j = offset_1; j < CN_SCRATCHPAD_MEMORY; j += offset_2)
+        hp_state[j] ^= (salt)[x++];
+
+XOR is commutative and the written value never feeds a branch or an address, so
+the final pad is the initial pad XOR the union of all ~30 sweeps' contributions,
+**in any order**. The sweeps can therefore be recorded and applied once.
+
+The only thing that observes the pad between sweeps is the CN step, and it
+touches exactly two cells of 16 bytes: `pre_aes` loads at `state_index(a)` and
+`post_aes_variant` loads and stores at `state_index(c)`. At 12 to 56 k/l steps
+plus at most 63 `iters` steps that is at most ~238 cells, ~100 typically. Those
+are cheap to reconstruct on demand from the sweep log.
+
+Effect: the pad is walked twice per nonce instead of ~32 times, worth ~1.18x.
+
+*Consequence, which matters more than the speed.* The sweeps are 17.9% of a
+nonce and read as the memory-hard part of v8. Deferred, they become compute in
+L1, and **a small-cache machine stops being penalised by them**. They were never
+hardness: a 1 MB pad is trivial SRAM for an ASIC and trivial bandwidth for a
+GPU.
+
+*Why the proposed fix is rejected.* Making the sweep non-commutative, for
+example `hp_state[j] = sbox[hp_state[j] ^ salt[x++]]`, does force the order. It
+also adds a dependent L1 load to 964K byte operations per nonce, about **+9% on
+verification** against the 17.9% share, and it forces 30 real passes over the
+pad instead of 2, which penalises small-cache machines and therefore widens the
+cross-CPU spread. It buys no GPU or ASIC resistance. **Adopt the deferral in the
+daemon instead**, where identical output makes it a free verification speedup.
+
+*Checked:* the macro bodies in `slow-hash.h`, and the two `state_index` calls in
+`pre_aes` / `post_aes_variant`.
+
+### F45. 26 of every 30 extra hashes are redundant
+
+`salt_pad_v8` opens with `extra_hashes[a & 3](salt, 200, salt_hash)`, always over
+`salt[0..200)`. The only thing that can change those bytes is `salt_pad`'s own
+32-byte patch at `offset_1 = temp_1 * ((d % 3) + 1)`.
+
+`temp_1` is a `uint16_t` and the multiplier is 1, 2 or 3, so `offset_1` spreads
+over [0, 196605] and lands below 200 with probability
+
+    (1/3)(200 + 100 + 67) / 65536 = 0.00187
+
+which over 30 calls is **0.056 times per nonce**. The report's independently
+derived figure is 0.057.
+
+So `salt[0..200)` is effectively constant across all 30 calls, there are only
+four possible selectors, and a miner computes about 4 distinct extra hashes
+instead of 30. Worth ~1.06x.
+
+*What this does not break.* Phase 1's premise survives: an ASIC still needs four
+hash cores, because any of the four selectors can appear. What it creates is a
+~2.8%-of-nonce gap between an honest miner and an optimized one.
+
+*Why the proposed fix is rejected.* Hashing a different 200-byte window per call
+would make all 30 mandatory, costing about 2.8% of verification. Its stated
+benefit, forcing the whole 256 KB salt to stay live, is redundant once F46's fix
+means the salt cannot leave the device. **Memoize in the daemon instead.**
+
+*Checked:* the macro, and the arithmetic above.
+
+### F46. Independent confirmation of F43: the salt can leave the hashing device
+
+The report reaches F43's conclusion separately and by measurement rather than
+estimate. `get_cna_v6_data` depends only on the blob hash and the stable chain,
+so it can be produced anywhere and handed over as 256 KB.
+
+| | F43 (ours) | the report |
+|---|---|---|
+| salt share of a nonce | 55% | **59.5%** |
+| uplift from offloading it | 2.0 to 2.2x | **1.95x** over his optimized miner |
+| transfer | 256 KB/nonce | 256 KB/nonce, ~1.6 GB/s at 6,150 H/s |
+
+Two independent derivations, different machines, different code. His
+break-even for a feeder thread is ~1,050 salts/s and his model reaches ~12 K H/s
+with the salt free, about 4.7x stock.
+
+*Consequence:* this is the phase's load-bearing item, because F44 and F45 show
+that once the sweeps and extra hashes are optimized away, the chain fill is the
+only irreducible work left in the algorithm.
+
+### F47. Independent confirmation of F42, and the four stale-keystream draws
+
+**Screening.** The report measures screening at **1.00x** today, with
+`F / E[H] = 1.5`, and states the PR's own note on it is correct. F42 measured
+1.000x and 1.23. With a free salt he gets 2.08x at T=1 and 1.67x at T=12 at 1/75
+acceptance; F42's free-fill ceiling is 2.12 to 2.17x. The two weaknesses
+multiply, which is why F46's fix is what protects F42's conclusion.
+
+**The keystream oddity.** `HC128_Init` ends by running the cipher 1024 steps
+"without generating keystream" and never writes `state->keystream`.
+`HC128_U32` refills only when `key_idx > 15`. Both `while` loops in
+`get_cna_v6_data` open with an explicit `HC128_NextKeys`, so they are safe, **but
+the four draws between the loops are not**: they follow an `HC128_Init` with no
+intervening refill and read keystream generated under the previous key.
+
+*Severity: cosmetic.* It affects 256 bytes of a 256 KB salt, is deterministic,
+and still depends on the chain. No attack follows.
+
+*Why it is not being fixed.* `get_cna_v6_data` is called by
+`get_block_longhash_v13` at [cryptonote_tx_utils.cpp:689](../../src/cryptonote_core/cryptonote_tx_utils.cpp#L689),
+live since 4,320,000, as well as by v14 at
+[:735](../../src/cryptonote_core/cryptonote_tx_utils.cpp#L735). It cannot be
+changed in place without breaking resync of every HF13 block. Fixing it for v14
+means a permanent second copy of a 60-line consensus function, which is a worse
+trade than documenting a 256-byte wart. This is F9's pattern.
+
+*Caution for anyone handing that report to an agent:* its section 12 says the
+oddity "has to be fixed before the fork", names no file, and the only candidate
+is a function shared with live consensus. The report's own apply list correctly
+omits it.
+
+### F48. The `iters` question, and why the expected answer is no
+
+v8's CN loop is 0.05% of a nonce (above). The obvious diversifier for F46's fix,
+whose GPU resistance rests on the same AES-NI-beats-T-tables assumption that all
+of v8's GPU resistance rests on, is to raise `iters` and restore a real
+dependent pad chase, which would be latency-bound rather than AES-bound.
+
+**Two arguments say it will not work, and both should be tested rather than
+trusted:**
+
+1. **Occupancy.** A dependent chase is hidden by parallelism across nonces, not
+   within one. At a 1 MB pad a GPU can keep thousands of nonces resident, which
+   is exactly the mechanism F28 and the v6-to-v7 pad history describe. The chase
+   is also L2-resident on a CPU, not DRAM-bound, so it is not obviously
+   asymmetric in the CPU's favour at all.
+2. **F38.** Work added to the hash core is specialisable; the chain fill is not.
+   Raising `iters` raises the specialisable share and loosens the ASIC bound. An
+   ASIC with 1 MB of on-die SRAM chases at ~1-2 ns against a CPU's L2 at ~3-4 ns.
+
+So the prior is that raising `iters` makes GPU:CPU **worse**, costs verification
+linearly, and helps an ASIC. It is recorded as a measurement rather than a
+proposal so that the answer exists in writing before anyone proposes it again,
+which per F11 is what happens to pad and parameter questions in this project.
+
+**What settles it**, in order, stopping at the first failure:
+
+1. CPU verify cost against `iters` at 0, 63, 1K, 8K, 64K and 256K, single
+   thread, on the 7950X. Done in-house; it only needs the existing probe
+   pattern and a build with `iters` as a parameter. If 64K costs more than
+   about +0.5 ms the sync-speed answer is already no.
+2. Cross-CPU spread at the surviving `iters` values on the i7-7700HQ and the
+   5600X. If the spread widens, the fairness answer is no.
+3. GPU:CPU at those values on the RTX 3050, Vega FE and GTX 1050 Ti, using the
+   existing harness with `iters` plumbed through the kernel. This is the only
+   step that can return a yes, and F28's warning applies: chunk the work, not
+   the nonces, and report the launch cap.
+
+Step 1 is a few hours. Step 3 needs the three cards, and the F37 discipline:
+mining and browsers stopped, interleaved, order reversed, A-B-A.
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell
@@ -1947,10 +2120,13 @@ control row (`v5ref` vs `v5ctl` at ~1.00x) exists to catch it, and if it is not
    subtraction, 0.927 ms as an upper bound against the harness's 0.721 ms,
    but timing `get_block_longhash_v14`'s two halves in the daemon is still
    what settles it, and would also say exactly where sync time goes.
-8. **Whether a GPU can feed v8's chain fill to a CPU.** F43. The uplift
-   would be 2.0x to 2.2x and the limit is PCIe bandwidth at 256 KB of salt
-   per nonce. Estimated from the salt size and the measured hash cost;
-   nothing has been built.
+8. **Whether a GPU can feed v8's chain fill to a CPU.** F43, confirmed
+   independently by F46 at 1.95x. The limit is PCIe bandwidth at 256 KB of
+   salt per nonce. Neither side has been built; PLAN-v8 Phase 6 B2 is the
+   proposed fix.
+9. **Does raising `iters` help or hurt?** F48. The prior is that it hurts,
+   for two independent reasons. Three steps are specified; step 1 is
+   in-house and step 3 needs the three cards.
 
 ## Reproducing
 

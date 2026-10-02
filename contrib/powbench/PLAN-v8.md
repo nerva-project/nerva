@@ -22,15 +22,20 @@ reason those two answers came out the way they did.
 
 ## Status
 
-**Phases 1, 3 and 4 are done. v8 is wired to HF14 and awaiting testnet.**
+**Phases 1, 3 and 4 are done. Phase 6 is planned and not started.**
 
 | phase | state |
 |---|---|
 | 1, fourth hash function | done, measured on four machines |
-| 2, floating point | not started |
+| 2, floating point | built and measured, **not shipped**; leaning against |
 | 3, pad and parameters | done, pad is 1 MB |
 | 4, plumbing | done, `get_block_longhash_v14` live at major_version >= 14 |
 | 5, validation | self-test and mainnet sync pass; testnet round outstanding |
+| 6, hardening vs the measured miner | **planned**, see below |
+
+Phase 6 exists because an optimized miner was built and measured by its author
+at 2.43x the reference, and its breakdown showed that once the deferrable parts
+are removed the chain fill is the only irreducible work v8 has.
 
 What v8 is, in one sentence: **v5 with `salt_pad`'s extra-hash selector widened
 from three entries to four, at v5's 1 MB pad, using v6's windowed chain fill.**
@@ -621,10 +626,10 @@ one MXCSR write.
 
 **The test that settles it: three kernels, not one.**
 
-1. `cna_v8` — the existing `cna_v5` kernel with `a & 3`, as the baseline
-2. `cna_v8_fp_rne` — plus the FP stage at fixed round-to-nearest. Isolates the
+1. `cna_v8`: the existing `cna_v5` kernel with `a & 3`, as the baseline
+2. `cna_v8_fp_rne`: plus the FP stage at fixed round-to-nearest. Isolates the
    pure arithmetic cost and tests the prediction that it is nearly free
-3. `cna_v8_fp` — plus data-driven rounding, as the algorithm specifies
+3. `cna_v8_fp`: plus data-driven rounding, as the algorithm specifies
 
 The gap between 2 and 3 is the answer. **If 3 cannot be written in OpenCL at
 all, the compile failure is the result**, and a stronger one than any timing.
@@ -863,6 +868,145 @@ a wrong `random_values` bound would split them.
   testnet HF14 is at height 1000 on a fresh net, so a testnet restart exercises
   the fork itself rather than a placeholder.
 
+## Phase 6: hardening against the measured miner  [PLANNED]
+
+Phases 1 to 5 were designed against reasoning. This phase is designed against a
+working optimized miner, measured by its author on a 5600G and reported in full:
+2.43x the reference miner, with a breakdown of where every part of it comes
+from. [FINDINGS.md](FINDINGS.md) F44 to F48 record what was verified from it.
+
+### The fact that drives this phase
+
+An instrumented copy of the shipped code, over 52,833 nonces, puts v8's cost at:
+
+| part | share |
+|---|---|
+| chain salt, `get_cna_v6_data` | **59.5%** |
+| `salt_pad` sweeps, 30 calls, 964K byte RMW | 17.9% |
+| AES fill | 6.5% |
+| `randomize_scratchpad_256k_v8` | 6.2% |
+| AES finalize | 6.2% |
+| extra hashes, 30 calls | 3.2% |
+| **CN inner loop** | **0.05%** |
+
+The CryptoNight inner loop, nominally the memory-hard core, is one twentieth of
+one percent. That is not a v8 regression: `get_block_longhash_v11` has derived
+`iters` the same way since HF11, so it is at most 63 steps against pre-HF7
+CryptoNight's 262,144.
+
+Now subtract what an optimized miner removes. The sweeps are deferrable to two
+passes (F44). The extra hashes collapse from 30 to about 4 (F45). The fill is
+sequential. **What is left that no implementation can avoid is the 234 MB
+chain-dependent salt fetch, and nothing else.**
+
+That single fact decides the phase. v8's security is the chain fill. Everything
+protecting it matters; everything else is cost.
+
+### B1. Pin `init_size_blk` to 8
+
+`init_size_blk` changes the AES **operation count by zero** and the **time by up
+to 2.24x** (F42). It is the largest screenable axis in the algorithm and it buys
+nothing.
+
+Pinning it removes that axis, cuts verify cost by roughly 35% because blk=8 is
+the fastest cell at every `(xx, yy)`, removes a cross-machine variance source
+because narrow cores suffer most at blk=2, and resolves B2's circular dependency
+for free.
+
+Preferred over making it per-block, which would leave some blocks 2.24x slower
+to verify than others for no gain.
+
+### B2. Seed the salt's HC-128 from the fill's final AES chain state
+
+Today the salt seed is `keccak(blob)`, which costs nothing, so the 59.5% can be
+produced on any device and handed over as 256 KB (F46). Seeding it from the
+fill's final chain state means a feeder must run 1 MB of chained AES per
+candidate first. A GPU has no AES instruction, so that is ~655K software block
+rounds against a few hundred thousand integer ops for the salt itself.
+
+With B1 done this is a pure reorder: fill, seed, salt fetch, rest.
+**`get_cna_v6_data` is not touched.** Only the seed handed to it changes. That is
+what keeps live HF13 safe, and it is not optional: that function is shared with
+`get_block_longhash_v13`, live since 4,320,000.
+
+Stated limits, which are real: it does not stop a device that has AES, so FPGA
+and ASIC are unaffected, and it does not stop a GPU computing the whole hash,
+which rests on the ordinary argument instead.
+
+### B3. Keep `xx`, `yy` and `iters` per nonce
+
+Do **not** move them to the stable block hash, which the report recommends.
+With B2 in place, learning them costs a full fill plus a full salt, so screening
+stays at 1.00x and there is nothing left to close. Per-nonce loop bounds also
+make a GPU warp run at `max(count)` rather than its own, worth roughly 1.9x on
+that portion. Moving them would close a hole B2 already closes and hand that
+divergence back to the GPU.
+
+### What this phase deliberately does not do
+
+**Not the sbox on the sweep** (the report's section 3 fix). It costs about +9%
+verification and forces 30 real passes over the pad instead of 2, which
+penalises small-cache machines and widens the cross-CPU spread. It buys no GPU
+or ASIC resistance: 1 MB is trivial SRAM for an ASIC and trivial bandwidth for a
+GPU. The sweeps were never a hardness property. Adopt the deferral in the daemon
+instead, where it is a 1.18x verification speedup for free.
+
+**Not the per-call hash window** (section 4 fix). It costs about 2.8% of
+verification by making 26 redundant extra hashes mandatory, and its benefit,
+forcing the whole salt live, is redundant once B2 means the salt cannot leave
+the device.
+
+**Not a v14-only fork of `get_cna_v6_data`** for F47's stale-keystream draws.
+They affect 256 bytes of a 256 KB salt, are deterministic and chain-dependent,
+and no attack follows. Forking the function doubles the consensus-critical
+surface permanently for a cosmetic gain. Record it in the fork notes.
+
+### Phase A, no consensus change, do first
+
+1. **Adopt the sweep deferral and extra-hash memoization in the daemon.** Both
+   produce bit-identical output, so they are verification speedups, not
+   consensus changes: about 1.18x and 1.06x.
+2. **Fix the large-pages tier bug.** `cn_page_tier_for_version` sends
+   `major_version >= 13` to the 8 MB `cna_scratchpad`, but v8 hashes from the
+   1 MB `scratchpad` and the 8 MB buffer is never allocated. Should be `== 13`.
+3. **`mdb_reader_check` at LMDB open.** A reader that exits without
+   `mdb_env_close` leaks a slot; 126 of them make nervad's own reads fail in a
+   way that looks like chain corruption.
+4. **Publish the reference-miner optimizations.** A 2.0x implementation gap one
+   person holds is a fairness problem; the same 2.0x everyone holds is the
+   baseline.
+
+### Gates before merge, since nothing pre-HF14 may break
+
+Every B item touches only `get_block_longhash_v14` and the v14 hash bodies.
+Confirm mechanically:
+
+1. `get_cna_v6_data`, `salt_pad`, `cn_vm_*` and `cn_slow_hash_v5/v10/v11/v13`
+   byte-identical to master.
+2. Reference vectors for v10, v11 and v13 at fixed heights unchanged.
+3. HW and SW arms bit-identical for v14 across the full `(xx, yy)` grid, before
+   and after the `_fill`/`_rest` split. That split is where divergence lives.
+4. A mainnet resync past 4,320,000 on the built binary.
+
+### The open question, and why it is not in the plan
+
+B2's GPU resistance and v8's existing GPU resistance rest on the **same**
+assumption: that AES-NI beats T-table AES. RESULTS.md section 6.3 already warns
+that v5-class resistance "disappears the day a GPU gets competitive AES." If
+that breaks, B2 breaks with it.
+
+The obvious diversifier is to raise `iters` and restore a real dependent pad
+chase, which is latency-bound rather than AES-bound. **It is not recommended
+here, because F38 argues against it and the physics probably does too.** A chase
+over a 1 MB pad is L2-resident on a CPU and hidden by occupancy on a GPU, which
+can keep thousands of nonces resident at 1 MB; and by F38 it adds work to the
+specialisable hash core rather than to the chain fill, which loosens the ASIC
+bound. The measurement in F48 exists to settle that rather than to justify it,
+and the expected answer is that raising `iters` makes GPU:CPU worse, not better.
+
+If more margin is ever wanted, F38 says it has to come from the chain fill. The
+cost of that is sync speed, directly, which is why it is not proposed here.
+
 ## Open items
 
 1. **GPU behaviour at 1 MB at full occupancy is unmeasured**, and it is the only
@@ -905,6 +1049,12 @@ a wrong `random_values` bound would split them.
   target and the second rule; it is the one property v6 does not have, and it
   is easy to reintroduce by accident with a one-sided branch or a cheap seed.
 - Do not reconcile the HW and SW `r2` difference. It is the fix, not the bug.
+- Do not make `salt_pad`'s sweep non-commutative to stop the deferral. It costs
+  ~9% of verification, widens the cross-CPU spread and buys no GPU or ASIC
+  resistance ([FINDINGS.md](FINDINGS.md) F44).
+- Do not move `xx`, `yy` or `iters` to the stable block hash. Phase 6 B2 closes
+  screening already, and per-nonce loop bounds are what make a GPU warp run at
+  `max(count)` rather than its own.
 - Do not trust a comment in `src/crypto` or a figure in a commit message
   without checking the code. Several comments here describe behaviour the
   adjacent code does not have, and [FINDINGS.md](FINDINGS.md) exists because of that.
