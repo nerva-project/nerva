@@ -2000,19 +2000,55 @@ which per F11 is what happens to pad and parameter questions in this project.
 
 **What settles it**, in order, stopping at the first failure:
 
-1. CPU verify cost against `iters` at 0, 63, 1K, 8K, 64K and 256K, single
-   thread, on the 7950X. Done in-house; it only needs the existing probe
-   pattern and a build with `iters` as a parameter. If 64K costs more than
-   about +0.5 ms the sync-speed answer is already no.
-2. Cross-CPU spread at the surviving `iters` values on the i7-7700HQ and the
-   5600X. If the spread widens, the fairness answer is no.
-3. GPU:CPU at those values on the RTX 3050, Vega FE and GTX 1050 Ti, using the
-   existing harness with `iters` plumbed through the kernel. This is the only
-   step that can return a yes, and F28's warning applies: chunk the work, not
-   the nonces, and report the launch cap.
+1. CPU verify cost against `iters`, single thread on the 7950X. **If 64K costs
+   more than about +0.5 ms the sync-speed answer is already no.**
+2. Cross-CPU spread at the surviving values on the i7-7700HQ and the 5600X.
+3. GPU:CPU at those values on the three cards. The only step that can return a
+   yes, and F28's warning applies: chunk the work, not the nonces.
 
-Step 1 is a few hours. Step 3 needs the three cards, and the F37 discipline:
-mining and browsers stopped, interleaved, order reversed, A-B-A.
+#### Step 1 ran, and the answer is no
+
+`contrib/powbench/t_iters.c`, `xx=yy=6` (the mean, 30 sweeps), blk pinned at 8,
+interleaved with the order reversed on alternate rounds, medians. Two runs:
+
+| iters | ms | vs shipped |
+|---|---|---|
+| 63, as shipped | 0.510 | 1.00x |
+| 16384 | 0.651 | 1.28x |
+| 65536 | 1.182 | 2.32x |
+| 262144, classic CryptoNight depth | 3.029 | 5.94x |
+
+**Marginal cost 9.45 and 9.41 ns per CN step across the two runs**, a slope
+stable to under 1% even though the baseline itself moved 10%. A step is two
+dependent pad accesses, so that is about 4.7 ns each, which is L2 latency on
+this part. **That is F48's first argument made concrete: at a 1 MB pad the
+chase never leaves L2 on a CPU, so it is not the DRAM-latency leveller the idea
+depends on.**
+
+At 64K the cost is **+0.67 ms and +0.62 ms**, against a pre-registered ceiling
+of +0.5 ms. The threshold was written down before the measurement and the
+measurement exceeded it, so **steps 2 and 3 do not run**.
+
+For scale, a nonce is hash plus a 0.927 ms chain fill. Classic depth would take
+verification from 1.44 ms to 3.91 ms per nonce, a **2.7x sync tax**, to buy a
+property the two arguments above say is not there.
+
+#### The supporting arithmetic, which is arithmetic and not measurement
+
+A GPU cannot hold a 1 MB pad in shared memory, so each chase step is a VRAM
+round trip, roughly 300 ns against the CPU's 9.4 ns. That looks like a 30x
+disadvantage per step and is the intuition the idea rests on. It is wrong for
+the usual reason: the GPU runs thousands of nonces concurrently. At a 1 MB pad
+an 8 GB card holds ~8192 of them, and the binding limit is its random-access
+rate, order 1e9 dependent accesses per second, so roughly 1 step/ns against a
+32-thread CPU's 3.4 steps/ns. Comparable, with the CPU ahead by a small factor
+that no part of this is confident enough to quote.
+
+So the honest summary is that raising `iters` costs 1.4x to 2.7x of
+verification for a GPU effect that is somewhere between slightly favourable and
+slightly unfavourable, on top of F38's argument that it loosens the ASIC bound
+by growing the specialisable share. **Recorded closed. If anyone proposes it
+again, the cost is measured and the burden is on the GPU side of the argument.**
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell
@@ -2124,9 +2160,10 @@ control row (`v5ref` vs `v5ctl` at ~1.00x) exists to catch it, and if it is not
    independently by F46 at 1.95x. The limit is PCIe bandwidth at 256 KB of
    salt per nonce. Neither side has been built; PLAN-v8 Phase 6 B2 is the
    proposed fix.
-9. **Does raising `iters` help or hurt?** F48. The prior is that it hurts,
-   for two independent reasons. Three steps are specified; step 1 is
-   in-house and step 3 needs the three cards.
+9. ~~**Does raising `iters` help or hurt?**~~ **Closed, it hurts.** F48.
+   Step 1 measured +0.67 ms at 64K against a pre-registered +0.5 ms ceiling,
+   and the 9.4 ns/step slope shows the chase stays in L2 at a 1 MB pad.
+   Steps 2 and 3 were not run.
 
 ## Reproducing
 

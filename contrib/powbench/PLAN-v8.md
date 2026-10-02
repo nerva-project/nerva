@@ -1038,8 +1038,10 @@ here, because F38 argues against it and the physics probably does too.** A chase
 over a 1 MB pad is L2-resident on a CPU and hidden by occupancy on a GPU, which
 can keep thousands of nonces resident at 1 MB; and by F38 it adds work to the
 specialisable hash core rather than to the chain fill, which loosens the ASIC
-bound. The measurement in F48 exists to settle that rather than to justify it,
-and the expected answer is that raising `iters` makes GPU:CPU worse, not better.
+bound. The measurement in F48 exists to settle that rather than to justify it.
+**It has now run and the answer is no:** 9.4 ns per CN step, so at a 1 MB pad
+the chase never leaves L2, and 64K costs +0.67 ms against a pre-registered
++0.5 ms ceiling. Classic CryptoNight depth would be a 2.7x sync tax. Closed.
 
 If more margin is ever wanted, F38 says it has to come from the chain fill. The
 cost of that is sync speed, directly, which is why it is not proposed here.
