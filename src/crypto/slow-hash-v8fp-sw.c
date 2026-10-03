@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2026, The Nerva Project
+// Copyright (c) 2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -27,18 +27,35 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-/* Hardware-AES path. This translation unit is compiled with -maes (x86) or
- * -march=armv8-a+crypto (aarch64). It defines cn_slow_hash*_hw symbols that
- * the dispatcher in slow-hash.c picks when the running CPU supports AES. */
+/* CNA v8 plus the floating-point stage, software-AES arm. Prototype.
+ *
+ * Same body as slow-hash-v8-impl.h under a different symbol, so both
+ * algorithms exist in one binary and can be measured against each other.
+ * NOT in consensus: get_block_longhash routes HF14 to cn_slow_hash_v14.
+ */
 
 #include "hash-ops.h"
 
-#define cn_slow_hash       cn_slow_hash_hw
-#define cn_slow_hash_v7_8  cn_slow_hash_v7_8_hw
-#define cn_slow_hash_v9    cn_slow_hash_v9_hw
-#define cn_slow_hash_v10   cn_slow_hash_v10_hw
-#define cn_slow_hash_v11   cn_slow_hash_v11_hw
-#define cn_slow_hash_v13   cn_slow_hash_v13_hw
+#undef CN_SCRATCHPAD_MEMORY
+#define CN_SCRATCHPAD_MEMORY CN_SCRATCHPAD_MEMORY_V8
+
+#define CN_V8_FP 1
+#define cn_slow_hash_v14 cn_slow_hash_v15_sw
+#define CN_FORCE_SOFTWARE_AES 1
 
 #include "slow-hash.h"
-#include "slow-hash-impl.h"
+#include "slow-hash-v8-impl.h"
+
+/* Defined in the software TU, which is built on every target. The hardware one
+ * is compiled only where AES-NI or ARMv8 crypto exists, and the FP stage has
+ * nothing to do with AES: ARMv7 is exactly where this check needs to run.
+ * Returns 0 when this build computes the reference vector. */
+int cn_slow_hash_v15_selftest(void);
+int cn_slow_hash_v15_selftest(void) { return cn_fp_selftest(); }
+
+/* Value-safety scan over the real round body. */
+void cn_slow_hash_v15_value_scan(unsigned seeds, unsigned rounds, unsigned out[5]);
+void cn_slow_hash_v15_value_scan(unsigned seeds, unsigned rounds, unsigned out[5])
+{
+    cn_fp_value_scan(seeds, rounds, out);
+}

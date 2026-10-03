@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -136,6 +136,72 @@ static BOOL SetLockPagesPrivilege(HANDLE hProcess, BOOL bEnable)
     offset_2 = ((temp_1 * offset_1) % 125) + 4;        \
     for (j = offset_1; j < CN_SCRATCHPAD_MEMORY; j += offset_2)      \
         hp_state[j] ^= (salt)[x++];
+
+/* Pad size and salt stride are coupled: the sweep steps the salt once per
+ * offset_2 pad bytes, so the worst case consumes pad / smallest-stride, and
+ * that must land on CN_SALT_MEMORY exactly or it reads past the salt. Deriving
+ * both from the pad keeps that true at any size; at 1 MB they reduce to the
+ * shipped 4 and 125. Maintained by hand before: at a 3 MB pad the line read
+ * (% 117) + 12, and 3145728/12 is also exactly 262144. FINDINGS.md F4, F22. */
+#define CN_V8_SALT_STEP  (CN_SCRATCHPAD_MEMORY / CN_SALT_MEMORY)
+#define CN_V8_STRIDE_MOD (129 - CN_V8_SALT_STEP)
+
+/* A pad that breaks any of these produces an out-of-bounds salt read, not a
+ * slower hash, so it must not be reachable by editing a constant. */
+_Static_assert(CN_SCRATCHPAD_MEMORY % CN_SALT_MEMORY == 0,
+               "v8 pad must be a whole multiple of the salt");
+_Static_assert(CN_V8_SALT_STEP >= 1 && CN_V8_SALT_STEP <= 128,
+               "v8 pad implies a salt stride outside [1,128]; the sweep's maximum stride is 128");
+_Static_assert(CN_SCRATCHPAD_MEMORY % 128 == 0,
+               "v8 pad must be a multiple of 128, or the AES fill leaves an unwritten tail");
+_Static_assert(CN_SCRATCHPAD_MEMORY != 1048576
+               || (CN_V8_SALT_STEP == 4 && CN_V8_STRIDE_MOD == 125),
+               "at a 1 MB pad the derived stride must be exactly the shipped (% 125) + 4");
+
+/* CNA v8's salt_pad: the macro above with `a % 3` changed to `a & 3`, so the
+ * selector reaches all four extra_hashes entries instead of three.
+ *
+ * A copy rather than a parameterised salt_pad: the original is expanded by v10
+ * and v11, which validate live heights, so this should be a one-token diff
+ * rather than a refactor to audit. */
+/* The extra hash always reads salt[0..200), and the only thing that can change
+ * those bytes is this macro's own 32-byte patch at offset_1. offset_1 spreads
+ * over [0, 196605], so it lands below 200 about 0.056 times per nonce: across
+ * ~30 calls, 26 of them recompute a digest they already have. Keep one per
+ * selector and drop all four when a patch actually lands in the window.
+ *
+ * Output is unchanged, which is why this is here and not a consensus change.
+ * The known-answer vectors in cn_slow_hash_self_test are what prove that, and
+ * they are why this edit is safe to make at all: HW == SW cannot see a change
+ * that moves both arms together. FINDINGS.md F45. */
+#define salt_pad_v8(salt, a, b, c, d)                                  \
+    do {                                                               \
+        const unsigned sel_ = (unsigned)((a) & 3);                     \
+        if (!((salt_hash_valid >> sel_) & 1u))                         \
+        {                                                              \
+            extra_hashes[sel_]((salt), 200, salt_hash_memo[sel_]);     \
+            salt_hash_valid |= 1u << sel_;                             \
+        }                                                              \
+        temp_1 = (uint16_t)(iters ^ ((b) ^ (c)));                      \
+        offset_1 = temp_1 * (((d) % 3) + 1);                           \
+        for (j = 0; j < 32; j++)                                       \
+            (salt)[offset_1 + j] ^= salt_hash_memo[sel_][j];           \
+        if (offset_1 < 200) salt_hash_valid = 0;                       \
+        x = 0;                                                         \
+        offset_1 = ((d) % 64) + 1;                                     \
+        offset_2 = ((temp_1 * offset_1) % CN_V8_STRIDE_MOD) + CN_V8_SALT_STEP;  \
+        for (j = offset_1; j < CN_SCRATCHPAD_MEMORY; j += offset_2)    \
+            hp_state[j] ^= (salt)[x++];                                \
+    } while (0)
+
+/* v8's pad init. The shipped macro steps once per 4 pad bytes, exact at 1 MB
+ * and an overrun above it. Stepping with the pad also consumes the whole salt
+ * at every size, which is what keeps chain binding intact. FINDINGS.md F23. */
+#define randomize_scratchpad_256k_v8(r, salt, scratchpad)                   \
+    uint32_t x = 0;                                                         \
+    for (uint32_t i = 0; i < CN_SCRATCHPAD_MEMORY; i += CN_V8_SALT_STEP)    \
+        scratchpad[i] ^= salt[x++];                                         \
+    randomize_scratchpad(r, scratchpad);
 
 #define randomize_scratchpad(r, scratchpad)            \
     for (int i = 0; i < CN_RANDOM_VALUES; i++)         \

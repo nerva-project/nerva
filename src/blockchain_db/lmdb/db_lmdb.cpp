@@ -1331,6 +1331,19 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags, uint3
   if (auto result = mdb_env_open(m_env, filename.c_str(), mdb_flags, 0644))
     throw0(DB_ERROR(lmdb_error("Failed to open lmdb environment: ", result).c_str()));
 
+  // Reap reader slots left by processes that died without mdb_env_close. The
+  // table holds 126; once it fills, every new read transaction fails with
+  // MDB_READERS_FULL, which surfaces as unrelated-looking DB errors and reads
+  // like chain corruption. Anything that opens this environment read-only and
+  // exits uncleanly leaks one, so a miner or a benchmark crashing repeatedly is
+  // enough to wedge the daemon. Cheap, and only touches slots whose owning
+  // process is gone.
+  {
+    int dead = 0;
+    if (mdb_reader_check(m_env, &dead) == MDB_SUCCESS && dead > 0)
+      MINFO("LMDB: cleared " << dead << " stale reader slot(s)");
+  }
+
   MDB_envinfo mei;
   mdb_env_info(m_env, &mei);
   uint64_t cur_mapsize = (uint64_t)mei.me_mapsize;

@@ -1,0 +1,193 @@
+# Copyright (c) 2018-2024, The Nerva Project
+# Copyright (c) 2014-2024, The Monero Project
+#
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without modification, are
+# permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this list of
+#    conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice, this list
+#    of conditions and the following disclaimer in the documentation and/or other
+#    materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its contributors may be
+#    used to endorse or promote products derived from this software without specific
+#    prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
+# EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
+# THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+# STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+# THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+# Does the CryptoNight-Adaptive v8 floating-point stage compute the same values
+# on architectures nobody here owns?
+#
+# PLAN-v8 Phase 2 adds IEEE-754 double arithmetic to the hash. A single ULP of
+# disagreement between two platforms forks the chain, so determinism is the
+# property that decides whether the stage can ship. It is verified by hand on
+# x86-64 (Windows, Linux) and aarch64 (macOS, Android). This covers the rest of
+# what the build claims to support.
+#
+# Cross-compiled on the x86 runner and executed under qemu-user, rather than
+# running a whole emulated distro. The first version of this workflow used
+# run-on-arch-action, which boots a QEMU container and runs apt inside it; on
+# riscv64 that spent seventeen minutes installing a compiler and never reached
+# any of this project's code. Emulating a few seconds of probe is cheap.
+# Emulating dpkg is not. Binaries are linked static so qemu-user needs no target
+# loader or libraries.
+#
+# Two probes, answering different questions.
+#
+# t_fp_determinism is standalone C with no project dependencies. It exercises
+# the five permitted operations under the group-E constraint and prints four
+# checksums of raw bit patterns. Nothing in it is endian-sensitive: memcpy
+# between a double and a uint64_t yields the IEEE bit pattern as an integer on
+# either byte order, because both types use the machine's own order. It must
+# pass everywhere, big-endian included, and is a hard gate on all three.
+#
+# t_fp_stage links the real hash and prints v14 and v15 for two fixed inputs.
+# Those are compared against the x86-64 values. Its exit code is NOT used for
+# that: its three internal checks all pass on big-endian, where the hash is
+# nonetheless different, and an earlier version of this workflow read the exit
+# code and concluded s390x had been fixed.
+#
+# s390x is expected to differ, and not because of floating point. e2i in
+# slow-hash.h reads the pad index through *((uint64_t *)a) with no SWAP64LE,
+# while mul and sum_half_blocks seven lines below it both swap, so every
+# big-endian machine walks a different path through the pad. That predates the
+# FP stage and affects v5 and v11 too. FINDINGS.md F36. The job fails if the
+# hashes ever start matching, so a fix announces itself.
+
+name: fp-portability
+
+on:
+  push:
+    paths:
+      - 'src/crypto/slow-hash-fp.h'
+      - 'src/crypto/slow-hash-v8fp-*.c'
+      - 'src/crypto/slow-hash*.c'
+      - 'src/crypto/slow-hash*.h'
+      - 'contrib/powbench/t_fp_determinism.c'
+      - 'contrib/powbench/t_fp_stage.c'
+      - 'contrib/powbench/build-*.sh'
+      - '.github/workflows/fp-portability.yml'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  fp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # little-endian, a third instruction set beyond x86 and ARM
+          - arch: riscv64
+            triple: riscv64-linux-gnu
+            debarch: riscv64
+            qemu: qemu-riscv64-static
+            hashes: match
+          # the 32-bit ARM path, which nothing else exercises
+          - arch: armv7
+            triple: arm-linux-gnueabihf
+            debarch: armhf
+            qemu: qemu-arm-static
+            hashes: match
+          # big-endian: FP must still match, the full hash is expected not to
+          - arch: s390x
+            triple: s390x-linux-gnu
+            debarch: s390x
+            qemu: qemu-s390x-static
+            hashes: differ
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install the cross toolchain and qemu-user
+        run: |
+          sudo apt-get update -q
+          # libc6-dev-<arch>-cross must be named explicitly: gcc-<triple>
+          # only recommends it, so without it the cross compiler falls back
+          # to the host's /usr/include and dies on bits/libc-header-start.h.
+          # Recommends are left on here too; this runs on the x86 runner
+          # where apt is fast and the saving is not worth that failure mode.
+          sudo apt-get install -q -y \
+            gcc-${{ matrix.triple }} \
+            libc6-dev-${{ matrix.debarch }}-cross \
+            qemu-user-static
+
+      - name: t_fp_determinism on ${{ matrix.arch }}
+        run: |
+          set -e
+          ${{ matrix.triple }}-gcc -O2 -ffp-contract=off -static \
+            contrib/powbench/t_fp_determinism.c -o t_fp_determinism -lm
+          ${{ matrix.qemu }} ./t_fp_determinism | tee fp.txt
+
+          # The x86-64 reference, from commit fb5f781. All four must match on
+          # every architecture, byte order included.
+          for pair in \
+            "basic add/sub/mul/div:8ae92fac4343e627" \
+            "sqrt and div:0de4d9f1333e87b7" \
+            "fma contraction canary:04c3614dff6aed8c" \
+            "data-driven rounding:d6e736346922def8"
+          do
+            label="${pair%%:*}"
+            want="${pair##*:}"
+            if ! grep -q "$label *: *$want" fp.txt; then
+              echo "MISMATCH: $label expected $want"
+              echo "A divergence here means the FP stage cannot ship as-is."
+              exit 1
+            fi
+          done
+          echo "all four checksums match the x86-64 reference"
+
+      - name: t_fp_stage on ${{ matrix.arch }}
+        run: |
+          set -e
+          ARCH=${{ matrix.arch }} \
+          CC=${{ matrix.triple }}-gcc \
+          LINKFLAGS=-static \
+          sh contrib/powbench/build-fp-stage-test.sh
+
+          T_FP_STAGE_QUICK=1 ${{ matrix.qemu }} ./t_fp_stage > stage.txt 2>&1 || true
+          cat stage.txt
+
+          # Compare the hashes, not the exit code. See the header.
+          matched=1
+          for want in \
+            16da28b8ec84c42cd776c908807ac204daf763503b24c396e6b0d6c4b015eba2 \
+            bb62ce919b5a9335a31ad178640ccfdc1a4d5b70a2df10c6873298088510e898 \
+            6998ffa9234b99676b92b2fc358c8dfa19cd6afa248b2c02be1030157e7c0332 \
+            86905c8d1e76df9de1bd6e8bac4c3a492eee23eec67c2b239b6423c71192bad0
+          do
+            grep -q "$want" stage.txt || matched=0
+          done
+
+          if [ "${{ matrix.hashes }}" = "differ" ]; then
+            if [ "$matched" = "1" ]; then
+              echo "The hashes now MATCH x86-64 on a big-endian target."
+              echo "They were expected to differ because e2i reads the pad index"
+              echo "with no SWAP64LE (FINDINGS.md F36). Someone has fixed"
+              echo "endianness. Update this workflow and F36."
+              exit 1
+            fi
+            echo "hashes differ from x86-64 on big-endian, as F36 predicts"
+            echo "note that every FP check above passed: the divergence is in"
+            echo "the integer path, not the floating-point stage"
+          else
+            if [ "$matched" != "1" ]; then
+              echo "The hashes DIFFER from x86-64 on a little-endian target."
+              echo "This is the result that would stop the FP stage shipping."
+              exit 1
+            fi
+            echo "v14 and v15 match the x86-64 reference exactly"
+          fi

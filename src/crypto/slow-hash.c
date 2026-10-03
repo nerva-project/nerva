@@ -60,7 +60,9 @@ extern void cn_slow_hash_v9_hw(cn_hash_context_t *context, const void *data, siz
 extern void cn_slow_hash_v10_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww);
 extern void cn_slow_hash_v11_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 extern void cn_slow_hash_v13_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
-extern void cn_slow_hash_v14_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
+extern void cn_slow_hash_v14_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
+extern void cn_slow_hash_v14_chain_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, uint8_t init_size_blk, cn_v8_salt_fn salt_fn, void *salt_user);
+extern void cn_slow_hash_v15_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 #endif
 
 extern void cn_slow_hash_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters);
@@ -69,7 +71,10 @@ extern void cn_slow_hash_v9_sw(cn_hash_context_t *context, const void *data, siz
 extern void cn_slow_hash_v10_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww);
 extern void cn_slow_hash_v11_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 extern void cn_slow_hash_v13_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
-extern void cn_slow_hash_v14_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
+extern void cn_slow_hash_v14_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
+extern void cn_slow_hash_v14_chain_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, uint8_t init_size_blk, cn_v8_salt_fn salt_fn, void *salt_user);
+extern void cn_slow_hash_v15_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
+extern int cn_slow_hash_v15_selftest(void);
 
 /* Runtime CPU detection. Cached in a function-static so the per-hash overhead
  * is one branch on a hot variable. Override with NERVA_FORCE_SOFTWARE_AES=1 to
@@ -117,56 +122,84 @@ int cn_hardware_aes_supported(void)
 #define CN_DISPATCH(call_hw, call_sw) do { call_sw; } while (0)
 #endif
 
+/* v8 hashes into the legacy buffer, which at 1 MB is large enough. Raising the
+ * pad past it means pointing CN_V8_PAD at cna_scratchpad and relaxing this.
+ * Here rather than in hash-ops.h because that header is included from C++,
+ * where _Static_assert is not a keyword. */
+_Static_assert(CN_SCRATCHPAD_MEMORY_V8 <= CN_SCRATCHPAD_MEMORY,
+               "v8 pad must fit the legacy buffer it hashes into; see CN_V8_PAD");
+
 /* defined below, next to the allocator it uses */
-static void cn_pads_require(cn_hash_context_t *ctx, int legacy, int v6, int v7);
+static void cn_pads_require(cn_hash_context_t *ctx, int legacy, int v6);
 
 void cn_slow_hash(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters)
 {
-    cn_pads_require(ctx, 1, 0, 0);
+    cn_pads_require(ctx, 1, 0);
     CN_DISPATCH(cn_slow_hash_hw(ctx, data, length, hash, variant, prehashed, iters),
                 cn_slow_hash_sw(ctx, data, length, hash, variant, prehashed, iters));
 }
 
 void cn_slow_hash_v7_8(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters)
 {
-    cn_pads_require(ctx, 1, 0, 0);
+    cn_pads_require(ctx, 1, 0);
     CN_DISPATCH(cn_slow_hash_v7_8_hw(ctx, data, length, hash, iters),
                 cn_slow_hash_v7_8_sw(ctx, data, length, hash, iters));
 }
 
 void cn_slow_hash_v9(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters)
 {
-    cn_pads_require(ctx, 1, 0, 0);
+    cn_pads_require(ctx, 1, 0);
     CN_DISPATCH(cn_slow_hash_v9_hw(ctx, data, length, hash, iters),
                 cn_slow_hash_v9_sw(ctx, data, length, hash, iters));
 }
 
 void cn_slow_hash_v10(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww)
 {
-    cn_pads_require(ctx, 1, 0, 0);
+    cn_pads_require(ctx, 1, 0);
     CN_DISPATCH(cn_slow_hash_v10_hw(ctx, data, length, hash, iters, init_size_blk, xx, yy, zz, ww),
                 cn_slow_hash_v10_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy, zz, ww));
 }
 
 void cn_slow_hash_v11(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
 {
-    cn_pads_require(ctx, 1, 0, 0);
+    cn_pads_require(ctx, 1, 0);
     CN_DISPATCH(cn_slow_hash_v11_hw(ctx, data, length, hash, iters, init_size_blk, xx, yy),
                 cn_slow_hash_v11_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy));
 }
 
-void cn_slow_hash_v13(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, const uint8_t *seed)
+/* CNA v8, the HF14 hash. Same pads and signature as v11, since it is v11 with
+ * a different hash selector inside salt_pad. */
+void cn_slow_hash_v14(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
 {
-    cn_pads_require(ctx, 0, 1, 0);
-    CN_DISPATCH(cn_slow_hash_v13_hw(ctx, data, length, hash, seed),
-                cn_slow_hash_v13_sw(ctx, data, length, hash, seed));
+    /* v8 runs at CN_SCRATCHPAD_MEMORY_V8, which fits the legacy pad. */
+    cn_pads_require(ctx, 1, 0);
+    CN_DISPATCH(cn_slow_hash_v14_hw(ctx, data, length, hash, iters, init_size_blk, xx, yy),
+                cn_slow_hash_v14_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy));
 }
 
-void cn_slow_hash_v14(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, const uint8_t *seed)
+/* The consensus entry: the salt is fetched inside the hash, seeded from the
+ * AES fill, and the per-nonce draws come back with it. PLAN-v8 Phase 6 B2. */
+void cn_slow_hash_v14_chain(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, uint8_t init_size_blk, cn_v8_salt_fn salt_fn, void *salt_user)
 {
-    cn_pads_require(ctx, 1, 0, 1);   /* 256 KB pad lives in the legacy buffer */
-    CN_DISPATCH(cn_slow_hash_v14_hw(ctx, data, length, hash, seed),
-                cn_slow_hash_v14_sw(ctx, data, length, hash, seed));
+    cn_pads_require(ctx, 1, 0);
+    CN_DISPATCH(cn_slow_hash_v14_chain_hw(ctx, data, length, hash, init_size_blk, salt_fn, salt_user),
+                cn_slow_hash_v14_chain_sw(ctx, data, length, hash, init_size_blk, salt_fn, salt_user));
+}
+
+/* CNA v8 plus the floating-point stage. PROTOTYPE: no consensus path routes
+ * here. Exists so it can be measured against v14 in the same process. */
+void cn_slow_hash_v15(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
+{
+    cn_pads_require(ctx, 1, 0);
+    CN_DISPATCH(cn_slow_hash_v15_hw(ctx, data, length, hash, iters, init_size_blk, xx, yy),
+                cn_slow_hash_v15_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy));
+}
+
+void cn_slow_hash_v13(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, const uint8_t *seed)
+{
+    cn_pads_require(ctx, 0, 1);
+    CN_DISPATCH(cn_slow_hash_v13_hw(ctx, data, length, hash, seed),
+                cn_slow_hash_v13_sw(ctx, data, length, hash, seed));
 }
 
 /* mmap + MADV_HUGEPAGE on Linux is best effort: the kernel can back the mapping
@@ -214,15 +247,19 @@ int cn_page_tier_actual(const void *p, size_t size, int requested_tier)
 }
 
 /* The page tier of whichever buffer carries the hashrate at this fork version,
- * as the kernel actually backed it: the 24 MB chase buffer from v14, the 8 MB
- * v6 pad at v13, the 1 MB legacy pad before that. Call it after a hash of that
- * version has run, or the buffer will not be allocated yet. */
+ * as the kernel actually backed it: the 8 MB v6 pad at v13, the 1 MB legacy
+ * pad everywhere else, v14 included. Call it after a hash of that
+ * version has run, or the buffer will not be allocated yet.
+ *
+ * v13 exactly, not >= 13: v14 hashes from the legacy pad (CN_V8_PAD) and its
+ * dispatcher asks for cn_pads_require(ctx, 1, 0), so cna_scratchpad is never
+ * allocated at v14. Reading its tier returned the is_mapped field of a NULL
+ * buffer, which is CN_PAGES_MALLOC, so every v14 miner was told it was on
+ * normal pages no matter what the 1 MB pad actually got. */
 int cn_page_tier_for_version(const cn_hash_context_t *ctx, uint8_t major_version)
 {
     if (ctx == NULL)
         return CN_PAGES_MALLOC;
-    if (major_version >= 14)
-        return cn_page_tier_actual(ctx->cna_v7_buffer, CN_V7_BUFFER, ctx->cna_v7_buffer_is_mapped);
     if (major_version == 13)
         return cn_page_tier_actual(ctx->cna_scratchpad, CN_SCRATCHPAD_MEMORY_V13, ctx->cna_scratchpad_is_mapped);
     return cn_page_tier_actual(ctx->scratchpad, CN_SCRATCHPAD_MEMORY, ctx->scratchpad_is_mapped);
@@ -411,20 +448,18 @@ static int cn_buffer_ensure(uint8_t **buf, int *tier, size_t size)
     return *buf != NULL;
 }
 
-static int cn_pads_ensure(cn_hash_context_t *ctx, int legacy, int v6, int v7)
+static int cn_pads_ensure(cn_hash_context_t *ctx, int legacy, int v6)
 {
     if (legacy && !cn_buffer_ensure(&ctx->scratchpad, &ctx->scratchpad_is_mapped, CN_SCRATCHPAD_MEMORY))
         return 0;
     if (v6 && !cn_buffer_ensure(&ctx->cna_scratchpad, &ctx->cna_scratchpad_is_mapped, CN_SCRATCHPAD_MEMORY_V13))
         return 0;
-    if (v7 && !cn_buffer_ensure(&ctx->cna_v7_buffer, &ctx->cna_v7_buffer_is_mapped, CN_V7_BUFFER))
-        return 0;
     return 1;
 }
 
-static void cn_pads_require(cn_hash_context_t *ctx, int legacy, int v6, int v7)
+static void cn_pads_require(cn_hash_context_t *ctx, int legacy, int v6)
 {
-    if (!cn_pads_ensure(ctx, legacy, v6, v7)) {
+    if (!cn_pads_ensure(ctx, legacy, v6)) {
         /* hashing cannot proceed, and a wrong hash would be worse than a
          * crash; a failed pad allocation means the process is out of memory */
         fprintf(stderr, "failed to allocate a CryptoNight scratchpad\n");
@@ -476,17 +511,160 @@ void cn_hash_context_free(cn_hash_context_t *context)
         context->cna_scratchpad = NULL;
     }
 
-    if (context->cna_v7_buffer != NULL) {
-        free_hugepage(context->cna_v7_buffer, CN_V7_BUFFER, context->cna_v7_buffer_is_mapped);
-        context->cna_v7_buffer = NULL;
-    }
-
     if (context->salt != NULL) {
         free_hugepage(context->salt, CN_SALT_MEMORY, context->salt_is_mapped);
         context->salt = NULL;
     }
 
     free(context);
+}
+
+/* Separate from cn_slow_hash_self_test: that one gates startup and is gated on
+ * hardware AES, and neither fits a prototype that has nothing to do with AES.
+ * Catches a build whose floating point diverges, which would fork rather than
+ * fail to compile.
+ *
+ * Returns 1 on success, inverting cn_slow_hash_v15_selftest, to match
+ * cn_slow_hash_self_test's convention.
+ *
+ * WHEN v15 SHIPS: make this fatal and move the hw-vs-sw comparison into
+ * cn_slow_hash_self_test beside v14's. */
+int cn_fp_stage_self_test(void)
+{
+    return cn_slow_hash_v15_selftest() == 0 ? 1 : 0;
+}
+
+/* Known-answer vectors for the algorithms that validate mainnet today,
+ * generated from master. v8 must not move these: the branch carries them
+ * unchanged so CI proves on every platform that v10, v11 and v13 are
+ * untouched, rather than a reviewer taking a byte-identical claim on
+ * trust. Input is "nerva live-algorithm known-answer vector".
+ * v13's seed is seed[i] = i * 7 + 3. */
+static const struct { uint32_t iters; uint8_t blk; uint16_t xx, yy, zz, ww;
+                     unsigned char want[32]; } cn_v10_kat[] = {
+    { 0, 8, 2, 2, 2, 2, {0xd4,0xb2,0xe4,0x3a,0x9e,0xa2,0x76,0x56,0x43,0x67,0x5c,0x95,0x90,0xf3,0xa4,0x67,0x05,0x47,0x19,0x08,0x39,0x73,0x4d,0x5d,0x51,0x82,0xf7,0x2d,0x97,0xdb,0x21,0x89} },
+    { 17, 4, 3, 2, 2, 3, {0xaa,0x28,0x47,0x97,0x29,0xb0,0xb7,0xb2,0x52,0x51,0x4c,0xab,0x6a,0xde,0xd6,0x64,0xc2,0x1c,0x0b,0x27,0xad,0x17,0xab,0xef,0xb0,0xb7,0xbc,0x40,0x78,0xf9,0xcc,0x7d} },
+    { 64, 2, 2, 3, 3, 2, {0x6c,0x81,0x0d,0x87,0xcd,0xe4,0xcf,0x51,0x32,0x7f,0xa9,0x68,0x63,0xee,0x74,0xcc,0x31,0x8a,0x24,0x35,0x10,0x07,0x51,0x84,0xcc,0x77,0x1d,0xf7,0xc9,0xbc,0xf4,0x76} },
+};
+
+static const struct { uint32_t iters; uint8_t blk; uint16_t xx, yy;
+                     unsigned char want[32]; } cn_v11_kat[] = {
+    { 0, 8, 4, 4, {0x0f,0xbd,0xf1,0x9f,0x9c,0xfc,0x63,0x40,0x11,0x14,0xe4,0x2a,0x02,0xd0,0x45,0x6b,0xc0,0x8c,0xab,0x20,0xc2,0x18,0x89,0x94,0xf4,0xa7,0x50,0xf7,0xfa,0x67,0xfa,0xc2} },
+    { 17, 4, 5, 6, {0x7d,0xf4,0xca,0xdf,0xfe,0x45,0x85,0x9d,0xd9,0x87,0xbd,0x28,0xfd,0xb5,0xad,0xa1,0x46,0xf1,0xe5,0xf5,0x5b,0xa6,0xa0,0xc2,0x21,0xc6,0x33,0xd9,0x7a,0x0c,0x9a,0x67} },
+    { 63, 2, 8, 8, {0xc8,0x4d,0x83,0xfc,0x47,0xda,0x91,0xb2,0xfa,0xab,0xc8,0xf9,0x13,0xc6,0xbe,0x26,0x93,0x4e,0xee,0x8f,0x22,0x75,0x6a,0x57,0x77,0xc3,0x59,0x99,0xdb,0x33,0x20,0xc5} },
+};
+
+static const unsigned char cn_v13_kat[32] = {0xa0,0x64,0x2e,0x89,0x8c,0x90,0x08,0x4f,0x5c,0x7c,0x08,0x4d,0xc0,0x6d,0x4a,0x32,0x3c,0xf2,0x78,0x06,0x23,0xa7,0xc5,0x67,0x67,0xc7,0xcf,0xe4,0x02,0x8d,0x0e,0x3c};
+
+/* v8 known-answer vectors, generated from the shipped implementation.
+ * salt and random_values are zeroed before each case so the vector
+ * depends only on (input, iters, blk, xx, yy). */
+static const struct { uint16_t xx, yy; uint32_t iters; unsigned char want[32]; } cn_v14_kat[] = {
+    { 4, 4, 0, {0x23,0xe8,0x63,0x37,0xd6,0x56,0x3f,0x83,0x9a,0xac,0x60,0xb6,0x64,0x74,0x8a,0x33,0xb0,0x24,0xf2,0x8c,0x08,0x5f,0xf9,0xb8,0xc9,0xa5,0xf6,0x38,0x37,0xb8,0xed,0x45} },
+    { 4, 5, 1, {0x3e,0x01,0xa5,0xc5,0xf1,0x3b,0x2e,0x83,0x6b,0xcc,0x21,0x13,0xd4,0x68,0x7d,0x91,0xe8,0xc0,0xb3,0x6b,0x4d,0xea,0x74,0xa7,0xd9,0xa9,0xbc,0xcd,0x09,0xee,0x57,0xc2} },
+    { 5, 4, 17, {0xc3,0xb7,0x06,0x5e,0xc7,0xad,0xec,0xd6,0x90,0x54,0xd4,0xf8,0x41,0x88,0x9d,0xea,0xb4,0xc8,0xe4,0xdd,0x09,0x4e,0xc9,0x6a,0x95,0xd0,0x90,0x9e,0x7f,0xe0,0x26,0x35} },
+    { 6, 6, 64, {0x23,0x15,0x6a,0x57,0xad,0x07,0x7f,0xc5,0xbf,0xde,0xa2,0x35,0x7d,0xb1,0x20,0x3c,0x0f,0x9c,0x99,0x8e,0x79,0x19,0x63,0xce,0xa1,0x9a,0x98,0x4b,0x57,0x35,0x44,0x92} },
+    { 8, 8, 63, {0x94,0x5f,0x9f,0x1d,0x48,0x96,0x59,0x17,0x84,0xe8,0x2b,0x33,0xe8,0xef,0x10,0x35,0xce,0x1c,0xe9,0x3a,0x9c,0xdb,0x6c,0xaf,0x8e,0xcb,0xb2,0x8d,0xb4,0x42,0x6c,0x19} },
+    { 7, 5, 7, {0xc7,0xc5,0x87,0x4c,0xa0,0xe2,0xa5,0xca,0x71,0xd5,0x96,0x49,0xe6,0x8c,0xb7,0xfa,0xcf,0xf4,0xe6,0xa3,0x62,0x4d,0x97,0x20,0x21,0x79,0x91,0xef,0xb7,0x53,0xbf,0x8c} },
+};
+
+/* Fixed salt and fixed draws, so the chain entry's self-test compares the two
+ * AES arms rather than the callback. draw_out is NULL when it is called just to
+ * fill a salt buffer.
+ *
+ * `user`, when non-NULL, is a 32-byte buffer that receives the seed the hash
+ * handed in. The seed is the AES fill's final chain state and is consensus
+ * input to HC-128, so the two arms must agree on it; comparing the resulting
+ * hashes covers it only indirectly. */
+static void cn_selftest_salt(void *user, const unsigned char seed[32], char *salt_out, cn_v8_draw_t *draw_out)
+{
+    size_t i;
+    if (user != NULL && seed != NULL)
+        memcpy(user, seed, 32);
+    for (i = 0; i < CN_SALT_MEMORY; i++)
+        salt_out[i] = (char)(i * 31u + 7u);
+    if (draw_out != NULL)
+    {
+        draw_out->xx = 3;
+        draw_out->yy = 3;
+        draw_out->iters = 64;
+    }
+}
+
+/* Known-answer vectors, checked on every build and every platform.
+ *
+ * Separate from cn_slow_hash_self_test on purpose: that one compares the two
+ * AES arms against each other, so it returns early when there is no hardware
+ * AES, which is exactly the platform where a divergence is most likely and
+ * where nothing else would notice. This runs through the dispatchers, so it
+ * checks whichever arm the platform actually uses.
+ *
+ * It also catches what HW == SW structurally cannot: a change that moves both
+ * arms together, which is what editing a macro they share does.
+ *
+ * Returns 1 on pass. An allocation failure returns 1 as well, since it says
+ * nothing about whether the hashes are right. */
+int cn_slow_hash_known_answer_test(void)
+{
+    static const char live_in[] = "nerva live-algorithm known-answer vector";
+    static const char v8_in[] = "nerva cna v8 known-answer vector";
+    cn_hash_context_t *ctx = cn_hash_context_create();
+    char h[HASH_SIZE];
+    uint8_t seed[32];
+    size_t k;
+    int ok = 1, i;
+
+    if (ctx == NULL)
+        return 1;
+    for (i = 0; i < 32; i++)
+        seed[i] = (uint8_t)(i * 7u + 3u);
+
+    /* the dispatchers allocate lazily, so run one hash before zeroing anything */
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+    cn_slow_hash_v11(ctx, live_in, sizeof(live_in) - 1, h, 8, 8, 4, 4);
+    if (ctx->salt == NULL)
+    {
+        cn_hash_context_free(ctx);
+        return 1;
+    }
+
+    for (k = 0; k < sizeof(cn_v10_kat) / sizeof(cn_v10_kat[0]); k++)
+    {
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        memset(ctx->salt, 0, CN_SALT_MEMORY);
+        cn_slow_hash_v10(ctx, live_in, sizeof(live_in) - 1, h,
+                         cn_v10_kat[k].iters, cn_v10_kat[k].blk, cn_v10_kat[k].xx,
+                         cn_v10_kat[k].yy, cn_v10_kat[k].zz, cn_v10_kat[k].ww);
+        if (memcmp(h, cn_v10_kat[k].want, HASH_SIZE) != 0) ok = 0;
+    }
+
+    for (k = 0; k < sizeof(cn_v11_kat) / sizeof(cn_v11_kat[0]); k++)
+    {
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        memset(ctx->salt, 0, CN_SALT_MEMORY);
+        cn_slow_hash_v11(ctx, live_in, sizeof(live_in) - 1, h,
+                         cn_v11_kat[k].iters, cn_v11_kat[k].blk,
+                         cn_v11_kat[k].xx, cn_v11_kat[k].yy);
+        if (memcmp(h, cn_v11_kat[k].want, HASH_SIZE) != 0) ok = 0;
+    }
+
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+    memset(ctx->salt, 0, CN_SALT_MEMORY);
+    cn_slow_hash_v13(ctx, live_in, sizeof(live_in) - 1, h, seed);
+    if (memcmp(h, cn_v13_kat, HASH_SIZE) != 0) ok = 0;
+
+    for (k = 0; k < sizeof(cn_v14_kat) / sizeof(cn_v14_kat[0]); k++)
+    {
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        memset(ctx->salt, 0, CN_SALT_MEMORY);
+        cn_slow_hash_v14(ctx, v8_in, sizeof(v8_in) - 1, h,
+                         cn_v14_kat[k].iters, CN_V8_INIT_SIZE_BLK,
+                         cn_v14_kat[k].xx, cn_v14_kat[k].yy);
+        if (memcmp(h, cn_v14_kat[k].want, HASH_SIZE) != 0) ok = 0;
+    }
+
+    cn_hash_context_free(ctx);
+    return ok;
 }
 
 int cn_slow_hash_self_test(void)
@@ -505,7 +683,7 @@ int cn_slow_hash_self_test(void)
      * allocation in the dispatchers does not run for them. A failed allocation
      * says nothing about HW versus SW agreement, so skip the test the same way
      * a failed context allocation does above rather than refusing to start. */
-    if (!cn_pads_ensure(ctx, 1, 1, 1)) {
+    if (!cn_pads_ensure(ctx, 1, 1)) {
         cn_hash_context_free(ctx);
         return 1;
     }
@@ -554,6 +732,51 @@ int cn_slow_hash_self_test(void)
     cn_slow_hash_v11_sw(ctx, input, sizeof(input) - 1, sw, 64, 8, 2, 2);
     if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
 
+    /* v14 (CNA v8). The two arms are separate copies whose r2 aliases a
+     * different register on purpose, so a slip between them is invisible to
+     * review and would split the chain along the AES-NI line. xx/yy run to 3 so
+     * the inner loop runs more than once and actually varies the selector. */
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+    memset(ctx->salt, 0, CN_SALT_MEMORY);
+    cn_slow_hash_v14_hw(ctx, input, sizeof(input) - 1, hw, 64, 8, 3, 3);
+    memset(ctx->salt, 0, CN_SALT_MEMORY);
+    cn_slow_hash_v14_sw(ctx, input, sizeof(input) - 1, sw, 64, 8, 3, 3);
+    if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
+
+    /* The chain entry, which is the one consensus uses and the one nothing
+     * else can reach: HF14 is not active, so no daemon calls it in anger yet.
+     * It shares cn_v8_core with the call above, but the callback hook sits
+     * between the fill and the salt, so an arm that mishandled it would be
+     * invisible to every check that does not go through it. */
+    {
+        unsigned char seed_hw[32], seed_sw[32];
+        memset(seed_hw, 0, sizeof(seed_hw));
+        memset(seed_sw, 0xff, sizeof(seed_sw));
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        cn_slow_hash_v14_chain_hw(ctx, input, sizeof(input) - 1, hw, 8, cn_selftest_salt, seed_hw);
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        cn_slow_hash_v14_chain_sw(ctx, input, sizeof(input) - 1, sw, 8, cn_selftest_salt, seed_sw);
+        if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
+        /* directly, not inferred from the hashes agreeing */
+        if (memcmp(seed_hw, seed_sw, sizeof(seed_hw)) != 0) ok = 0;
+    }
+
+    /* and it must agree with the caller-supplied-salt entry given the same
+     * salt and the same draws, which is what stops the two from drifting */
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+    cn_selftest_salt(NULL, NULL, ctx->salt, NULL);
+    cn_slow_hash_v14_hw(ctx, input, sizeof(input) - 1, sw, 64, 8, 3, 3);
+    if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
+
+    /* v14 must also differ from v11 on the same inputs, which catches a build
+     * where the variant silently failed to take effect (stale macro, bad copy,
+     * an arm that picked up salt_pad). The HW/SW check above would still pass
+     * in all of those. */
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+    memset(ctx->salt, 0, CN_SALT_MEMORY);
+    cn_slow_hash_v11_hw(ctx, input, sizeof(input) - 1, sw, 64, 8, 3, 3);
+    if (memcmp(hw, sw, HASH_SIZE) == 0) ok = 0;
+
     /* v13: 8 MB scratchpad + VM. seed is a fixed 32-byte value; salt and
      * random_values reset so both paths see identical inputs. */
     {
@@ -567,37 +790,6 @@ int cn_slow_hash_self_test(void)
         if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
     }
 
-    /* v14: 256 KB pad + a 24 MB per-nonce buffer the hash fills from the seed
-     * and walks (mutating as it goes). Both paths mutate the pad; resetting
-     * salt/random_values before each call keeps the inputs identical. The
-     * seed must be varied: with an all-zero seed the old fill zeroed the
-     * whole buffer and the chase collapsed onto the low indices, so the test
-     * exercised under 1% of the buffer while this is the only guard against
-     * an AES-NI / software-AES split on the v14 path. */
-    {
-        uint8_t seed[32];
-        uint32_t si;
-        for (si = 0; si < sizeof(seed); si++)
-            seed[si] = (uint8_t)(si * 47u + 11u);
-        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
-        memset(ctx->salt, 0, CN_SALT_MEMORY);
-        cn_slow_hash_v14_hw(ctx, input, sizeof(input) - 1, hw, seed);
-        /* the fill must actually populate the buffer, or the comparison
-         * below is vacuous again; OR-sample it across its whole length */
-        {
-            const uint64_t *bw = (const uint64_t *)ctx->cna_v7_buffer;
-            const uint32_t stride = (uint32_t)(CN_V7_BUFFER / sizeof(uint64_t) / 4096);
-            uint64_t acc = 0;
-            uint32_t bi;
-            for (bi = 0; bi < 4096; bi++)
-                acc |= bw[bi * stride];
-            if (acc == 0) ok = 0;
-        }
-        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
-        memset(ctx->salt, 0, CN_SALT_MEMORY);
-        cn_slow_hash_v14_sw(ctx, input, sizeof(input) - 1, sw, seed);
-        if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
-    }
 
     cn_hash_context_free(ctx);
     return ok;

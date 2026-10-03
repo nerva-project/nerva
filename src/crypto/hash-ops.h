@@ -91,11 +91,38 @@ void cn_fast_hash(const void *data, size_t length, char *hash);
 #define CN_SCRATCHPAD_MEMORY    1048576         // 1 MB — used by v9–v12
 #define CN_SCRATCHPAD_MEMORY_V13 (8*1024*1024)  // 8 MB — v13: a bigger pad keeps hashing memory-bound
                                                 // (1 CPU = 1 vote) and costlier to put on an ASIC
-#define CN_SCRATCHPAD_MEMORY_V14 (256*1024)     // 256 KB, v14: the pad is write-hardness only; the
-                                                // memory binding moved to the per-nonce 24 MB chase
-                                                // buffer. Small enough to fit every cache, so the v13
-                                                // per-nonce refill stops amplifying fast cores. Power of 2.
+/* CNA v8 (HF14). Same 1 MB pad v5 has used since HF11, chosen on measurement
+ * across four CPUs: a larger pad is worse on both fairness axes and excludes
+ * small-cache machines from multi-threading first. FINDINGS.md F24, F27, F28.
+ * Its own constant, and v8 has its own translation unit, so this is a one-line
+ * change if that is ever revisited. */
+#define CN_SCRATCHPAD_MEMORY_V8 (1024*1024)
+
+/* v8 pins init_size_blk instead of drawing it per nonce. The draw changes the
+ * AES operation count by zero (pad/(blk*16) iterations of blk blocks is pad/16
+ * blocks at any width) and the time by up to 2.24x, so it was the largest
+ * screenable axis in the algorithm and bought nothing. 8 is the fastest width
+ * at every (xx, yy) and fills state.init exactly. FINDINGS.md F42. */
+#define CN_V8_INIT_SIZE_BLK 8
+
+/* v8 fetches its chain salt from inside the hash, after the AES fill, and the
+ * seed it passes out is the fill's final chain state. A device that wants to
+ * produce salts for a CPU therefore has to run the whole 1 MB fill per
+ * candidate first, which on anything without an AES unit is ~655K software
+ * block rounds. The per-nonce draws come back with the salt because they are
+ * taken from the salt-advanced keystream and are not knowable any earlier.
+ * PLAN-v8 Phase 6 B2, FINDINGS.md F46. */
+typedef struct {
+    uint16_t xx;
+    uint16_t yy;
+    size_t   iters;
+} cn_v8_draw_t;
+
+typedef void (*cn_v8_salt_fn)(void *user, const unsigned char seed[32],
+                              char *salt_out, cn_v8_draw_t *draw_out);
+
 #define CN_SALT_MEMORY 262144
+
 #define CNA_V6_WINDOW_BLOCKS     100000U        // recent-block window for sliding reads (~5.6 MB)
 #define CNA_V6_FULL_HISTORY_ODDS 13U            // out of 256 (~5%) go to full history
 #define CN_RANDOM_VALUES 32
@@ -143,8 +170,6 @@ typedef struct cn_hash_context
   int scratchpad_is_mapped;
   uint8_t *cna_scratchpad;   // 8 MB  — v13 (CryptoNight-Adaptive v6)
   int cna_scratchpad_is_mapped;
-  uint8_t *cna_v7_buffer;    // 24 MB, v14 (CNA v7) per-nonce chase buffer
-  int cna_v7_buffer_is_mapped;
   char *salt;
   int salt_is_mapped;
   cn_random_values_t random_values;
@@ -171,13 +196,31 @@ int cn_hardware_aes_supported(void);
  * on success or when the HW path isn't built/active (nothing to verify), and
  * 0 if HW and SW disagree, which would mean wrong PoW. */
 int cn_slow_hash_self_test(void);
+/* Known-answer vectors for v10, v11, v13 and v14. Runs on every platform,
+ * unlike cn_slow_hash_self_test which needs hardware AES to compare against.
+ * Returns 1 on pass. */
+int cn_slow_hash_known_answer_test(void);
 
 void cn_slow_hash(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters);
 void cn_slow_hash_v11(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
+/* v14 (CNA v8): v11 with salt_pad's extra-hash selector widened from three
+ * entries to four, so Skein joins Blake, Groestl and JH. Same pad and
+ * parameters as v11.
+ *
+ * Named for the hard fork, not the CNA generation, which is why there is no
+ * v12 and why CNA v8 is called v14. The name previously held CNA v7, which was
+ * removed before release and never validated a block, so reuse is safe. */
+void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
+/* Consensus entry for v8: salt fetched inside the hash via salt_fn, seeded
+ * from the AES fill. iters/xx/yy come back through the callback. */
+void cn_slow_hash_v14_chain(cn_hash_context_t *context, const void *data, size_t length, char *hash, uint8_t init_size_blk, cn_v8_salt_fn salt_fn, void *salt_user);
+/* PLAN-v8 Phase 2 prototype; no consensus path calls this. */
+void cn_slow_hash_v15(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
+int cn_slow_hash_v15_selftest(void);
+/* 1 = this build computes the FP reference vector. Note the inversion against
+ * cn_slow_hash_v15_selftest above, which returns 0 on success. */
+int cn_fp_stage_self_test(void);
 void cn_slow_hash_v13(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
-/* v14 (CNA v7): fills a 24 MB per-nonce chase buffer (context->cna_v7_buffer)
- * from the seed and walks it, mutating as it goes. No external dataset. */
-void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
 void cn_slow_hash_v10(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww);
 void cn_slow_hash_v9(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters);
 void cn_slow_hash_v7_8(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters);

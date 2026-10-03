@@ -252,11 +252,13 @@ namespace config
         {12, 930000},
         {13, 4320000},  // CryptoNight-Adaptive v6: 8 MB scratchpad + random VM program
         {14, 4500000}   // CLSAG + Bulletproofs+ (type 7 only) and CryptoNight-Adaptive
-                        // v7 (per-nonce mutable-buffer chase, one box ~ one vote).
+                        // v8: v5 at its 1 MB pad, with salt_pad's extra-hash selector
+                        // widened from three entries to four, over v6's windowed chain
+                        // fill. v7 was written for this same slot and removed before
+                        // release; it never validated a mainnet block.
                         // Placeholder height, held far enough out that builds from
                         // master don't fork early. The real one is set once the
-                        // validation gates pass: reference-pair run, testnet fork,
-                        // GPU port test.
+                        // validation gates pass: reference-pair run and testnet fork.
     };
 
     namespace testnet
@@ -287,7 +289,7 @@ namespace config
             {11, 590},
             {12, 700},
             {13, 800},
-            {14, 1000}  // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v7
+            {14, 1000}  // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v8
         };
     }
 
@@ -312,7 +314,7 @@ namespace config
             {11, 590},
             {12, 700},
             {13, 800},
-            {14, 1000}  // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v7
+            {14, 1000}  // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v8
         };
     }
 }

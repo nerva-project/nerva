@@ -806,6 +806,21 @@ std::string get_nix_version_display_string()
 
   bool check_aesni()
   {
+    /* Before the HW-vs-SW comparison and outside it, and outside the NO_AES
+     * guard as well: NO_AES drops only the hardware translation units, so such
+     * a build still computes consensus hashes through the software path, and it
+     * is the build with the least other checking, because there is no hardware
+     * arm left for the self-test below to compare against. The vectors are the
+     * only check that can see a change which moves both arms together. */
+    if (!crypto::cn_slow_hash_known_answer_test())
+    {
+        MGUSER_RED(
+            "Hash known-answer test FAILED: this build does not compute the same "
+            "hashes as the network. Refusing to start; it would reject valid "
+            "blocks or mine invalid ones.");
+        return false;
+    }
+
 #if !defined NO_AES
     if (crypto::cn_hardware_aes_supported())
     {
@@ -827,6 +842,20 @@ std::string get_nix_version_display_string()
             "Falling back to the software AES path; hashing will be substantially slower.");
     }
 #endif // !defined NO_AES
+
+    /* Checked on every build, including software-AES ones: floating point has
+     * nothing to do with AES. Warns rather than refuses because no consensus
+     * path routes to v15, so a divergent build cannot fork anything today. */
+    if (!crypto::cn_fp_stage_self_test())
+    {
+      MGUSER_YELLOW(
+          "Floating-point self-test FAILED: this build does not compute the "
+          "reference vector. Nothing in consensus uses floating point today, so "
+          "this is not fatal, but this build must not be used to mine or "
+          "validate if a future fork enables the FP stage. Please report it "
+          "with your compiler and platform.");
+    }
+
     return true;
   }
 

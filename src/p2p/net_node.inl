@@ -2754,8 +2754,13 @@ namespace nodetool
     if (address.get_zone() != epee::net_utils::zone::public_)
       return false; // Unable to determine how many connections from host
 
-    // for testing networks we allow more than 1 connection
-    const size_t max_connections = m_nettype == cryptonote::STAGENET ? 3 : 1;
+    // for testing networks we allow more than 1 connection. cc02066 is titled
+    // "Only allow multiple connections from the same IP on testing networks"
+    // but exempted stagenet alone, so testnet kept the mainnet limit of one
+    // inbound connection per host and a third node on 127.0.0.1 could not peer
+    // with the first two. Mainnet is unchanged: the limit is what stops one
+    // host taking several of a node's inbound slots.
+    const size_t max_connections = m_nettype == cryptonote::MAINNET ? 1 : 3;
     size_t count = 0;
 
     m_network_zones.at(epee::net_utils::zone::public_).m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
