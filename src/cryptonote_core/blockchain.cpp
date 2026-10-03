@@ -1746,8 +1746,18 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     CHECK_AND_ASSERT_MES(current_diff, false, "!!!!!!! DIFFICULTY OVERHEAD !!!!!!!");
     crypto::hash proof_of_work;
     memset(proof_of_work.data, 0xff, sizeof(proof_of_work.data));
-    get_block_longhash(m_hash_context, this, bei.bl, proof_of_work, bei.height);
-    
+    if(!get_block_longhash(m_hash_context, this, bei.bl, proof_of_work, bei.height))
+    {
+      // A false return means we could not compute the hash, for instance an
+      // LMDB error while fetching v8's chain salt. That is a local fault and
+      // says nothing about the block, so do not set m_bad_pow: that flag costs
+      // the sending peer P2P_IP_FAILS_BEFORE_BLOCK and would ban it for our
+      // own failure.
+      MERROR_VER("Block with id: " << id << std::endl << " for alternative chain, could not compute proof of work; treating as unverifiable rather than invalid");
+      bvc.m_verifivation_failed = true;
+      return false;
+    }
+
     if(!check_hash(proof_of_work, current_diff))
     {
       MERROR_VER("Block with id: " << id << std::endl << " for alternative chain, does not have enough proof of work: " << proof_of_work << std::endl << " expected difficulty: " << current_diff);
@@ -3592,8 +3602,14 @@ leave:
         precomputed = true;
       }
     }
-    if (!precomputed)
-      get_block_longhash(m_hash_context, this, bl, proof_of_work, blockchain_height);
+    if (!precomputed && !get_block_longhash(m_hash_context, this, bl, proof_of_work, blockchain_height))
+    {
+      // As above: could not verify, rather than verified bad. No m_bad_pow, so
+      // a local database error does not get the sending peer banned.
+      MERROR_VER("Block with id: " << id << " at height " << blockchain_height << ": could not compute proof of work; treating as unverifiable rather than invalid");
+      bvc.m_verifivation_failed = true;
+      goto leave;
+    }
 
     // validate proof_of_work versus difficulty target
     if(!check_hash(proof_of_work, current_diffic))

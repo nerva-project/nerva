@@ -766,6 +766,14 @@ namespace cryptonote
         MERROR("v14 salt fetch failed with an unknown exception");
         c->failed = true;
       }
+
+      // The hash runs to completion either way and randomize_scratchpad_256k_v8
+      // reads the whole salt, which allocate_hugepage never zeroes. Without
+      // this the failure path is an uninitialized read: harmless in effect,
+      // since the resulting hash is discarded, but undefined and it would light
+      // up a sanitizer.
+      if (c->failed)
+        memset(salt_out, 0, CN_SALT_MEMORY);
     }
   }
   //---------------------------------------------------------------
@@ -800,9 +808,14 @@ namespace cryptonote
                                    CN_V8_INIT_SIZE_BLK, v14_fetch_salt, &sctx);
 
     // The hash ran to completion either way, so the C frame cleaned up after
-    // itself; res is simply meaningless if the salt never arrived.
+    // itself; res is simply meaningless if the salt never arrived. Stamp it so
+    // that a caller which ignores the return value still fails closed, the way
+    // it did when the only false return happened before res was written.
     if (sctx.failed)
+    {
+      memset(res.data, 0xff, sizeof(res.data));
       return false;
+    }
 
     return true;
   }
