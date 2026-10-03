@@ -2294,17 +2294,45 @@ hash a synthetic salt and never calls `get_cna_v6_data`.** The chain fill is
 ~60% of a real nonce, so those figures are computed from the 40% that excludes
 the dominant term.
 
+All four machines, one mining thread, and the multi-thread column at one less
+than the machine's thread count:
+
+| CPU | 1T H/s | ms/nonce | vs fastest | max-1 | scaling |
+|---|---|---|---|---|---|
+| Ryzen 9 7950X, 16c/32t | 756 | 1.323 | 1.00x | 12.77 kH/s @31T | 54% |
+| Ryzen 7 9700X, 8c/16t | 737 | 1.357 | 1.03x | 6.35 kH/s @15T | 57% |
+| Ryzen 5 5600X, 6c/12t | 587 | 1.704 | 1.29x | 3.53 kH/s @11T | 55% |
+| i7-7700HQ, 4c/8t | 348 | 2.874 | **2.17x** | 1.275 kH/s @6T | 61% |
+
+**The whole spread is the laptop.** The three desktops sit within 1.29x of each
+other across three Zen generations; Zen 5 and Zen 4 are within 3%.
+
+Scaling efficiency is flat at 54 to 61% across all four, so multi-threading does
+not differentially punish the weak machine. That is worth recording because the
+4 MB and 8 MB rows in `v8bench` show the opposite, and it is part of why the pad
+stayed at 1 MB.
+
+Against the two-machine decomposition:
+
 | | 7950X | i7-7700HQ | spread |
 |---|---|---|---|
 | hash core, `v8bench` | 0.535 ms | 1.257 ms | 2.35x |
-| chain fill, by subtraction | ~0.81 ms | ~1.62 ms | ~1.99x |
-| **real nonce, daemon** | **1.348 ms** | **2.874 ms** | **2.13x** |
-| | 742 H/s | ~348 H/s | |
+| chain fill, by subtraction | ~0.79 ms | ~1.62 ms | ~2.05x |
+| **real nonce, daemon** | **1.323 ms** | **2.874 ms** | **2.17x** |
 
 **The real spread is narrower than the published one**, because the chain fill
 is more uniform across machines than the hash core. That is the opposite of the
 direction a reviewer would guess, and it is good news: the algorithm is fairer
 in practice than the benchmark says.
+
+**Do not call the 2.2x target met on this.** 2.17x clears it by 1.3%, and the
+same 7950X reads 756 H/s on a quiet machine against 742 with a browser open, a
+1.9% move on the number that is the denominator of the whole ratio. The margin
+is smaller than the run-to-run variation of a single machine. Worse, PLAN-v8's
+2.2x target and v6's 2.91x were both stated against hash-core figures, and v6
+has never been measured this way, so this is not a like-for-like comparison
+either. The honest statement is that v8 sits **at** the threshold on a
+measurement basis the threshold was not written for.
 
 The 60% share is now confirmed three independent ways: the instrumented profile
 at 59.5%, the external review's unscreenable prefix at 63%, and this run's
