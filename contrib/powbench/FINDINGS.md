@@ -2325,10 +2325,13 @@ is more uniform across machines than the hash core. That is the opposite of the
 direction a reviewer would guess, and it is good news: the algorithm is fairer
 in practice than the benchmark says.
 
-**Do not call the 2.2x target met on this.** 2.17x clears it by 1.3%, and the
-same 7950X reads 756 H/s on a quiet machine against 742 with a browser open, a
-1.9% move on the number that is the denominator of the whole ratio. The margin
-is smaller than the run-to-run variation of a single machine. Worse, PLAN-v8's
+**Do not call the 2.2x target met on this.** 2.17x clears it by 1.3%, and that
+margin is far smaller than the noise on the number underneath it. The same
+binary on the same 7950X reads about 760 H/s with the machine quiet and about
+670 with a browser open, **a 12% swing**, and in one loaded session the two ends
+of an A-B-A came back 10.7% apart under nominally constant conditions. The
+denominator of the ratio moves by several times the margin being claimed, so the
+third significant figure of 2.17x is noise. Worse, PLAN-v8's
 2.2x target and v6's 2.91x were both stated against hash-core figures, and v6
 has never been measured this way, so this is not a like-for-like comparison
 either. The honest statement is that v8 sits **at** the threshold on a
@@ -2372,6 +2375,17 @@ being claimed, not worse.
 difficulty of 3 the miner finds a block almost every hash, so `mining_status`
 measures block-template construction rather than hashing. The run above used
 100000000, at which no block is found and the reported rate is the hash rate.
+
+**A-B-A is not enough on this measurement, and A-B-B-A is.** An A-B-A comparing
+two daemon builds returned its two A runs 10.7% apart, which is larger than any
+effect worth looking for, so it could only be discarded; averaging the two A's
+against the single B produced a confident `-5.5%` that was pure drift. A-B-B-A
+cancels linear drift instead of merely revealing it, because the A's sit at the
+outside and the B's in the middle. Discard a warm-up run as well: the first
+sample of a session reads high, the machine evidently not yet settled. With
+that design the same comparison came back at +0.5% with 1.4% drift across the
+A pair, which is the right answer, since the change under test touches only a
+failure path.
 
 ### F53. External review of the Phase 6 batch, what it found and what was verified
 
@@ -2448,6 +2462,43 @@ as this file's own. The two agree in direction and both say screening does not
 pay, which is the conclusion that matters; the magnitudes have not been
 reconciled and should not be quoted as ours. Their 50-80 ms estimate for the
 startup KAT is likewise unmeasured here.
+
+#### A second round, and a defect the first fix created
+
+The reviewer re-tested the flush-restart over 192 hashes at `xx`/`yy` in
+{9,12,17,20}, sweep counts 72 to 380 so the 64-entry log restarts 1 to 6 times
+per hash, both AES arms, and found it identical to the eager form. They then
+found a defect the exception fix had introduced.
+
+**Wrapping the callback gave `false` a new meaning, and the callers were never
+told.** Before it, `get_block_longhash_v14` returned false only at the
+`height < CN_SEED_MIN_HEIGHT` check, which happens before anything writes `res`,
+so false always meant "res untouched" and the two callers that ignore the return
+were safe by accident. After it, a salt-fetch failure lets the hash run to
+completion, write a meaningless `res`, and return false.
+
+Confirmed here rather than taken: `blockchain.cpp:1749` and `:3596` ignore the
+return, run `check_hash` on the garbage, and set `bvc.m_bad_pow`, which feeds
+`drop_connection_with_score(context, P2P_IP_FAILS_BEFORE_BLOCK, ...)` at three
+sites in `cryptonote_protocol_handler.inl`. **A transient local LMDB error would
+have rejected a valid block and banned the peer that sent it.** Local fault,
+remote penalty. `blockchain.cpp:4398` does check the return, but its re-hash
+path goes to 3596, so the careful caller fed the careless one.
+
+Also confirmed: the salt buffer comes from `allocate_hugepage` and is never
+zeroed, so the failure path read 256 KB of uninitialized heap in
+`randomize_scratchpad_256k_v8`. Benign in effect, undefined in fact.
+
+Fixed in three places: the catch zeroes the salt, `get_block_longhash_v14`
+stamps `res` with 0xff before returning false so anything that ignores the bool
+still fails closed, and both careless callers now treat false as *could not
+verify*, setting `m_verifivation_failed` without `m_bad_pow`.
+
+**The lesson is about the shape of the mistake, not the code.** The exception
+wrap was reasoned carefully at the point of the throw, down to the ABI and the
+leaked `text` buffer. What was never asked is what `false` had previously
+*meant* to the people receiving it. Changing a return value's meaning is an
+interface change, and this one looked like a local bug fix.
 
 #### The pattern worth extracting
 
