@@ -673,10 +673,11 @@ namespace cryptonote
       return false;
     const uint64_t stable_height = height - 256;
 
-    if (context->cached_height != height)
+    if (context->cached_height != height || context->cached_bound != CN_SCRATCHPAD_MEMORY_V13)
     {
       db.get_cna_v2_data(&context->random_values, stable_height, CN_SCRATCHPAD_MEMORY_V13);
       context->cached_height = height;
+      context->cached_bound = CN_SCRATCHPAD_MEMORY_V13;
     }
 
     // Per-nonce seed: HC128 PRNG seeded from blob hash, used to fill chain salt.
@@ -792,10 +793,11 @@ namespace cryptonote
       return false;
     uint64_t stable_height = height - 256;
 
-    if (context->cached_height != height)
+    if (context->cached_height != height || context->cached_bound != CN_SCRATCHPAD_MEMORY)
     {
       db.get_cna_v2_data(&context->random_values, stable_height, CN_SCRATCHPAD_MEMORY);
       context->cached_height = height;
+      context->cached_bound = CN_SCRATCHPAD_MEMORY;
     }
 
     // Make the hashing context unique per nonce by seeding it with a hash
@@ -832,10 +834,11 @@ namespace cryptonote
 
     const uint64_t ht = height - 256;
 
-    if (context->cached_height != height)
+    if (context->cached_height != height || context->cached_bound != CN_SCRATCHPAD_MEMORY)
     {
       db.get_cna_v2_data(&context->random_values, ht, CN_SCRATCHPAD_MEMORY);
       context->cached_height = height;
+      context->cached_bound = CN_SCRATCHPAD_MEMORY;
     }
 
     block b;
@@ -876,10 +879,11 @@ namespace cryptonote
 
     const uint64_t ht = height - 256;
 
-    if (context->cached_height != height)
+    if (context->cached_height != height || context->cached_bound != CN_SCRATCHPAD_MEMORY - 1)
     {
       db.get_cna_v2_data(&context->random_values, ht, CN_SCRATCHPAD_MEMORY - 1);
       context->cached_height = height;
+      context->cached_bound = CN_SCRATCHPAD_MEMORY - 1;
     }
 
     block b;
@@ -900,10 +904,11 @@ namespace cryptonote
     if (height < data_offset + CN_SEED_BACKREACH)
       return false;
 
-    if (context->cached_height != height)
+    if (context->cached_height != height || context->cached_bound != CN_SCRATCHPAD_MEMORY - 1)
     {
       db.get_cna_v2_data(&context->random_values, height - data_offset, CN_SCRATCHPAD_MEMORY - 1);
       context->cached_height = height;
+      context->cached_bound = CN_SCRATCHPAD_MEMORY - 1;
     }
 
     crypto::cn_slow_hash_v7_8(context, blob.data(), blob.size(), res, 0x40000 + ((height + 1) % 64));
