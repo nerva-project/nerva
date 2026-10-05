@@ -696,6 +696,19 @@ A secondary benefit: at 1 MB, v8 is v5 with one token changed. For a fork
 already carrying CLSAG, Bulletproofs+ and ring size 16, the most conservative
 possible PoW change is a virtue.
 
+**Reopened downward, 2026-10-05.** This sweep and F24's both start at 1 MB, so
+1 MB is the smallest size ever measured and the decision is "the best of what we
+tried" rather than a bracketed minimum. Every trend here is monotonic toward
+smaller, and the mechanism this finding identifies, how many threads fit in L3,
+**has not saturated at 1 MB**: the laptop fits four of its eight threads and
+amplifies 3.4x against the 7950X's 18.6x, which is what produces the 11.3x
+spread. The salt coupling allows 512 KB and 256 KB, the resize harness builds
+them with a three-line change, and 512 KB has strictly better stride entropy
+than 1 MB because its derived modulus is 127 rather than 125. The argument
+against is that Phase 6 B2's feeder gate is proportional to the fill.
+[PLAN-v8-PHASE7.md](PLAN-v8-PHASE7.md) C1 has the full case and the five
+criteria to decide it against.
+
 ### F28. Neither argument for a larger pad could carry the decision
 
 **The ASIC argument is unmeasured.** It appears once, in `PLAN-v8.md`, as "1 MB

@@ -12,6 +12,12 @@ once.
   below. Section 2 lists the mistakes made along the way and section 7 the known
   gaps.
 - [BUILD.txt](BUILD.txt) is how to build and run the benchmark harness.
+- [PLAN-v8-PHASE7.md](PLAN-v8-PHASE7.md) is what to change in v8 now that the
+  v6 miner project has finished. It supersedes the Phase A list below where the
+  two disagree, and it **reopens the pad decision downward**: F24 and F27 swept
+  1 to 8 MB and never measured below 1 MB, so the chosen size is the endpoint of
+  the sample rather than a bracketed minimum, and every trend in that sample
+  points off that end. 512 KB and 256 KB are buildable in the existing harness.
 
 Every target below comes from measurements in [RESULTS.md](RESULTS.md); read
 that first.
@@ -33,6 +39,7 @@ but not shipped and not decided.**
 | 4, plumbing | done, `get_block_longhash_v14` live at major_version >= 14 |
 | 5, validation | done; the testnet fork round passed on two machines, F49 |
 | 6, hardening vs the measured miner | B1, B2, B3 and A1b all landed |
+| 7, implementation gap and the pad size | **planned, not started**; see [PLAN-v8-PHASE7.md](PLAN-v8-PHASE7.md) |
 
 Phase 6 exists because [0xROOTPLS](https://github.com/0xROOTPLS) built an optimized miner, measured it
 at 2.43x the reference and reported it in full. Its breakdown showed that once
