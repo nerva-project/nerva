@@ -148,7 +148,6 @@ typedef struct cn_hash_context
   char *salt;
   int salt_is_mapped;
   cn_random_values_t random_values;
-  uint64_t cached_height;
 } cn_hash_context_t;
 
 /* The actual tier of the buffer that carries the hashrate at a fork version,
