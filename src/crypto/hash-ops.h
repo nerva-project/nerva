@@ -149,6 +149,10 @@ typedef struct cn_hash_context
   int salt_is_mapped;
   cn_random_values_t random_values;
   uint64_t cached_height;
+  /* random_values indices are reduced modulo the scratchpad bound passed to
+   * get_cna_v2_data, so a set cached for one version's bound must not be
+   * reused by a version with a smaller pad. Key the cache on the bound too. */
+  uint64_t cached_bound;
 } cn_hash_context_t;
 
 /* The actual tier of the buffer that carries the hashrate at a fork version,
