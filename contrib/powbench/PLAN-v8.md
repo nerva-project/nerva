@@ -12,6 +12,10 @@ once.
   below. Section 2 lists the mistakes made along the way and section 7 the known
   gaps.
 - [BUILD.txt](BUILD.txt) is how to build and run the benchmark harness.
+- [V6-MINER-LOG.md](V6-MINER-LOG.md) is the v6 miner optimization project: what
+  a tuned miner actually gets on the live algorithm, measured, and ten lessons
+  written to be checked against a proposed v8 change. It is the evidence behind
+  Phase 7. The code it describes is on a personal fork and is not proposed here.
 - [PLAN-v8-PHASE7.md](PLAN-v8-PHASE7.md) is what to change in v8 now that the
   v6 miner project has finished. It supersedes the Phase A list below where the
   two disagree, and it **reopens the pad decision downward**: F24 and F27 swept
