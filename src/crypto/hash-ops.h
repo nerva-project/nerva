@@ -183,6 +183,27 @@ int cn_page_tier_for_version(const cn_hash_context_t *ctx, uint8_t major_version
 cn_hash_context_t *cn_hash_context_create(void);
 void cn_hash_context_free(cn_hash_context_t *context);
 
+/* Fill the pad with streaming stores instead of ordinary ones, per thread.
+ *
+ * OFF BY DEFAULT AND IT MUST STAY THAT WAY. This exists to be measured, not to
+ * be enabled: on v8 it is a 39% to 61% LOSS at every thread count, because a
+ * 1 MB pad stays in cache, the fill's stores never reach DRAM, and streaming
+ * only forces traffic that was not happening. It was worth +22% on v13, whose
+ * 8 MB pad cannot stay in cache. See PLAN-v8-PHASE7 A6 and V6-MINER-LOG
+ * lesson 9.
+ *
+ * It is kept because it is the tripwire for the pad size: if anything ever
+ * moves v8's working set past the over-subscription threshold, this number
+ * flips sign and the attack arrives with it. Shared by every version that
+ * fills through expand_key(): v8, v11, v10 and v9.
+ *
+ * The hash is bit-identical either way, which the known-answer vectors are
+ * what actually prove. Per thread, so turning it on in a measurement harness
+ * cannot change what verification does on another thread of the same process.
+ */
+int cn_nt_fill_enable(int on);
+int cn_nt_fill(void);
+
 /* Returns 1 if the CPU supports the AES-NI instruction set, 0 otherwise.
  * Wraps crypto::has_aesni() so it's callable from C TUs. */
 int crypto_has_aesni(void);

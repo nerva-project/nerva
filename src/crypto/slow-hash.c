@@ -110,6 +110,21 @@ int cn_hardware_aes_supported(void)
     return cached;
 }
 
+/* See hash-ops.h. Per thread so a measurement harness can turn it on without
+ * changing what verification does on the same process's other threads. */
+static __thread int cn_tls_nt_fill = 0;
+
+int cn_nt_fill_enable(int on)
+{
+    cn_tls_nt_fill = on ? 1 : 0;
+    return 1;
+}
+
+int cn_nt_fill(void)
+{
+    return cn_tls_nt_fill;
+}
+
 #define CN_DISPATCH(call_hw, call_sw) \
     do { \
         if (cn_hardware_aes_supported()) { call_hw; } else { call_sw; } \

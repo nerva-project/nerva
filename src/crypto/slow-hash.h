@@ -393,6 +393,45 @@ static inline uint8x16_t cn_arm_aesenc(uint8x16_t a, uint8x16_t k)
     U64(b)[0] = U64(&state.k[16])[0] ^ U64(&state.k[48])[0]; \
     U64(b)[1] = U64(&state.k[16])[1] ^ U64(&state.k[48])[1];
 
+/* Store one filled block into the pad, streaming past the caches when this
+ * thread asked for it. See cn_nt_fill in hash-ops.h for why it is off by
+ * default and why it is kept anyway.
+ *
+ * With the switch off this is the memcpy it replaces, so the emitted code and
+ * the resulting hash are unchanged. The known-answer vectors are what prove
+ * the second half of that.
+ *
+ * dst is 16-byte aligned, which _mm_stream_si128 requires: the pad is page
+ * aligned and the offset is a multiple of init_size_byte, itself a multiple of
+ * AES_BLOCK_SIZE. src is loaded unaligned, being the running text buffer.
+ *
+ * The software-AES copy of expand_key is deliberately left alone: it is the
+ * reference path and nobody mines on it. */
+STATIC INLINE void cn_fill_store(uint8_t *dst, const uint8_t *src, uint32_t nbytes)
+{
+#if defined(__x86_64__) || defined(__i386__)
+    if (cn_nt_fill())
+    {
+        uint32_t k;
+        for (k = 0; k < nbytes; k += AES_BLOCK_SIZE)
+            _mm_stream_si128((__m128i *)(void *)(dst + k),
+                             _mm_loadu_si128((const __m128i *)(const void *)(src + k)));
+        return;
+    }
+#endif
+    memcpy(dst, src, nbytes);
+}
+
+/* Streaming stores are weakly ordered and the pad is read right after the
+ * fill, so the fill has to fence before anyone looks at it. */
+STATIC INLINE void cn_fill_fence(void)
+{
+#if defined(__x86_64__) || defined(__i386__)
+    if (cn_nt_fill())
+        _mm_sfence();
+#endif
+}
+
 #define expand_key()                                                                   \
     hash_process(&state.hs, data, length);                                             \
     memcpy(text, state.init, init_size_byte);                                          \
@@ -401,8 +440,9 @@ static inline uint8x16_t cn_arm_aesenc(uint8x16_t a, uint8x16_t k)
     for (i = 0; i < CN_SCRATCHPAD_MEMORY / init_size_byte; i++)                        \
     {                                                                                  \
         aes_pseudo_round(text, text, expandedKey, init_size_blk);                      \
-        memcpy(&hp_state[i * init_size_byte], text, init_size_byte);                   \
-    }
+        cn_fill_store(&hp_state[i * init_size_byte], text, init_size_byte);            \
+    }                                                                                  \
+    cn_fill_fence();
 
 #define finalize_hash()                                                                              \
     memcpy(text, state.init, init_size_byte);                                                        \
