@@ -2817,6 +2817,102 @@ static void cna_v6_data_reference(const block_cache_data *cache, uint64_t height
   }
 }
 
+/* The run-ahead fill with the full-history odds as a parameter. MEASUREMENT
+ * ONLY: nothing in consensus calls it, and it writes to a scratch buffer whose
+ * contents are discarded.
+ *
+ * It exists to answer one question that a standalone harness cannot. The
+ * 100,000-block window was introduced because losing L3 residency cost 3.7x per
+ * block (April 2026 sync logs). contrib/powbench/t_v8_fill.cpp puts the fill's
+ * own read penalty at only 1.13 to 1.25x, which is about 2% of the step that
+ * was actually observed, so whatever the window is protecting against is mostly
+ * NOT the fill's own reads. A harness with nothing else running in it cannot
+ * see the rest, by construction.
+ *
+ * So: run both odds on the same block, in the daemon, against the real
+ * database, with everything else identical, and time them. The real fill still
+ * runs from the real cipher state and leaves the real state behind, so the
+ * chain validates normally while this is on.
+ *
+ * A deliberate copy of the loop in get_cna_v6_data rather than a refactor of
+ * it. That function has validated every block since 4,320,000, and a
+ * measurement is not worth restructuring it for. Delete this with the
+ * experiment. */
+static void cna_v6_data_shadow(const block_cache_data *cache, uint64_t height,
+                               uint64_t window_size, uint64_t window_base,
+                               HC128_State *rng_state, char *out, uint32_t odds)
+{
+  size_t rng_key_idx = 0;
+  auto pick_index = [&]() -> uint64_t {
+    if (HC128_U32(rng_state, &rng_key_idx, 256) < odds)
+      return HC128_U32(rng_state, &rng_key_idx, height);
+    return window_base + HC128_U32(rng_state, &rng_key_idx, window_size);
+  };
+  unsigned char msg[64];
+  size_t msgpos;
+  unsigned char *optr = (unsigned char*)out;
+  uint64_t count = 0;
+  uint64_t idx[16][4];
+  uint32_t ks[16][16];
+
+  auto run_block = [&]() {
+    HC128_NextKeys(rng_state);
+    for (size_t k = 0; k < 16; k++)
+    {
+      for (size_t j = 0; j < 4; j++)
+      {
+        idx[k][j] = pick_index();
+#if defined(__GNUC__)
+        __builtin_prefetch(&cache[idx[k][j]]);
+#endif
+      }
+      HC128_NextKeys(rng_state);
+      std::memcpy(ks[k], rng_state->keystream, sizeof(ks[k]));
+    }
+    for (size_t k = 0; k < 16; k++)
+    {
+      const block_cache_data *b0 = &cache[idx[k][0]];
+      const block_cache_data *b1 = &cache[idx[k][1]];
+      const block_cache_data *b2 = &cache[idx[k][2]];
+      const block_cache_data *b3 = &cache[idx[k][3]];
+      std::memcpy(msg, b0->hash.data, sizeof(crypto::hash));
+      msgpos = sizeof(crypto::hash);
+      std::memcpy(msg + msgpos, &(b1->timestamp), sizeof(uint64_t));
+      msgpos += sizeof(uint64_t);
+      std::memcpy(msg + msgpos, &(b2->diff_lo), sizeof(uint64_t));
+      msgpos += sizeof(uint64_t);
+      std::memcpy(msg + msgpos, &(b3->coins), sizeof(uint64_t));
+      msgpos += sizeof(uint64_t);
+      std::memcpy(msg + msgpos, &count, sizeof(uint64_t));
+      for (size_t j = 0; j < 16; j++)
+      {
+        uint32_t w;
+        std::memcpy(&w, msg + j * sizeof(uint32_t), sizeof(uint32_t));
+        w ^= ks[k][j];
+        std::memcpy(optr + j * sizeof(uint32_t), &w, sizeof(uint32_t));
+      }
+      optr += 16 * sizeof(uint32_t);
+      count++;
+    }
+    unsigned char *iv = optr - (8 * 16 * sizeof(uint32_t)) + HC128_U32(rng_state, &rng_key_idx, (8 * 16 * sizeof(uint32_t)) - 16);
+    unsigned char *key = optr - (16 * 16 * sizeof(uint32_t)) + HC128_U32(rng_state, &rng_key_idx, (8 * 16 * sizeof(uint32_t)) - 16);
+    HC128_Init(rng_state, key, iv);
+  };
+
+  while (count < 2048)
+    run_block();
+
+  std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
+  std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
+  std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
+  std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
+  HC128_EncryptMessage(rng_state, msg, optr, sizeof(msg));
+  HC128_Init(rng_state, optr, optr+16);
+
+  while (count < 4096)
+    run_block();
+}
+
 /* Cost of one chain fill, measured rather than inferred.
  *
  * The fill is the only part of a nonce a specialised attacker cannot avoid
@@ -2850,6 +2946,13 @@ static inline uint64_t cn_fill_tsc() { return 0; }
 static std::atomic<uint64_t> g_fill_cycles[2] = {{0}, {0}};
 static std::atomic<uint64_t> g_fill_calls[2]  = {{0}, {0}};
 static std::atomic<uint64_t> g_fill_turn(0);
+
+/* NERVA_SALT_ODDS_AB, slot 0 windowed and slot 1 full history. Separate from
+ * the counters above so a run can have both switches on without the two
+ * experiments writing into each other. */
+static std::atomic<uint64_t> g_odds_cycles[2] = {{0}, {0}};
+static std::atomic<uint64_t> g_odds_calls[2]  = {{0}, {0}};
+static std::atomic<uint64_t> g_odds_turn(0);
 
 void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t height)
 {
@@ -2900,6 +3003,66 @@ void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t
   boost::shared_lock<boost::shared_mutex> cache_lock(m_block_cache_lock);
   const uint64_t window_size = (height > (uint64_t)CNA_V6_WINDOW_BLOCKS) ? (uint64_t)CNA_V6_WINDOW_BLOCKS : height;
   const uint64_t window_base = height - window_size;
+
+  /* NERVA_SALT_ODDS_AB: what is the 100,000-block window actually worth, in
+   * the daemon, at the system level?
+   *
+   * Two shadow fills per call, identical code, differing only in the
+   * full-history odds, both discarded. The real fill below is untouched and
+   * still runs from the real cipher state, so the chain validates normally and
+   * this can be left on during a sync.
+   *
+   * Both arms are shadows rather than one shadow against the real fill: that
+   * way they are the same code path and the comparison cannot pick up a
+   * difference in anything else. The order alternates per call so a drift in
+   * clock or temperature cancels instead of landing on whichever ran last.
+   *
+   * Off unless the variable is set, and then it costs two extra fills per
+   * block, so sync runs roughly three times slower while measuring. That is
+   * fine: the number wanted is the ratio. */
+  {
+    static const bool odds_ab = (getenv("NERVA_SALT_ODDS_AB") != NULL);
+    if (odds_ab)
+    {
+      static thread_local std::vector<char> scratch(CN_SALT_MEMORY);
+      const HC128_State snap = *rng_state;
+      const bool full_first = (g_odds_turn.fetch_add(1, std::memory_order_relaxed) & 1u) != 0;
+      uint64_t t0, t1;
+
+      for (int pass = 0; pass < 2; pass++)
+      {
+        /* pass 0 runs whichever arm is first this call */
+        const bool full = (pass == 0) ? full_first : !full_first;
+        const int slot = full ? 1 : 0;
+        *rng_state = snap;
+        t0 = cn_fill_tsc();
+        cna_v6_data_shadow(m_block_cache.data(), height, window_size, window_base,
+                           rng_state, scratch.data(),
+                           full ? 256u : (uint32_t)CNA_V6_FULL_HISTORY_ODDS);
+        t1 = cn_fill_tsc();
+        g_odds_cycles[slot].fetch_add(t1 - t0, std::memory_order_relaxed);
+        g_odds_calls[slot].fetch_add(1, std::memory_order_relaxed);
+      }
+      *rng_state = snap;
+
+      {
+        const uint64_t n1 = g_odds_calls[1].load(std::memory_order_relaxed);
+        if ((n1 & 1023u) == 0 && n1 > 0)
+        {
+          const uint64_t n0 = g_odds_calls[0].load(std::memory_order_relaxed);
+          const uint64_t c0 = g_odds_cycles[0].load(std::memory_order_relaxed);
+          const uint64_t c1 = g_odds_cycles[1].load(std::memory_order_relaxed);
+          /* MGINFO, not MCINFO: a category needs enabling on the command line
+           * and this is a switch someone turns on to read one number. */
+          if (n0 > 0)
+            MGINFO("fill odds: windowed " << (c0 / n0)
+                   << " cyc over " << n0 << ", full history " << (c1 / n1)
+                   << " cyc over " << n1 << ", ratio "
+                   << ((double)(c1 / n1) / (double)(c0 / n0)));
+        }
+      }
+    }
+  }
 
   size_t rng_key_idx = 0;
 

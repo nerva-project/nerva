@@ -3355,6 +3355,347 @@ algorithmic property, and it halved along with everything else. The part
 predicted to move moved least, proportionally, and the part described as fixed
 moved most.
 
+### F60. The chain fill is not memory bound. It is 94% HC-128, and two thirds of it is key setup
+
+F38 names one assumption as the honest weak point of the whole design, and
+PLAN-v8-PHASE8 repeats it under "what would make this whole direction wrong":
+
+> The pool resistance and the ASIC bound are the same argument, and both assume
+> random-access database bandwidth is the binding constraint. A 236 MB working
+> set is not large.
+
+**It was never tested, and it is false.**
+
+`contrib/powbench/t_v8_fill.cpp`, built by `build-v8-fill.sh`. Four arms over one
+loop body, differing only in which index a pick returns. The cipher work is
+identical in all four by construction: the selector draw happens whether or not
+its branch is taken, and the hot arm computes a real index and discards it, so
+no arm consumes a different amount of keystream than any other.
+
+7950X, height 4,500,000, a 240 MB cache and a 5.3 MB window, as mainnet is.
+
+| arm | ms/fill | vs floor |
+|---|---|---|
+| shipped, 13 of 256 full history | 0.7441 | 1.06x |
+| window only, odds forced to 0 | 0.7201 | 1.03x |
+| **one hot entry, memory removed** | **0.7019** | **1.00x** |
+| all full history, odds forced to 256 | 0.9026 | 1.29x |
+
+#### 1. Where the 0.744 ms goes
+
+| | ms | share |
+|---|---|---|
+| **`HC128_Init`, 257 reseeds per nonce** | **0.5006** | **67.3%** |
+| `HC128_NextKeys`, ~10,500 of them | 0.1642 | 22.1% |
+| **memory, all 16,384 reads** | **0.0422** | **5.7%** |
+| the XOR, the copies, the loop | 0.0371 | 5.0% |
+
+The accounting closes to 0.1%, which is the main reason to believe it.
+
+**The fill is a stream cipher being re-keyed 257 times per nonce.** The loop
+reseeds every 16 messages, 256 times, plus once at the midpoint, and
+`HC128_Init` runs the full P and Q expansion before it yields a usable word:
+1.95 us, about 8,750 cycles, each time.
+
+#### 2. Why this is not an artifact
+
+**The HC-128 is byte-identical to the daemon's.** `diff contrib/powbench/hc128.c
+src/crypto/hc128.c` is empty, so the floor is the real cipher and not a slow
+copy of it.
+
+**It agrees with the daemon by an independent route.** F52 put the 7950X fill at
+~0.79 ms by subtracting two harnesses. This is a direct port and reads 0.744 ms,
+within 6%, having been built from the source rather than from that number.
+
+**The harness is not blind to memory.** Sweeping the chain height moves the
+memory term exactly as it should, which is the control that makes a small
+reading meaningful rather than suspicious:
+
+| height | cache | memory share | all-history arm |
+|---|---|---|---|
+| 1,000,000 | 53 MB | 3.3% | 1.05x |
+| 4,500,000 | 240 MB | 5.7 to 7.8% | 1.21 to 1.29x |
+| 16,000,000 | 854 MB | 7.9% | 1.26x |
+| 40,000,000 | 2,136 MB | 10.8% | 1.63x |
+
+**Each read costs 12.2 ns** in the all-history arm, far under DRAM latency,
+because the run-ahead issues 64 prefetches before touching any of them. The
+memory-level parallelism is already extracted, by us, in A1. There is very
+little left for an attacker to win, and that is the point: this is the residual
+after the best optimisation we know, not an artifact of a lazy loop.
+
+**Even at 100% full-history draws the memory is 17 to 29% of the fill.** So D3,
+raising `CNA_V6_FULL_HISTORY_ODDS`, cannot repair this. Its ceiling is too low
+to matter, and that is now measured rather than assumed.
+
+#### 3. What breaks, and what does not
+
+**Pool resistance survives, and it survives for a reason worth being explicit
+about.** It is a *correctness* requirement, not a cost one. A miner cannot
+produce the right salt without the chain, however cheap the reads turn out to
+be, so cheap reads do not let a pool hand out work. The feeder attack, where the
+pool ships the 256 KB itself, is bounded by bandwidth and is unaffected by any
+of this (F43, F46).
+
+**The ASIC bound does not survive as stated.** Every such figure in this project
+is `1 / (fill share)` on the premise that the fill is the part nobody can
+specialise. Against this measurement:
+
+| assumption | bound |
+|---|---|
+| the hash core is free, the fill is not | 1.78x, the plan's figure |
+| the hash core **and HC-128** are free | **31x** |
+
+The truth is between them and depends entirely on what HC-128 costs in silicon.
+A 1024-word state updated by adds, XORs and rotates, re-keyed on a fixed
+schedule, is close to the friendliest thing in this algorithm to put in
+hardware, and the two thirds that is key setup is the most regular part of it.
+**This is now the sharpest open question in the project**, and it is a better
+question for Bento-Box than the one already sent.
+
+**Against GPUs it may still be fine, for a reason nobody wrote down.** The
+HC-128 state is `P[512] + Q[512]`, **4 KB per instance**. A 32-lane warp needs
+128 KB of it, far beyond any shared memory, so on a card it has to live in
+global memory with a per-lane access pattern. HC-128 is ASIC-friendly and
+GPU-hostile at the same time, and the two pull in opposite directions. That
+asymmetry is unmeasured and is the second question worth asking.
+
+#### 4. What F38's rule should say instead
+
+> Work added to the hash core is work a specialised attacker can specialise.
+> The chain fill is the part they cannot.
+
+The second sentence is wrong, and the error is a conflation. **The fill does two
+separate jobs: it costs time, and it binds the nonce to the chain.** The rule
+assumes the cost is what provides the binding. It is not. The binding comes from
+needing the right 16,384 blocks to get the right answer, and is intact and
+cheap. The cost is a stream cipher, and is specialisable.
+
+Everything built on "raise the fill's share" therefore needs rereading. Raising
+the fill's share raises the share of HC-128, not the share of anything an
+attacker struggles with. **D1 is a clean example**: it takes the fill from 56%
+to 74% of a nonce, which the plan scores as tightening the ASIC bound from 1.70x
+to 1.36x, but on this measurement it mostly raises the share of a stream cipher.
+
+#### 5. A candidate that falls out of it, with its cost stated
+
+If the fill should be memory bound, the lever is visible: **257 reseeds cost
+67% of it**. Fewer reseeds would make the fill both cheaper to verify and more
+memory bound, improving goals 1 and 4 together, which is the shape P1 asks for.
+
+**But the reseeds are doing real work and it is not cost.** Each one keys
+HC-128 from the output buffer, which depends on blocks already read, so a
+reseed is a point where the attacker must have finished reading before it can
+continue. 257 reseeds are 257 serialisation points against the data. Remove
+them and the whole 256 KB of keystream depends only on the nonce, so it can be
+produced before a single block is touched.
+
+So this is a real trade and not a free win: **reseed count buys precomputation
+resistance and sells both verification speed and memory-boundedness.**
+
+The next three sections measure it, and the trade turns out to be avoidable:
+the property the reseeds provide can be bought in a currency that is not a
+stream cipher.
+
+#### 6. Can it be improved? Yes, and the two levers are measured
+
+Both on the 7950X, same harness.
+
+**Lever 1, the reseed interval.** 257 reseeds are two thirds of the fill, so the
+sweep says what they cost. It does not say what they are worth.
+
+| reseed every | reseeds | ms/fill | vs shipped |
+|---|---|---|---|
+| 16 messages, shipped | 256 | 0.709 | 1.00x |
+| 32 | 128 | 0.449 | 0.63x |
+| 64 | 64 | 0.291 | 0.41x |
+| 256 | 16 | 0.210 | 0.30x |
+| once | 1 | **0.189** | **0.27x** |
+
+**Lever 2, dependent reads.** Memory is 4 to 6% because A1's run-ahead issues 64
+prefetches at a time, so each read costs 12.2 ns against a DRAM latency near
+100. Chaining the reads, each index derived from the bytes at the previous one,
+removes that parallelism by construction. Memory only, no cipher, best of 20:
+
+| chains | ms | ns/read |
+|---|---|---|
+| 1, fully serial | 1.682 | **102.6** |
+| 2 | 0.830 | 50.6 |
+| 4 | 0.414 | 25.3 |
+| 8 | 0.223 | 13.6 |
+| 16 | 0.124 | 7.6 |
+| 64 | 0.117 | 7.1 |
+
+102.6 ns at one chain is DRAM latency, which is the check that the probe is
+measuring what it claims. 7.1 ns at 64 chains is roughly where the shipped fill
+already sits, which is the other end of the same check.
+
+#### 7. The two levers are the same lever
+
+**The reseed exists to make the index stream depend on data already fetched.**
+It keys HC-128 from the output buffer, so an attacker cannot know which blocks
+they need before reading the previous sixteen messages. That is a real property
+and it is why the reseeds cannot simply be deleted.
+
+**A dependent read chain provides exactly that property, directly.** Index `n+1`
+comes from the bytes at index `n`. Today there is one dependency barrier per 64
+reads; four parallel chains give one per 4 reads, which is **16x more
+serialisation against the data**, not less.
+
+So the chain subsumes the reseed's security function and pays for it in DRAM
+latency instead of key setup. One is inherent and the other is the single most
+ASIC-friendly thing in the algorithm.
+
+Dropping to one reseed and adding a dependent chain, against today's 1.323 ms
+nonce with its 0.744 ms fill:
+
+| chains | fill | nonce | vs today | memory share of a nonce | ASIC bound |
+|---|---|---|---|---|---|
+| shipped | 0.744 | 1.323 | 1.00x | **2.2%** | **45.6x** |
+| 1 | 1.870 | 2.449 | 1.85x | 68.6% | 1.5x |
+| 2 | 1.019 | 1.598 | 1.21x | 51.9% | 1.9x |
+| **4** | **0.603** | **1.182** | **0.89x** | **35.0%** | **2.9x** |
+| 8 | 0.412 | 0.991 | 0.75x | 22.5% | 4.4x |
+
+**At four chains the nonce is cheaper than it is today and the ASIC bound
+improves roughly sixteenfold.** Verification gets faster, which is goal 4, while
+the irreducible share goes from 2.2% to 35%. With D1 as well the nonce is
+0.865 ms and the bound 2.1x.
+
+That is the first candidate in this project that improves goals 1 and 4 together
+by a large margin rather than a few percent, and it does so by **removing** code
+rather than adding any.
+
+#### 8. What is wrong with this, stated now
+
+**The biggest one: latency is what a CPU pays and throughput is what an attacker
+pays.** A dependent chain serialises one nonce. A device with thousands of
+nonces in flight hides that latency completely and is then bound by random-read
+throughput, not by the 102.6 ns. A CPU miner with 30 threads is already near its
+own limit for outstanding misses, so it does *not* hide it as well. **The lever
+may therefore cost the honest CPU more than it costs the attacker**, which is
+the exact failure mode F38's rule exists to catch, arriving from a new
+direction. What decides it is random-read throughput per dollar on GPU and ASIC
+memory against CPU memory, and that is unmeasured.
+
+This does not make the change wrong. Today's cost is HC-128 key setup, which is
+unambiguously cheap in silicon; DRAM traffic is at worst ambiguous. Trading an
+known-bad cost for an uncertain one, while getting faster verification, is still
+the right direction. But it is not the slam dunk the table above looks like, and
+the table should not be quoted without this paragraph.
+
+**It needs a v14-only fill.** `get_cna_v6_data` has validated every block since
+4,320,000, so this forks it permanently and doubles the consensus-critical
+surface. PLAN-v8-PHASE8 D2 declines that cost for a smaller gain and is right
+to; the gain here is much larger, but the cost is the same and it is forever.
+
+**It conflicts with the window, but less than this document first said.**
+*Corrected by F61:* measured in the daemon against real blocks, drawing from
+full history costs **1.30x on the fill, +0.311 ms per block**, which is about
+34 seconds across every block above the assume-valid height. The window is not
+load-bearing for sync speed at today's chain length. The paragraph below stands
+as the mechanism; its weight does not.
+
+The 102.6 ns assumes every read is drawn over
+the whole 240 MB. The shipped distribution puts 95% in a 5.3 MB window that is
+cache-resident by design, and a chain through that window would be fast and
+would buy nothing. Getting the latency means drawing from full history, which is
+what the window was introduced to avoid. The window exists for sync speed, and
+the table above shows sync speed improving anyway, so the two may be reconcilable
+rather than opposed, but it is a deliberate reversal of an earlier decision and
+should be argued rather than slipped in.
+
+**The cost grows with chain length** and nobody has decided whether that is
+wanted. The height sweep in section 2 shows the all-history arm going from 1.05x
+to 1.63x between 1M and 40M blocks. Difficulty absorbs it, but verification
+grows too.
+
+### F61. The 100,000-block window is worth 1.30x on the fill, measured in the daemon against real blocks
+
+F60 section 6 put the fill's full-history penalty at 1.13x from a standalone
+harness and noted that a harness cannot see the rest of the daemon competing for
+cache. This is the same question asked in the daemon, verifying real mainnet
+blocks.
+
+**Method.** `NERVA_SALT_ODDS_AB` in `get_cna_v6_data` runs **two shadow fills**
+per block, identical code, differing only in `CNA_V6_FULL_HISTORY_ODDS`, both
+written to a scratch buffer and discarded. Both arms are shadows rather than one
+shadow against the real fill, so the comparison cannot pick up a difference in
+anything else, and the order alternates per call so drift cancels. The real fill
+runs from the real cipher state and leaves the real state behind, so the chain
+validates normally with the switch on.
+
+Verified non-invasive: `NERVA_SALT_SELFCHECK` passed **64 of 64** with zero
+digest or cipher-state disagreements during the run.
+
+7950X, 4,000 blocks popped from the tip and re-verified from the network, chain
+at 4,430,890, cache 248 MB, machine otherwise idle.
+
+| | cycles/block | ms at 4.491 GHz |
+|---|---|---|
+| windowed, 13 of 256 | 4,629,700 | 1.031 |
+| all full history | 6,024,460 | 1.341 |
+| **ratio** | **1.3013** | **+0.311 ms** |
+
+Stable to 0.1% across 1024, 2048 and 3072 samples: 1.3027, 1.3009, 1.3013.
+
+#### What it changes
+
+**The harness understated it by about 15%, as predicted, and no more.** 1.13x
+standalone against 1.30x in the daemon. There is a real system-level component
+from validation competing for cache, and it is small. The daemon's windowed fill
+also costs 1.03 ms against the harness's 0.73 ms, which is the same effect seen
+on the absolute figure.
+
+**Drawing from full history is affordable.** Above the assume-valid height it is
++0.311 ms on about 110,000 blocks, roughly 34 seconds of extra sync, and for a
+node at the tip it is 0.311 ms per minute. **The window is not load-bearing for
+sync speed at today's chain length.** That removes the scaling objection raised
+against D5 in PLAN-v8-PHASE8, though D5 still depends on the dependent-chain
+cost and on the unanswered throughput question.
+
+#### A correction to F60, and it is mine
+
+F60 section 8 and the D5 entry said the window was protecting against something
+large and unidentified, on the grounds that the fill's own penalty was ~2% of
+the 3.7x cliff in the April 2026 sync logs. **That compared two different
+things.**
+
+The April 2026 measurement predates the window by two months: it is
+`get_cna_v5_data` with uniform full-history reads, and its 3.7x is **the same
+fill getting slower as the block cache outgrew L3**. It is not windowed against
+full-history, which is what this entry measures. There was never an unexplained
+gap; there was a mismatched comparison.
+
+#### The operational lesson, which cost more than the measurement did
+
+**`MGINFO` is invisible at Nerva's default log level.** The daemon's categories
+are
+
+    *:ERROR,net:FATAL,net.http:FATAL,net.p2p:FATAL,net.cn:FATAL,user:INFO,
+    verify:FATAL,stacktrace:INFO,logging:INFO,msgwriter:INFO
+
+`MGINFO` logs to `global`, which is covered by `*:ERROR`, so it is dropped.
+`--log-level 0`, `1` and `2` all leave that list unchanged. The sync progress
+lines that *are* visible come through `msgwriter`, which is why the log looks
+healthy while every instrumented switch reports nothing.
+
+**Run any measurement switch with `--log-level "global:INFO"`.** This applies to
+`NERVA_SALT_AB` (F57) and `NERVA_SALT_SELFCHECK` as much as to this one; F57 was
+taken on the mining path, so the sync path had never exposed it.
+
+The failure mode is nasty because it is indistinguishable from the code never
+running. Hours went into chasing why `get_cna_v6_data` was "never called",
+including instrumenting `block_needs_pow` and `add_new_block`, when PoW had been
+running on every block the whole time. The probes that finally showed it
+(`needs_pow=1 precomputed=0`) only printed once the category was set, which is
+the same lesson arriving twice in one session.
+
+*Second-order lesson:* `pop_blocks` followed by a re-sync **does** re-verify PoW
+in full, through `add_new_block` to `handle_block_to_main_chain`, with
+`precomputed=0`. That was doubted during the above and the doubt was unfounded.
+It is a sound way to force verification of real blocks on demand.
+
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
 `contrib/hf14checks/CMakeLists.txt` names the resized translation units

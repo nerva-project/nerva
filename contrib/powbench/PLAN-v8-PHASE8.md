@@ -63,6 +63,24 @@ F37, ASIC in F38, thread load in F35):
 > **Work added to the hash core is work a specialised attacker can specialise.
 > The chain fill is the part they cannot.**
 
+**The second sentence is false, measured 2026-10-06, F60.** The fill is
+**94% HC-128 and 5.7% memory**, and two thirds of the whole fill is
+`HC128_Init` key setup, 257 reseeds per nonce. It is not bound by random-access
+database bandwidth and never was.
+
+The error is a conflation. **The fill does two jobs: it costs time, and it binds
+the nonce to the chain.** The rule assumes the cost provides the binding. The
+binding comes from needing the right 16,384 blocks to get the right answer, and
+is intact and cheap. The cost is a stream cipher, and a stream cipher is close
+to the friendliest thing here to put in silicon.
+
+So **everything below that reads "raise the fill's share" should be read as
+"raise the share of HC-128"**, which is not obviously the share of anything an
+attacker struggles with. Pool resistance is unaffected, because it rests on the
+binding rather than on the cost. The ASIC bounds are: they range from the 1.78x
+quoted here to **31x** depending on what HC-128 costs in hardware, which nobody
+has established.
+
 So there is exactly one lever that improves goal 1 without trading against it:
 **raise the fill's share of a nonce, never the core's.** F38 also states the
 price, which is sync speed, directly, because verification pays one fill per
@@ -248,7 +266,13 @@ salt size, and the real fill is a random-access gather against a 236 MB block
 cache whose behaviour under a doubled working set is not linear and has not been
 measured.
 
-### D3. Raise the full-history draw odds. Pool resistance, cheaply.
+### D3. Raise the full-history draw odds. Closed by F60, it cannot work.
+
+**Measured 2026-10-06 and it has nowhere to go.** Forcing *every* draw to full
+history, `odds = 256`, moves the fill from 1.06x the HC-128 floor to 1.29x. So
+the whole of this lever, used to its absolute maximum, reaches about a quarter
+of the fill, and the shipped 13 of 256 already collects a sixth of that. The
+ceiling is too low to pay for the v14-only fill it would need. See F60.
 
 `CNA_V6_FULL_HISTORY_ODDS` is 13 of 256, about 5%, with the other 95% drawn from
 the last `CNA_V6_WINDOW_BLOCKS` = 100,000 so they stay cache-resident. F38 names
@@ -267,6 +291,65 @@ through the salt stride and through the share arithmetic, so if D2 lands the pad
 is a different question. **It would need a new pre-registration, not an
 amendment**, per the closing note in
 [PAD-DECISION-PREREG.md](PAD-DECISION-PREREG.md).
+
+### D5. Chain the fill's reads and drop the reseeds. The largest measured gain on the table.
+
+**New 2026-10-06, out of F60, and it is the first candidate that improves goals
+1 and 4 together by a large margin rather than a few percent.**
+
+The fill's cost is in the wrong place. It is 94% HC-128 and 5.7% memory, and two
+thirds of the whole fill is `HC128_Init`: 257 reseeds per nonce, each running
+the full P and Q expansion.
+
+**The reseeds are not waste.** Each keys HC-128 from the output buffer, so the
+index stream depends on blocks already read and an attacker cannot know which
+blocks they need in advance. That property is why they cannot simply be deleted.
+
+**But a dependent read chain provides the same property directly and better.**
+Index `n+1` derived from the bytes at index `n` gives one dependency barrier per
+read instead of one per 64, and pays for it in DRAM latency rather than key
+setup. One is inherent; the other is the most ASIC-friendly thing in this
+algorithm.
+
+Measured, both levers, against today's 1.323 ms nonce with its 0.744 ms fill:
+
+| chains | fill | nonce | vs today | memory share of a nonce | ASIC bound |
+|---|---|---|---|---|---|
+| shipped | 0.744 | 1.323 | 1.00x | **2.2%** | **45.6x** |
+| 2 | 1.019 | 1.598 | 1.21x | 51.9% | 1.9x |
+| **4** | **0.603** | **1.182** | **0.89x** | **35.0%** | **2.9x** |
+| 8 | 0.412 | 0.991 | 0.75x | 22.5% | 4.4x |
+
+**At four chains verification gets faster and the ASIC bound improves roughly
+sixteenfold**, by removing code rather than adding any. With D1 as well the
+nonce is 0.865 ms and the bound 2.1x.
+
+**The objection that could sink it, and it is serious.** A dependent chain
+serialises *one nonce*. A device with thousands in flight hides that latency
+entirely and is then bound by random-read throughput, while a CPU miner at 30
+threads is already near its own limit for outstanding misses. **So the lever may
+cost the honest CPU more than it costs the attacker**, which is the exact
+failure mode F38's rule exists to catch, arriving from a new direction. What
+settles it is random-read throughput per dollar on GPU and ASIC memory against
+CPU memory, and that is unmeasured. It is the same B3-shaped question and should
+go to whoever answers B3.
+
+It is still the right direction even so: today's cost is a stream cipher, which
+is unambiguously cheap in silicon, and DRAM traffic is at worst ambiguous.
+
+**Other costs.** It needs a v14-only fill, so `get_cna_v6_data` forks
+permanently and the consensus-critical surface doubles, which D2 declines for a
+smaller gain. And the cost grows with chain length, which difficulty absorbs but
+verification does not.
+
+**The window objection is now measured and small, F61.** Drawing from full
+history costs **1.30x on the fill, +0.311 ms per block**, in the daemon against
+real blocks. That is about 34 seconds across every block above the assume-valid
+height. The window was introduced to avoid full-history reads, but at today's
+chain length it is not load-bearing for sync speed, so reversing it is a far
+cheaper decision than this plan assumed.
+
+F60 sections 6 to 8 have the measurements and the full list of objections.
 
 ## What is closed, and must not be reopened without new evidence
 
@@ -338,10 +421,24 @@ term and cheaper.
                                             changed
       a view on the ASIC area cost          open, the best question for
                                             Bento-Box alongside B3
-3. Decide D2 and D3 together against B3's answer and a measured sync cost,
-   not a modelled one.
-4. D4 only if D2 lands, and only with a new pre-registration.
+3. D5, chain the reads and drop the reseeds. Largest measured gain here,
+   and the one that changes what the fill IS rather than how much of a
+   nonce it occupies. Needs: the random-read throughput question, which is
+   B3-shaped and goes to whoever answers B3; a decision on forking
+   get_cna_v6_data, since the surface doubles permanently; and a decision
+   on the 100,000-block window, which the latency argument reverses.
+4. D3 is closed by F60: at its absolute maximum it reaches a quarter of
+   the fill, which cannot pay for a v14-only fill.
+5. D2 against B3's answer and a measured sync cost, not a modelled one.
+   Note F59 removed its stated mechanism, so it now rests on PCIe
+   bandwidth alone.
+6. D4 only if D2 or D5 lands, and only with a new pre-registration.
 ```
+
+**The ordering above is by evidence, not by size.** D5 is the largest gain on
+the table and arrived last, which is the usual shape: it only became visible
+once F60 measured what the fill is made of. D1 stays ahead of it because D1's
+correctness gates are through and D5 has not been built.
 
 **Update 2026-10-06: the share table has now been checked directly and it
 holds.** F57 measured the whole v8 nonce in the daemon with v14 active: the
@@ -366,9 +463,12 @@ Stated now, so it is recognisable later:
 - **A card turning out to do chained AES cheaply.** Then the AES is not a gate,
   P3 is void, D2 buys nothing, and v8's GPU resistance has to come from the fill
   alone, which means D3 and a much larger sync bill.
-- **The fill turning out to be cheaply servable at scale.** The pool resistance
-  and the ASIC bound are the same argument, and both assume random-access
-  database bandwidth is the binding constraint. A 236 MB working set is not
-  large. F38 flags this as the honest weak point and it deserves its own
-  measurement rather than inheritance.
+- ~~**The fill turning out to be cheaply servable at scale.**~~ **HAPPENED.**
+  Measured 2026-10-06, F60: the fill is 94% HC-128 and 5.7% memory, two thirds
+  of it `HC128_Init`. The premise that random-access database bandwidth is the
+  binding constraint is false. Pool resistance survives, because it rests on
+  needing the chain to get the right answer rather than on the reads costing
+  anything. The ASIC bound does not: it ranges from 1.78x to 31x depending on
+  what HC-128 costs in silicon. This was the item flagged as deserving its own
+  measurement rather than inheritance, and it did.
 - **The share table being wrong.** Everything here is proportions. B4 settles it.
