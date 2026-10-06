@@ -2997,6 +2997,192 @@ every row is the port, but any target quoted against the shipped function
 should use section 3's number. Worth reconciling before the targets are used
 to accept or reject a candidate.
 
+### F58. The two v8 arms agree across the whole consensus domain, and D1 collapses the three per-nonce draws into a single step count
+
+Two results from the first D1 correctness gate. The first is the gate passing.
+The second was not being looked for and changes what D1 is.
+
+`contrib/powbench/t_v8_grid.c`, built by `build-v8-grid.sh`. The D1 candidate is
+a real pair of translation units, `contrib/powbench/v8ns-hw.c` and `v8ns-sw.c`,
+rather than the `v5pad.inc` scaffolding the cost measurement used, because
+`v5pad.inc` refuses a software-AES build by design and the software arm is the
+whole point here.
+
+#### 1. The gap that was there before D1
+
+`cn_slow_hash_self_test` compares v8's hardware and software arms at exactly one
+point, `(xx, yy, iters) = (3, 3, 64)`. Consensus draws `xx` and `yy` from
+`[4, 8]` and `iters` from `[0, 63]`
+([cryptonote_tx_utils.cpp:752](../../src/cryptonote_core/cryptonote_tx_utils.cpp#L752)),
+so the one point the arms were ever compared on is **outside the range the chain
+asks for**. That is a gap in v8 as it stands today and has nothing to do with
+D1.
+
+It matters because the two arms are separate copies of the core, not one body
+behind a macro, and they differ in source on purpose: `r2` aliases `&c` in the
+hardware arm and `&b` in the software arm. A disagreement there splits mining
+from verification on exactly the platforms that have no hardware AES and so
+would never notice.
+
+#### 2. The gate, and it passes
+
+All six checks pass on the 7950X. 1600 in-domain cases is the full `5 x 5 x 64`
+product, not a sample, with the input, the salt and `random_values` varied per
+case from splitmix64 rather than left zeroed.
+
+| check | result |
+|---|---|
+| v8 shipped, hw == sw over 1600 consensus draws | PASS |
+| v8 no-sweep, hw == sw over the same 1600 | PASS |
+| no-sweep differs from shipped on all 1600 | PASS |
+| chain entry, both variants, 64 pairs, hash and the 32-byte fill seed | PASS |
+| out-of-domain `(xx, yy)` including `xx = 1` and `yy = 1`, 64 pairs | PASS |
+
+    v8 shipped   hw 09accdf062ccd318  sw 09accdf062ccd318
+    v8 no-sweep  hw 09d34831c25f506c  sw 09d34831c25f506c
+
+FNV-1a over all 1600 digests per arm, so another machine can be compared against
+this run in one line rather than case by case.
+
+**Repeated on the i7-7700HQ, Kaby Lake against Zen 4: all six checks PASS and
+all four digests are bit-identical to the run above.** That is the stronger
+result. Per machine the test shows the two arms agreeing with each other; across
+machines it shows both arms agreeing with both arms on a different
+microarchitecture, over 1600 cases, for the shipped hash and the candidate
+alike. The software arm exists for machines unlike the one it is usually
+developed on, so a second microarchitecture is where the check earns its keep.
+
+#### 3. What was not being looked for: after D1 the loop nest is decorative
+
+With `CN_V8_NO_SWEEP`, the outer loop body, the inner loop body and the `iters`
+loop body are **the same three statements**. `xx`, `yy` and `iters` then appear
+nowhere else in the core: the only other reader of `iters` was
+`temp_1 = iters ^ (b ^ c)` inside `salt_pad_v8`, and the only reader of `r2` was
+the sweep. So the whole main loop reduces to
+
+    steps = (xx - 1) * yy + iters,  which lies in [12, 119]
+
+and nothing can distinguish two draws with the same total.
+
+Checked rather than read off the source, because it decides whether the daemon
+should keep drawing three numbers. Two equivalence groups, every row sharing one
+input, salt and `random_values`:
+
+| group | rows | no-sweep | shipped v8 |
+|---|---|---|---|
+| 12 steps | (4,4,0) (1,1,12) (1,8,12) (2,4,8) (3,6,0) | all identical | all different |
+| 119 steps | (8,8,63) (1,1,119) (5,8,87) (4,5,104) | all identical | all different |
+
+The shipped hash separates them, which is what `salt_pad_v8` reading `xx`, `yy`
+and `iters` individually buys. The candidate does not.
+
+**119 is not a coincidence.** It is the same 119 as the fixed cap on
+unpredictable pad writes in lesson 10 and PLAN-v8-PHASE8 P4, arrived at from the
+other direction.
+
+#### 4. Two consequences for D1, one in each direction
+
+**In favour: D1 deletes the only place the two arms touch different state.**
+`r2` is the sole asymmetry between the hardware and software cores, and the
+sweep is its sole consumer. After D1 the initializer is dead and the arms can no
+longer diverge in that particular way, which is the failure mode that would show
+up only on machines without AES-NI and only in the field.
+
+**Against, and this is not in PLAN-v8-PHASE8: the sweep is a second source of
+GPU warp divergence, and D1 removes it.** The sweep's inner loop runs
+`1 MB / offset_2` times with `offset_2 = ((temp_1 * offset_1) % 125) + 4`, so
+its length spans 8,192 to 262,144 iterations, a 32x range, drawn fresh per
+sweep from data. A 32-lane warp runs at the maximum over its lanes.
+
+Modelled, not measured, and recorded as modelled:
+
+| divergence source | mean | E[max of 32] | penalty | survives D1 |
+|---|---|---|---|---|
+| step count, `(xx-1)*yy + iters` | 46 | ~88 | **1.9x** | yes, unchanged |
+| sweep length, summed over ~30 sweeps | 906K | ~1.33M | **~1.5x** | **no** |
+
+So P6's 1.9x term is untouched, which is the one the design actually leans on,
+and D1 gives up a smaller second term on a smaller share of the work. The
+arithmetic is a normal approximation to a sum of 30 draws of `1/U[4,128]` and
+should be treated as an order of magnitude. It is here because the cost existed
+and was not named, not because it is settled.
+
+#### 5. The core cost, re-measured with absolute time
+
+`t_v8_sweep` now calibrates the invariant TSC against the wall clock and reports
+ms/nonce as well as cycles, because cycles compare arms on one machine and
+cannot compare one machine against another. That conversion is what the
+cross-machine spread gate needs.
+
+7950X, one thread, 10 s, TSC 4.491 GHz nominal against a 4.5 GHz base:
+
+| arm | cycles/nonce | ms/nonce | core | nonce |
+|---|---|---|---|---|
+| v8 as it stands | 2,433,678 | 0.5418 | baseline | baseline |
+| pad sweep removed | 1,125,235 | 0.2505 | +116.3% | +21.8% |
+| whole `salt_pad` gone | 1,106,369 | 0.2463 | +120.0% | +22.1% |
+
+0.5418 ms against F52's 0.535 ms for the same thing, so the harness and the
+daemon agree to 1.3%. The two candidate arms still produce identical digests,
+which is F56 reproducing rather than a new result.
+
+#### 6. The cross-machine spread: the core widens 13%, the real nonce widens 1%
+
+Same binary on the i7-7700HQ, the machine that sets the spread in F52 and F54.
+One thread, 10 s, TSC 2.808 GHz nominal against a 2.8 GHz base.
+
+| arm | 7950X ms | 7700HQ ms |
+|---|---|---|
+| v8 as it stands | 0.5418 | 1.4189 |
+| pad sweep removed | 0.2505 | 0.7529 |
+| whole `salt_pad` gone | 0.2463 | 0.7293 |
+
+**The laptop gains less from D1 than the desktop does**: 1.946x against 2.200x
+within each run, which is the drift-robust figure since the arms are
+interleaved A-B-C-C-B-A.
+
+The mechanism, and it is the same shape as F52's:
+
+| part of a nonce | spread, slowest over fastest |
+|---|---|
+| chain fill, F52 by subtraction | **2.05x**, most uniform |
+| the sweeps, this run | 2.33x |
+| the rest of the hash core | **2.96x**, least uniform |
+
+**The sweeps are the more uniform half of the core.** D1 removes a term sitting
+below the weighted mean of what is left, so the spread of the whole has to rise.
+
+Rebased on F52's core times rather than this run's, because the laptop read
+12.9% high today while the 7950X agreed to 1.3%, and F52 already records that
+machine throwing a 12% hot run. Today's contribution is the in-run ratios; the
+absolutes stay F52's.
+
+| | now | after D1 |
+|---|---|---|
+| hash core, 7950X | 0.535 ms | 0.243 ms |
+| hash core, 7700HQ | 1.257 ms | 0.646 ms |
+| core spread | 2.35x | **2.66x**, widens 13% |
+| real nonce, 7950X | 1.325 ms | 1.033 ms |
+| real nonce, 7700HQ | 2.877 ms | 2.266 ms |
+| **real nonce spread** | **2.17x** | **2.19x**, widens 1.0% |
+
+**The gate does not block D1, and it does not support it either.** 1.0% is far
+inside the 12% session noise F52 documents for this very measurement. What it
+does kill is any claim that D1 improves fairness: the direction is the wrong
+one, and the reason it does not matter is that the core is 40% of a nonce and
+the fill does not change.
+
+*Caveat with a known direction.* F52's chain fill is a subtraction and so an
+upper bound, which means the true core share is larger and D1's effect on the
+spread is larger than 1.0%. The bound at zero fill is the core spread, 2.66x.
+
+*Method note.* `t_v8_sweep`'s FNV digests are **not** comparable between
+machines: the harness snapshots whatever the allocator left in `ctx->salt` after
+the warm-up, so `salt0` differs per run. The 7950X read `505fb8502dc9038d` and
+the laptop `5f89632b67de8cc5` for the same two arms, which is expected rather
+than a divergence. The cross-machine digest comparison belongs to `t_v8_grid`,
+whose salt comes from splitmix64 and is deterministic.
+
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
 `contrib/hf14checks/CMakeLists.txt` names the resized translation units

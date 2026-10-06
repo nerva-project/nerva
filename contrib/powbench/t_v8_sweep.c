@@ -169,6 +169,26 @@ static void *worker(void *arg)
     return NULL;
 }
 
+/* Ticks per second for the invariant TSC, measured against the wall clock.
+ *
+ * The cycles/nonce column compares arms on ONE machine and needs no rate: the
+ * TSC counts at a fixed nominal rate, so a ratio is already right. Comparing
+ * one machine against another does need it, because the nominal rates differ
+ * and 1000 ticks is not the same amount of time on two CPUs. That comparison is
+ * the cross-machine spread, which is the gate D1 still owes.
+ *
+ * Spun rather than slept: a sleep on Windows rounds to the scheduler tick and
+ * would calibrate against a quantised interval. 200 ms is enough for 0.1%.
+ */
+static double tsc_hz(void)
+{
+    double t0 = now_s(), t1;
+    uint64_t c0 = __rdtsc(), c1;
+    do { t1 = now_s(); } while (t1 - t0 < 0.2);
+    c1 = __rdtsc();
+    return (double)(c1 - c0) / (t1 - t0);
+}
+
 static int popcount64(uint64_t v)
 {
     int c = 0;
@@ -183,6 +203,7 @@ int main(int argc, char **argv)
     pthread_t *th;
     uint64_t n[NARMS], cyc[NARMS], fnv[NARMS];
     int failed = 0, i, a;
+    double hz;
 
     if (argc > 2) g_seconds = atof(argv[2]);
     if (threads < 1) threads = 1;
@@ -194,8 +215,13 @@ int main(int argc, char **argv)
     if (w == NULL || th == NULL) { printf("out of memory\n"); return 1; }
 
     printf("v8 with salt_pad_v8 against v8 without it, 1 MB pad\n");
-    printf("%d thread(s), %.1f s, A-B-B-A, one draw per group of four\n\n",
+    printf("%d thread(s), %.1f s, A-B-C-C-B-A, one draw per group of six\n",
            threads, g_seconds);
+
+    /* before the threads start, so the calibration runs on an idle machine */
+    hz = tsc_hz();
+    printf("invariant TSC %.3f GHz nominal, measured against the wall clock\n\n",
+           hz / 1e9);
     fflush(stdout);
 
     for (i = 0; i < threads; i++) { w[i].id = i; pthread_create(&th[i], NULL, worker, &w[i]); }
@@ -212,12 +238,12 @@ int main(int argc, char **argv)
     for (a = 0; a < NARMS; a++)
         if (n[a] == 0) { printf("no nonces completed on arm %d\n", a); return 1; }
 
-    printf("  %-22s %12s %10s %10s\n", "", "cycles/nonce", "core", "nonce");
+    printf("  %-22s %12s %10s %10s %10s\n", "", "cycles/nonce", "ms/nonce", "core", "nonce");
     for (a = 0; a < NARMS; a++)
     {
         const double ca = (double)cyc[a] / (double)n[a];
         const double c0 = (double)cyc[0] / (double)n[0];
-        printf("  %-22s %12.0f", g_arm_name[a], ca);
+        printf("  %-22s %12.0f %10.4f", g_arm_name[a], ca, ca / hz * 1000.0);
         if (a == 0)
             printf("   baseline   baseline\n");
         else

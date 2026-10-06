@@ -124,6 +124,12 @@ Ranked by evidence behind them, not by appeal.
 
 **The strongest candidate, and the only one that improves every goal at once.**
 
+*Corrected 2026-10-06.* That last clause is no longer true. F58 measured the
+cross-machine spread and it widens, from 2.17x to 2.19x on a real nonce. The
+amount is inside the noise and does not block anything, but "improves every goal
+at once" was a claim and it is now a measured miss. D1 improves goals 1 and 4,
+is neutral-to-slightly-negative on fairness, and is untested on goal 3.
+
 The sweeps are already known to be non-hard: A1b defers 30 of them into two
 passes and the output is bit-identical over 1600 vectors (F51). Work that can be
 reordered into a different number of passes without changing the answer is not
@@ -158,6 +164,33 @@ answered it, for a different reason, before this change was contemplated.
 steps alone, which P6 says to keep. Whether they should then fold into `iters`
 is a simplification question, not a security one, and the answer affects the
 warp-divergence argument.
+
+**Answered 2026-10-06, F58, and the answer is stronger than the question.** With
+the sweeps gone the three loop bodies are identical, so `xx`, `yy` and `iters`
+reach the hash only through `(xx - 1) * yy + iters`, a single count in
+`[12, 119]`. Verified by equivalence groups, not by reading the source: every
+draw with the same total gives the no-sweep hash the same answer, and the
+shipped hash a different one. So the nest is not a simplification question any
+more, it is dead structure, and the daemon's three draws become one. P6 is
+unaffected: warp divergence depends on the total, and the total's distribution
+does not move.
+
+**The first correctness gate passed, F58.** Hardware AES against software AES
+over all 1600 consensus draws, for the candidate and for the shipped hash,
+plus the chain entry points and the out-of-domain corners. It also closed a gap
+that predates D1: `cn_slow_hash_self_test` compared the two arms at
+`(3, 3, 64)`, which consensus never draws.
+
+**One cost that was not in this document, F58 section 4.** The sweep's inner
+loop length spans 32x and is drawn from data, so it is a second source of GPU
+warp divergence worth roughly 1.5x on its own share, and D1 deletes it. P6's
+1.9x step-count term survives untouched and is the larger of the two, but the
+smaller one was being given up without being named. Modelled, not measured.
+
+**In D1's favour, also F58:** `r2` aliases `&c` in the hardware arm and `&b` in
+the software one, and the sweep is its only consumer. D1 makes the two arms
+structurally identical, so the one divergence that would appear only on
+machines without AES-NI stops being reachable.
 
 ### D2. Raise `CN_SALT_MEMORY`. The lever itself.
 
@@ -250,9 +283,22 @@ term and cheaper.
 ```
 1. B3, the GPU and feeder number, by measurement or by asking someone
    with the depth. Gates D2 and D3.
-2. D1, remove the sweeps. Independent of B3. Needs: a prediction stated
-   first, new known-answer vectors generated deliberately, HW == SW across
-   the grid, and the cross-machine spread re-measured since the balance moves.
+2. D1, remove the sweeps. Independent of B3.
+      a prediction stated first            done, F57, held to two points
+      HW == SW across the grid             done, F58, 1600 cases, PASS on
+                                            Zen 4 and Kaby Lake with
+                                            bit-identical digests
+      the cross-machine spread re-measured  done, F58. 2.17x to 2.19x on a
+                                            real nonce, so it does not block
+                                            D1, but the direction is the wrong
+                                            one and the fairness argument for
+                                            D1 is withdrawn
+      new known-answer vectors              owed, and only once D1 is decided,
+                                            since regenerating them is the
+                                            deliberate act that says the hash
+                                            changed
+      a view on the ASIC area cost          open, the best question for
+                                            Bento-Box alongside B3
 3. Decide D2 and D3 together against B3's answer and a measured sync cost,
    not a modelled one.
 4. D4 only if D2 lands, and only with a new pre-registration.
