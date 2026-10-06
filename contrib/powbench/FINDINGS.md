@@ -3183,6 +3183,178 @@ the laptop `5f89632b67de8cc5` for the same two arms, which is expected rather
 than a divergence. The cross-machine digest comparison belongs to `t_v8_grid`,
 whose salt comes from splitmix64 and is deterministic.
 
+### F59. The AES-NI asymmetry is 4.9x to 8.0x and is a property of the CPU rather than of v8; D1 doubles it; the gate is the pad fill
+
+RESULTS.md 6.3 has carried this sentence since before v8 existed:
+
+> its resistance comes from the AES-NI against T-tables asymmetry rather than
+> program divergence, and that asymmetry disappears the day a GPU gets
+> competitive AES
+
+PLAN-v8-PHASE8 P3 is built on it, D2's value is argued from it, and D1 is
+argued safe because it leaves it alone. **It has never had a number.** This puts
+one on it, for the half a CPU can answer.
+
+`contrib/powbench/t_v8_aes.c`, built by `build-v8-aes.sh`. Both arms are already
+in the tree and F58 proved them bit-identical over the whole consensus domain,
+so this is one hash run twice with a single implementation choice changed.
+
+7950X, one thread, 12 s, arms interleaved A-B-C-D-D-C-B-A within one process.
+
+| | AES-NI | T-table | core | whole nonce |
+|---|---|---|---|---|
+| v8 as it stands | 0.555 ms | 4.41 ms | **7.96x** | **3.82x** |
+| v8 without the sweeps | 0.251 ms | 4.07 ms | **16.2x** | **7.15x** |
+
+**Read section 6 before quoting any of these.** The i7-7700HQ returns roughly
+half of each, and the reason it does is the most useful thing in this entry.
+
+The whole-nonce column holds the chain fill at 59.5% of a nonce and the same
+cost in both arms, since it is a database gather that touches no AES. Dividing
+a core ratio by 0.405 would be the wrong arithmetic and is the obvious mistake
+to make here.
+
+#### 1. D1 does not leave the AES gate alone, it doubles it
+
+P3 says to cut the sweeps and not the AES, and treats D1 as neutral on goal 1.
+It is better than neutral. The sweeps cost 0.303 ms with AES-NI and 0.341 ms
+with T-tables, near enough the same, because they are a strided XOR over the pad
+and use no AES at all. Removing AES-neutral work raises the share of what is
+left that is AES, so the ratio doubles.
+
+Whether that converts into GPU resistance depends on whether a card runs the
+strided pad XOR better or worse than it runs T-table AES, which is the B3
+question and is not settled here. But on the one axis P3 names, D1's direction
+is favourable rather than neutral, and that is a point in its favour that the
+design pass did not have.
+
+#### 2. The asymmetry is two numbers, not one
+
+Measured on the no-sweep core, where F58's collapse makes step count a single
+clean knob:
+
+| | AES-NI | T-table | ratio |
+|---|---|---|---|
+| once per nonce, the AES pad fill and the finalize | 0.2511 ms | 4.0705 ms | **16.2x** |
+| per main-loop step | 10.7 ns | 26.4 ns | **2.48x** |
+
+Both stable to 1% across two runs. The reason they differ nearly sevenfold is
+structural: the pad fill is back-to-back AES on 8 blocks at a time and nothing
+else, so losing the instruction costs nearly all of it, while a main-loop step
+is one `aesenc` wrapped around a random 16-byte read from a 1 MB pad and is
+memory bound, so the AES is a small part of each step.
+
+**Two consequences, neither of them the expected one.**
+
+P3's anti-GPU gate is **the pad fill**, not the chained main loop, and **pad
+size is what sets it**. That ties the AES gate directly to the decision F54
+closed, and it means the 1 MB pad is doing more work in this design than the
+pad decision credited it with.
+
+Phase 6 B2's feeder gate, the fill a device must run before it can know which
+blocks to read, is therefore the **16x** part and not the 2.5x part. That is
+better for B2 than the plan claimed, and it is the first independent support
+B2 has had.
+
+#### 3. 119 CryptoNight steps cost nothing
+
+Across the whole consensus range, 12 steps against 119, the core moved
+`-0.72%`, `+2.09%`, `+0.77%` and `-0.1%` on four runs: the noise floor, with no
+consistent sign. The CryptoNight main loop is not a cost at a 1 MB pad.
+
+Third independent confirmation, after the instrumented profile's 0.05% inner
+loop and F48's ceiling test, and the first one that reached it by varying the
+step count directly.
+
+#### 4. What this is not
+
+**It is not a GPU number.** The software arm is a CPU with good caches doing
+table lookups out of L1. A card pays differently: shared-memory bank conflicts
+rather than L1 hits, and thousands of lanes to hide latency with. This is the
+floor of the structural penalty, not an estimate of a card's.
+
+**It is not the AES share of a nonce.** The software arm replaces AES
+everywhere, so the ratio mixes the fill, the main loop and the finalize.
+
+**It is not large on its own.** F37 measured GPU:CPU at 0.01 to 0.06x on v5 and
+v6, so cards are 20 to 100x worse than CPUs there. An 8x AES asymmetry is one
+contributor to that, not the whole of it, and reading it as the whole would
+overstate what the AES is doing.
+
+#### 5. A model that failed, kept because the failure is the finding
+
+The first version fitted a **single** pure-AES penalty `k` to the once-per-nonce
+cost and solved `icept_hw = A + N`, `icept_sw = kA + N` for the AES share. It
+returned an AES share of **227%**, and **-127%** on the next run.
+
+The cause is section 2: there is no single `k`. The pad fill and the main loop
+use AES in ways whose penalties differ by nearly sevenfold, so one ratio cannot
+stand for both. The two regimes are now reported as measured rather than
+modelled, and the solve is gone.
+
+Worth recording for the same reason lesson 5 exists. The absurd numbers were a
+gift; a plausible wrong one would have been believed. The first attempt also
+tried to read the per-step slope off the in-domain pair, 12 against 119, where
+section 3 shows the signal is zero, which is why the slope is now taken at 2,000
+against 20,000 where it dominates.
+
+#### 6. The asymmetry is roughly halved on the i7-7700HQ, and the reason matters more than the number
+
+Two runs on the laptop, agreeing to 2% on every cell. Desktop figures beside
+them.
+
+| T-table over AES-NI | 7950X | 7700HQ |
+|---|---|---|
+| v8 core | 7.96x | **4.85x** |
+| v8 no-sweep core | 16.19x | **8.38x** |
+| pad fill and finalize | 15.95x | **8.13x** |
+| per main-loop step | 2.36x | **1.82x** |
+| v8, whole nonce | 3.82x | **2.56x** |
+
+**Nearly a factor of two on every row.** The mechanism is visible in the same
+data, by reading it the other way: what each path costs on one machine against
+the other.
+
+| cross-machine, laptop over desktop | |
+|---|---|
+| no-sweep core, **AES-NI** | **2.95x** |
+| no-sweep core, **T-table** | **1.53x** |
+| pad fill, AES-NI | 2.97x |
+| pad fill, T-table | 1.51x |
+| per step, AES-NI | 1.96x |
+| per step, T-table | 1.52x |
+
+**The T-table path is twice as uniform across machines as the AES-NI path is.**
+Table lookups out of L1 scale with ordinary integer and cache performance, which
+differs by about half between these two CPUs. The AES units differ by about
+three, because Zen 4 retires roughly twice the `aesenc` per clock that Kaby Lake
+does and is clocked higher on top of that.
+
+**So the asymmetry is not a constant of the algorithm. It is the quality of the
+CPU's AES unit, measured against a table lookup.** That is a sharper and less
+comfortable statement than RESULTS.md 6.3's, which frames the risk entirely as
+a card acquiring better AES. The other half of the risk is a network of CPUs
+with weaker AES, and it needs nothing to happen.
+
+**The honest figure for the gate is the low end, not the high one.** The gate
+has to hold for the network as it is, not for the best machine in it, and this
+project already treats the laptop as the machine that sets the spread. So v8's
+AES gate is worth **4.9x on the core and 2.6x on a whole nonce**, and the 8.0x
+and 3.8x in the header are what it is worth on a Zen 4.
+
+**What survives unchanged.** Both conclusions in section 2 hold on the laptop:
+the pad fill is 8.13x against the main loop's 1.82x, so the gate is still the
+pad fill and pad size still sets it. And D1 still roughly doubles the asymmetry,
+by 1.73x here against 2.03x on the desktop.
+
+*Prediction, stated before the run and half wrong.* The expectation recorded was
+that the ratios would come in lower on the laptop, with the per-step number the
+one to watch, possibly falling toward 1.5x. The direction was right and the
+per-step number did fall, to 1.82x. But the pad fill was described as the stable
+algorithmic property, and it halved along with everything else. The part
+predicted to move moved least, proportionally, and the part described as fixed
+moved most.
+
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
 `contrib/hf14checks/CMakeLists.txt` names the resized translation units

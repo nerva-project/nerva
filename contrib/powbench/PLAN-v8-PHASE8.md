@@ -99,6 +99,28 @@ at, and Phase 6 B2's feeder gate is exactly the chained AES a device must run
 before it can produce a salt. Note this constrains P1: **cut the sweeps, not the
 AES.** The sweeps are XOR and memory; they are not the gate.
 
+*Measured 2026-10-06, F59, and the principle holds while several of its words
+move.* The asymmetry is **4.9x on the core and 2.6x on a whole nonce**, the
+first number this sentence has ever had. It is not one number twice over.
+
+**By phase:** the once-per-nonce pad fill runs at 8.1x and the chained main loop
+at 1.8x, because a main-loop step is memory bound and the AES is a small part of
+it. So **the gate is the pad fill, and pad size is what sets it**, not the
+chained loop. B2's feeder gate is the 8x part, which is better than this plan
+claimed.
+
+**By machine, and this is the uncomfortable one:** the figures above are the
+i7-7700HQ. A 7950X reads 8.0x, 3.8x, 16.0x and 2.4x, roughly double on every
+axis. The T-table path is twice as uniform across machines as the AES-NI path,
+so **the asymmetry is the quality of the CPU's AES unit rather than a constant
+of v8**. The low end is the figure to plan against, since the gate has to hold
+for the network as it is. RESULTS.md 6.3 frames the risk as a card gaining
+better AES; the other half is a network of CPUs with weaker AES, which needs
+nothing to happen.
+
+**D1** does not merely leave the gate alone: by deleting AES-neutral work it
+roughly **doubles** the asymmetry, 1.73x on the laptop and 2.03x on the desktop.
+
 **P4. Pad size buys nothing while the write count is fixed.** The rule from
 lesson 10: pad size only buys hardness in proportion to what writes the pad
 unpredictably. v8 writes at most 119 slots at any size. Either leave the pad
@@ -144,6 +166,7 @@ Projected from the measured shares, with the caveat below:
 | ASIC bound, hash free | 1.68x | **1.32x** |
 | verify, 7950X 1T | 1.32 ms | ~1.04 ms |
 | absolute chained AES, the GPU gate | 1 MB | **1 MB, unchanged** |
+| T-table penalty, measured after the fact | 4.9 to 8.0x | **8.4 to 16.2x**, F59 |
 
 **Measured 2026-10-06 in the daemon with v14 active, F57, and the projection
 held.** D1 removes **23.9%** of a nonce, a 1.313x speedup, taking the fill share
@@ -269,6 +292,22 @@ It is load-bearing for D1 and D2 in opposite directions. D1 is safe only because
 it leaves the absolute AES alone, which only matters if AES is the gate. D2's
 whole value is making a feeder pay more chained AES, which is worth nothing if a
 card does AES cheaply.
+
+**Half of it is now measured, F59, and the half that moved is D2's.** On a CPU
+the penalty for losing the AES instructions is 4.9x to 8.0x on v8's core and
+8.4x to 16.2x without the sweeps, the range being the i7-7700HQ against the
+7950X. So there is a real asymmetry to lose and D1 widens it rather than
+narrowing it, but it is **half as large on the weaker machine**, and the weaker
+machine is what the gate has to hold for. What that does to D2 is less comfortable: the chained main
+loop is only **2.48x**, so "making a feeder pay more chained AES" was never the
+mechanism. The gate is the once-per-nonce pad fill at 16.2x, and **D2 does not
+increase the pad fill at all**. D2's case now has to rest on its PCIe bandwidth
+argument alone, which is where F43 and F46 actually put it.
+
+The measurement is a CPU doing table lookups out of L1, so it is a floor on the
+structural penalty rather than a card's number. B3 is still the gate. What has
+changed is that D1 no longer depends on its answer in the direction the plan
+assumed, and D2 depends on it more.
 
 Bento-Box's fourth point sharpens it further and is not modelled anywhere here:
 the limiter for a CryptoNight-adjacent GPU kernel is **how many nonces stay
