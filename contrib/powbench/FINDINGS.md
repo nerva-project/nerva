@@ -2522,6 +2522,220 @@ trap that reversed the pad conclusion twice, `v8bench` still drawing
 All three were caught by a control row or an A/B, none by reading the code.
 F52 is a fourth instance of the same family, found the same way.
 
+## The pad, measured below 1 MB
+
+### F54. The pad was never measured below 1 MB, and now it has been: it stays at 1 MB
+
+*Measured 2026-10-06 on a Ryzen 9 7950X and an i7-7700HQ, both quiet, three
+back-to-back runs each, median. Decided against criteria fixed in
+[PAD-DECISION-PREREG.md](PAD-DECISION-PREREG.md) before any number existed.*
+
+F24 and F27 swept 1, 2, 4 and 8 MB. **Nothing below 1 MB was ever measured**, so
+the shipped size was the smallest point in the sample rather than a bracketed
+minimum, and every trend in that sample pointed off the bottom end: multi-thread
+spread 11.3x at 1 MB against 19.6x at 2 MB, and F31's ARM spread worsening
+monotonically with size. That is the condition under which an optimum usually
+lies outside the range, so the sweep was extended down to the floor.
+
+The floor is **256 KB**: the pad must be a whole multiple of `CN_SALT_MEMORY` or
+the sweep reads past the salt, and a power of two or `state_index`'s mask
+confines every access to a prefix. 768 KB satisfies the first and fails the
+second, and would need `V5PAD_MOD`, timing it through a multiply-high rather
+than a mask and making it incomparable with every other row.
+
+Peak total H/s, median of three, `v8bench` with the resized `v5pad` units:
+
+| pad | 7950X @30T | i7-7700HQ @8T | spread | vs 1 MB |
+|---|---|---|---|---|
+| 256 KB | 63400.5 | 6658.9 | 9.521x | -12.07% |
+| 512 KB | 52022.9 | 5338.4 | 9.745x | -10.01% |
+| **1 MB** | **30775.1** | **2842.0** | **10.829x** | **0.00%** |
+| 2 MB | 18777.4 | 1396.4 | 13.447x | +24.18% |
+| 4 MB | 8777.1 | 604.0 | 14.532x | +34.20% |
+| 8 MB | 1629.7 | 282.1 | 5.777x | -46.65% |
+
+**C-1 required a 20% improvement in multi-thread spread at 512 KB and got
+10.01%.** C-2 also failed, see F55. Both criteria with data pointed the same
+way, so **the pad stays at 1 MB**.
+
+#### The three-run rule is what produced the right answer
+
+A single earlier laptop run gave 2476.6 H/s at 1 MB, **13% below all three of
+the back-to-back runs**, which agree with each other to 1.5%. Computed against
+that one reading, C-1 came out at 18.78% and looked like a near miss worth
+arguing about. It was an outlier, and a slightly softer threshold would have
+shipped a consensus change on it.
+
+The pre-registration's value was not the threshold. It was fixing the stopping
+rule, three runs and a median, **before** the first result made a fourth run
+tempting.
+
+#### Predictions, scored
+
+Stated in the pre-registration before measuring.
+
+| # | prediction | result |
+|---|---|---|
+| 1 | 7950X gains 1.5x to 1.8x at 512 KB | **1.690x, correct** |
+| 2 | laptop gains 2.0x to 2.8x, above the 7950X | 1.878x: out-gains the desktop, **below the band** |
+| 3 | spread falls to 7x to 9x at 512 KB | 9.745x, **wrong** |
+| 4 | laptop's peak thread count moves up | it never moved, **wrong** |
+| 5 | single-thread spread stays 2.2x to 2.5x | 2.38x, **correct** |
+
+The mechanism in prediction 2 is real and is half the claimed size. The laptop
+does gain more than the desktop from a smaller pad, because the desktop already
+fits all 32 threads in L3 and has no occupancy to recover. It simply does not
+gain enough to clear the bar.
+
+Prediction 4 is the instructive miss. The argument was that the laptop fits four
+of its eight threads at 1 MB and all eight at 512 KB. It peaks at 8T at **every**
+pad size including 8 MB, where its working set is eleven times its L3, so there
+was never a thread-count cliff to climb. The gain is contention relief at a fixed
+thread count: amplification goes 3.65x to 4.33x. The conclusion survived; the
+explanation given for it did not.
+
+That also puts a question mark on F27's amplification column, which showed this
+laptop at 1.0x for 4 and 8 MB. It cannot reproduce that today, and the
+`tcounts[6]` overflow fixed on 2026-10-06 (below) affected 8-CPU machines too.
+
+#### A harness bug found while sizing the run
+
+`v8bench.c` declared `unsigned tcounts[6]` while both writers were bounded at
+`ntc < 12`. The default ladder produces eight entries on a 32-thread machine
+(1,2,4,8,14,16,24,32) and seven on an 8-thread one, so **both machines in the
+set wrote past the end of that array**. Now `tcounts[12]`. Any earlier
+default-ladder result from either machine came from a binary that smashed its
+own stack.
+
+#### Independent corroboration, from the GPU side, obtained after the fact
+
+Bento-Box was asked on 2026-10-06 whether lowering the pad below 1 MB would give
+a GPU an advantage, **after** these measurements were taken and deliberately not
+before, so the pre-registered run was made blind to the answer. The reply, in
+summary and as opinion rather than measurement:
+
+> Yes, monotonically, and roughly in proportion to how much you shrink it.
+> 1, the salt does not shrink with the pad. 2, it shrinks the AES, which is the
+> only part GPUs are bad at. 3, the sweet stride range collapses toward 1.
+> 4, cache residency: the limiter for a CryptoNight-adjacent GPU kernel is how
+> many nonces stay resident, not VRAM, so a 32 MB Infinity Cache holds 32 nonces
+> at 1 MB and 128 at 256 KB, and at 256 KB it is inside FPGA block-RAM
+> territory. Going up is not the answer either; Monero settled at 2 MB.
+
+Three of those four were already in PLAN-v8-PHASE7 C1.3 as the argument against
+shrinking: the salt's invariance is F23, the AES fill being the anti-GPU gate is
+Phase 6 B2, and resident-nonce count was flagged there as the unmeasured risk
+that B3 exists to settle. Point 3 is sharper than what was written: the analysis
+there covered the stride **modulus** degenerating, and the point being made is
+about the stride **minimum**, `CN_V8_SALT_STEP`, falling to 2 at 512 KB and 1 at
+256 KB. The cost side of that is measured, see F55's note on v8 crossing v5.
+
+The FPGA observation is new and is not in any document here. Every
+specialisation argument in this tree is about ASIC SRAM; 256 KB fitting in FPGA
+block RAM is a nearer-term threat and a cheaper one to realise.
+
+**This is recorded as corroborating opinion, not as evidence.** Nothing in this
+file enters from a comment alone, and the verdict above rests on C-1 and C-2.
+Its value is that an argument from GPU internals and a measurement of CPU
+fairness, made independently, point the same way.
+
+### F55. Streaming stores never pay on v8 at any pad size, and over-subscription ratio is not the governing variable
+
+*Measured 2026-10-06 on a 7950X, quiet, `t_v8_nt.c`, 4 s a point, three runs at
+30 threads and one each at 8 and 16. Zero digest mismatches at any point.*
+
+V6-MINER-LOG lesson 9 proposed that the streaming-store attack switches on above
+some over-subscription ratio "well above 1.3x", from two points on two machines,
+and recommended stating the pad as a ratio to L3 per thread. That is now tested
+across six pad sizes and three thread counts, 21 points spanning **0.06x to
+3.87x**.
+
+Streaming stores lose, in percent, negative meaning the attack does not pay:
+
+| pad | 30T | 16T | 8T |
+|---|---|---|---|
+| 256 KB | -30.7% | -49.0% | -52.4% |
+| 512 KB | -39.2% | -59.0% | -62.6% |
+| 1 MB | -42.5% | -60.7% | -62.8% |
+| 2 MB | -48.9% | -61.8% | -63.9% |
+| 4 MB | -66.8% | -65.4% | -66.3% |
+| 8 MB | -67.3% | -70.0% | -68.3% |
+
+**The sign never flips.** The attack does not switch on anywhere in the
+reachable range, including at 3.87x, which is the ratio at which lesson 9
+records v13 paying +22%.
+
+#### The ratio is not the variable
+
+Running three thread counts was the point: the same ratio is reached by
+different (threads, pad) pairs, and if the ratio governs they must agree.
+
+```
+~1.05x:  (30T, 2MB) -48.9%   (16T, 4MB) -65.4%   (8T, 8MB) -68.3%
+```
+
+Three points at one ratio, **19.8 percentage points apart**. The two inputs act
+independently and in opposite directions:
+
+- **more threads at a fixed pad makes streaming less bad**: 1 MB reads -62.8% at
+  8T, -60.7% at 16T, -42.5% at 30T. This is lesson 9's mechanism working as
+  described: pressure from sibling threads evicts the pad anyway, so streaming's
+  eviction becomes free.
+- **a bigger pad at fixed threads makes streaming worse**: -30.7% at 256 KB to
+  -67.3% at 8 MB. This is the opposite of what lessons 9 and 10 imply.
+
+The mechanism, from the measured cycle counts: streaming's cost is that it
+evicts the pad, and the passes immediately after the fill must refetch it. That
+penalty is **linear in pad size and the nonce is not**. Cycles per MB of pad fall
+from 7.99M at 256 KB to 3.57M at 2 MB, so the penalty grows faster than the
+quantity it is a fraction of.
+
+**So lesson 9's rule, state the pad as a ratio to L3 per thread, is not
+supported and should not be used.** The ratio collapses two variables that do
+not move together. The honest statement is that thread count, not pad size, is
+what moves this attack toward viability, and on this machine 30 threads is the
+cap and it never arrives.
+
+#### What this did to the pad decision
+
+C-2 was pre-registered as: at 512 KB the streaming arm must lose by **at least
+as much** as at 1 MB, and a smaller loss "would be the opposite of what C1.2
+claims and would need explaining before anything else proceeds."
+
+Measured: **512 KB loses 39.2%, 1 MB loses 42.5%.** C-2 fails. Shrinking the pad
+shrinks the eviction penalty faster than it shrinks the nonce, so a smaller pad
+moves this attack slightly toward viability. A 39% loss is not a risk in
+absolute terms, but the direction is against shrinking, it was not anticipated,
+and **PLAN-v8-PHASE7 C1.2's claim that shrinking roughly doubles the attack
+margin is wrong in sign**.
+
+#### Note on v8 crossing v5 below 1 MB
+
+In the single-thread sweep, v8 is cheaper than v5 at every size at or above
+1 MB (-8.3% at 1 MB, -46.5% at 8 MB, consistent with F22) and **more expensive
+below it**: +7.2% at 512 KB and +51.6% at 256 KB. The crossover sits between
+512 KB and 1 MB.
+
+The cause is the stride coupling running backwards. v8's `offset_2` floor is
+`CN_V8_SALT_STEP`, which falls to 2 and then 1 while v5's stays hardcoded at 4,
+so v8 does more sweep steps rather than fewer. E[1/s] predicts a 1.47x sweep
+penalty at 256 KB and the row measures 1.52x. v5 is the control rather than a
+candidate, so this does not disqualify anything by itself, but it does mean the
+sweep work does not shrink with the pad as fast as the fill does.
+
+#### Harness note
+
+`t_v8_nt.c` prints a **split-half check**, the same ratio recomputed from the
+first and second halves of each point's own window, which is what says whether
+the window was long enough. The halves converge to within 0.4 points at 1.5 s;
+the fork's version ran a fixed 20 s a point chosen by guess, roughly 13x longer
+than needed.
+
+The 8 MB row at 30T flags UNSTABLE in all six runs, with the first half near
+-64% and the second near -70% every time. That is a reproducible **within-window
+trend**, not run-to-run instability: the full-window figure repeats to 0.3
+points. The UNSTABLE label conflates those two and should distinguish them.
+
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell

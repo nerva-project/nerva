@@ -5,9 +5,10 @@ from reasoning. Companion to [PLAN-v8.md](PLAN-v8.md), which has Phases 1 to 6,
 and to [FINDINGS.md](FINDINGS.md), which has the evidence.
 
 **The one-sentence answer: v8's implementation gap closes with code that is
-already written, and the one design question still genuinely open is whether the
-pad should be smaller than 1 MB.** Everything below is that statement with the
-work attached.
+already written, and v8 needs no consensus change.** The one design question
+that looked genuinely open, whether the pad should be smaller than 1 MB, was
+measured on 2026-10-06 and answered no (C1, FINDINGS F54 and F55). Everything
+below is that statement with the work attached.
 
 ## Where this comes from
 
@@ -304,7 +305,15 @@ screener's measured throughput gain exceeds 1.05x, Track C opens.**
 F42 gives the ceiling this sits under: pinning `init_size_blk` cut the free-fill
 screening ceiling from 2.15x to 1.59x, and the fill is not free.
 
-### B2. Find where the two pad attacks switch on, in ratio terms, by measurement.
+### B2. Find where the two pad attacks switch on. STREAMING HALF DONE: it never switches on.
+
+**Answered 2026-10-06 for the streaming arm, F55.** 21 points from 0.06x to
+3.87x over-subscription, six pad sizes, three thread counts: the sign never
+flips. The framing of this item, "in ratio terms", is itself refuted. The ratio
+is not the governing variable; pad size and thread count act independently and
+in opposite directions. The recompute arm is still unbuilt.
+
+The item is kept as written below because it is what the work was done against.
 
 This is the measurement that tells us how much margin v8 has and it is the one
 this project is best equipped to run.
@@ -335,7 +344,16 @@ override, which is how the Phase 3 pad sweep was run. Sweep the pad at **256 KB,
 512 KB, 1, 2, 4 and 8 MB** on the 7950X at 30 threads, which spans 0.23x to 4.7x
 of over-subscription including the salt, and run both attacks at each point:
 
-- the A6 streaming-store A/B, which already exists as `t_v8_nt.c`
+- the A6 streaming-store A/B. **Built 2026-10-06**: `t_v8_nt.c` and
+  `build-v8-nt.sh`, sweeping all six sizes in one run and printing the working
+  set as a ratio to the L3 the operator supplies. It carries a **split-half
+  check**, the same ratio recomputed from the first and second halves of each
+  point's own window, which is what says whether the window was long enough.
+  The fork's version ran a fixed 20 s a point by guess; the halves converge to
+  within 0.4 points at 1.5 s, so that was roughly 13x longer than needed. A
+  point whose halves disagree is marked UNSTABLE and wants repeats rather than a
+  longer window, because at the cliff the variance is bimodal and a longer run
+  averages two states instead of resolving either.
 - the A7 recompute, which needs `t_v13_recompute.c` adapted to v8's fill and
   v8's dirty-block map, and `t_v8_dirty.c` already produces the map
 
@@ -417,7 +435,29 @@ The rest are either already settled against or gated on a Track B result that
 does not exist yet, and are written down so that a surprise has a prepared
 response rather than a rushed one.
 
-## C1. The pad size, reopened downward. The live question.
+## C1. The pad size, reopened downward. ANSWERED 2026-10-06: it stays at 1 MB.
+
+**Measured, decided, closed.** C-1 wanted a 20% improvement in multi-thread
+spread at 512 KB and got 10.01%. C-2 failed outright: the smaller pad makes the
+streaming-store attack slightly *less* unattractive, not more. Evidence in
+[FINDINGS.md](FINDINGS.md) F54 and F55, decision record in
+[PAD-DECISION-PREREG.md](PAD-DECISION-PREREG.md).
+
+**Two claims below are wrong and are marked where they appear rather than
+deleted**, because a withdrawn number outlives its correction:
+
+- **C1.2's "the lesson 9 attack margin roughly doubles" is wrong in sign.** The
+  margin shrinks, 42.5% to 39.2%. Measured in F55.
+- **C1.2's fairness projection was optimistic on every axis.** The mechanism is
+  real, the laptop does gain more than the desktop, and the gain is about half
+  what was claimed.
+
+The structural argument in C1.1, that 512 KB is the only size in range whose
+stride modulus is prime, stands and was never the deciding factor. It is kept
+because it is the kind of argument that should be made before measuring, and
+because it correctly excluded 768 KB without a run.
+
+The rest of this section is kept as written, as the case that was tested.
 
 ### C1.0. The premise to correct first: 1 MB is an endpoint, not a minimum
 
@@ -498,6 +538,13 @@ cost falls about 1.16x at 512 KB and 1.27x at 256 KB.
 1.25 MB to 0.75 MB. The laptop, the closest real machine to the line, drops from
 1.67x over-subscription to 1.0x, and both pad attacks move further from
 switching on.
+
+> **WRONG, and wrong in sign. Measured 2026-10-06, F55.** The streaming attack
+> gets *less* unattractive at a smaller pad, 39.2% against 42.5%, because its
+> cost is evicting the pad and that penalty is linear in pad size while the
+> nonce is not. The over-subscription ratio is also not the governing variable:
+> three points at the same ratio differ by 19.8 points. This paragraph is the
+> reasoning C-2 was written to test, and C-2 failed it.
 
 **The missed fairness target is the strongest case, and it reads straight off
 F27's own table.** F27 identifies the mechanism as "how many threads each
@@ -667,9 +714,15 @@ algorithms).
 
 ### C1.5. What has to be true to change the pad
 
-Pre-register these, before any number exists, because this decision has been
-reversed by measurement twice already and both times the reversal came from a
-criterion invented after the data:
+**Done, 2026-10-06: [PAD-DECISION-PREREG.md](PAD-DECISION-PREREG.md)** fixes the
+thresholds, the predictions and what each outcome means, and is not to be edited
+once measuring starts. It also records the structural argument that picks the
+candidate before any timing exists: `CN_V8_STRIDE_MOD` is 127 at 512 KB, prime
+and larger than the largest `offset_1`, so **512 KB is the only size in the
+plausible range whose stride draw is never restricted**. 768 KB is excluded
+there, with the reason.
+
+The summary, with the numbers in the pre-registration:
 
 1. **Multi-thread spread improves materially**, F27's measurement repeated at
    256 KB and 512 KB on all four machines. The target is the 2.2x single-thread
@@ -891,7 +944,9 @@ runs first and in parallel with A1, which is independent of it.
 13. C2, C4   contingency, real work only if B1 or B2 says so
 ```
 
-Items 1 to 4 are one session's work and produce the pad decision's evidence.
+**Items 1 to 4 are done, 2026-10-06, and the pad decision is closed.** What remains is items 5 to 13, none of which depends on the pad question.
+
+Items 1 to 4 were one session's work and produced the pad decision's evidence.
 Item 8 is the gate on acting on it and is the one most likely to need someone
 else. Items 5 to 7 are independent of the pad question and can run in any gap.
 

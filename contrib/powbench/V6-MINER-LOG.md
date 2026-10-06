@@ -1475,6 +1475,13 @@ the forced DRAM reads cost about what the removed RFO saved, and the net is a
 small loss. At 3.8x nothing was going to be cached anyway, so the removed RFO is
 pure gain with no added read cost.
 
+**REFUTED 2026-10-06, see FINDINGS F55.** Swept across six pad sizes and three
+thread counts on v8, the sign never flips at all, up to 3.87x, and three points
+at the same ratio differ by 19.8 percentage points. Pad size and thread count
+move the result in opposite directions, so the ratio collapses two variables
+that do not travel together. Thread count behaves as described below; pad size
+does not. Do not use the ratio rule stated at the end of this lesson.
+
 **The attack switches on somewhere well above 1.3x over-subscription, not at
 1.0x.** v13 at 8 MB a thread sits at 3.8x and is wide open. v8 at 1 MB sits at
 0.3x to 1.3x everywhere tested and is not. That is a far more useful boundary
