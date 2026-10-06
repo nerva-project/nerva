@@ -44,6 +44,72 @@
  * known-answer vectors are what actually prove. PLAN-v8 Phase 6 A1b. */
 #include "slow-hash-v8-defer.h"
 
+/* CN_V8_NO_SWEEP compiles the core WITHOUT salt_pad_v8, which is candidate D1 in
+ * PLAN-v8-PHASE8: the sweeps are 21.1% of a nonce by the eager profile and are
+ * provably not hard, since A1b reorders 30 of them into two passes and the
+ * digest does not move.
+ *
+ * THIS CHANGES THE HASH. It is not a switch to ship behind; it is a second
+ * algorithm compiled beside the first so the two can be costed against each
+ * other. v8 has never validated a block, so that is a question we are allowed
+ * to ask. Nothing defines it in the daemon build, and the consensus entry
+ * points are unaffected.
+ *
+ * Why the cost delta is not simply the sweep phase: under the deferral,
+ * salt_pad_v8_defer only RECORDS a sweep, CN_V8_FLUSH_SWEEPS applies them, and
+ * post_aes_variant_v8 reconstructs them on the fly whenever it reads the pad
+ * (F51's O(sweeps * patches) per read). Removing the sweeps removes all three,
+ * so the saving is larger than any one of them and has to be measured end to
+ * end rather than summed. */
+/* Three modes, because salt_pad_v8 does two separable jobs and they have very
+ * different arguments for and against:
+ *
+ *   the PAD XOR      sweeps salt across the pad at a data-dependent stride.
+ *                    17.9% of a nonce by the eager profile, and provably not
+ *                    hard: A1b reorders it and the digest does not move.
+ *
+ *   the EXTRA HASH   calls one of blake, groestl, jh, skein on the salt and
+ *                    patches 32 bytes of the salt with the result. 3.2%, and
+ *                    the `& 3` selector that reaches all four IS v8's defining
+ *                    difference from v5. Cheap in time, but it is what forces a
+ *                    specialised implementation to carry four more hash cores
+ *                    than AES and keccak. That is an AREA argument, and F38's
+ *                    rule is about time, so the rule does not settle it.
+ *
+ * CN_V8_NO_SWEEP drops both. CN_V8_NO_PADXOR drops only the pad sweep and keeps
+ * the extra hash, which is the middle option and probably the interesting one.
+ *
+ * THESE CHANGE THE HASH. Not switches to ship behind: variants compiled beside
+ * the real thing so they can be costed against it. v8 has never validated a
+ * block, so this is a question we are allowed to ask. Nothing in the daemon
+ * build defines either. PLAN-v8-PHASE8 D1. */
+#if defined(CN_V8_NO_SWEEP)
+#define CN_V8_SWEEP(a, b, c, d) do { } while (0)
+#define CN_V8_FLUSH()           do { } while (0)
+#elif defined(CN_V8_NO_PADXOR)
+/* The extra hash and its 32-byte salt patch, without the pad sweep. Mirrors
+ * salt_pad_v8_defer's first half exactly, including the memo invalidation when
+ * a patch lands inside the window the extra hash reads. */
+#define CN_V8_SWEEP(a, b, c, d)                                            \
+    do {                                                                   \
+        const unsigned sel_ = (unsigned)((a) & 3);                         \
+        if (!((salt_hash_valid >> sel_) & 1u))                             \
+        {                                                                  \
+            extra_hashes[sel_]((salt), 200, salt_hash_memo[sel_]);         \
+            salt_hash_valid |= 1u << sel_;                                 \
+        }                                                                  \
+        temp_1 = (uint16_t)(iters ^ ((b) ^ (c)));                          \
+        offset_1 = temp_1 * (((d) % 3) + 1);                               \
+        for (j = 0; j < 32; j++)                                           \
+            (salt)[offset_1 + j] ^= salt_hash_memo[sel_][j];               \
+        if (offset_1 < 200) salt_hash_valid = 0;                           \
+    } while (0)
+#define CN_V8_FLUSH()           do { } while (0)
+#else
+#define CN_V8_SWEEP(a, b, c, d) salt_pad_v8_defer(salt, a, b, c, d)
+#define CN_V8_FLUSH()           do { CN_V8_FLUSH_SWEEPS(); cn_v8_nsw = 0; } while (0)
+#endif
+
 
 /* Floating-point stage, compiled in only by slow-hash-v8fp-{hw,sw}.c.
  * Without CN_V8_FP this expands to nothing and v8 is unchanged. */
@@ -105,19 +171,18 @@ static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t leng
         pre_aes_v8();
         _c = _mm_aesenc_si128(_c, _a);
         post_aes_variant_v8();
-        salt_pad_v8_defer(salt, r2[0], r2[2], r2[4], r2[6]);
+        CN_V8_SWEEP(r2[0], r2[2], r2[4], r2[6]);
 
         for (l = 1; l < yy; l++)
         {
             pre_aes_v8();
             _c = _mm_aesenc_si128(_c, _a);
             post_aes_variant_v8();
-            salt_pad_v8_defer(salt, r2[1], r2[3], r2[5], r2[7]);
+            CN_V8_SWEEP(r2[1], r2[3], r2[5], r2[7]);
         }
     }
 
-    CN_V8_FLUSH_SWEEPS();
-    cn_v8_nsw = 0;
+    CN_V8_FLUSH();
 
     CN_FP_STAGE();
 
@@ -157,17 +222,16 @@ static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t leng
     for (k = 1; k < xx; k++)
     {
         aes_sw_variant_v8();
-        salt_pad_v8_defer(salt, r2[0], r2[2], r2[4], r2[6]);
+        CN_V8_SWEEP(r2[0], r2[2], r2[4], r2[6]);
 
         for (l = 1; l < yy; l++)
         {
             aes_sw_variant_v8();
-            salt_pad_v8_defer(salt, r2[1], r2[3], r2[5], r2[7]);
+            CN_V8_SWEEP(r2[1], r2[3], r2[5], r2[7]);
         }
     }
 
-    CN_V8_FLUSH_SWEEPS();
-    cn_v8_nsw = 0;
+    CN_V8_FLUSH();
 
     CN_FP_STAGE();
 

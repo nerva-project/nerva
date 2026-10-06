@@ -2736,6 +2736,79 @@ The 8 MB row at 30T flags UNSTABLE in all six runs, with the first half near
 trend**, not run-to-run instability: the full-window figure repeats to 0.3
 points. The UNSTABLE label conflates those two and should distinguish them.
 
+### F56. v8's four extra hashes reach the digest only through the pad sweep, so the hash diversity is not separable from the thing that costs 22%
+
+*Measured 2026-10-06 on a 7950X with `t_v8_sweep.c`, three variants compiled
+side by side at a 1 MB pad, A-B-C-C-B-A per group of six nonces with one draw
+feeding all six. This is a property of v8 as it stands, independent of whether
+PLAN-v8-PHASE8's D1 is adopted.*
+
+`salt_pad_v8` does two separable-looking jobs per call: it hashes `salt[0..200)`
+with one of blake, groestl, jh or skein and patches 32 bytes of the salt with
+the result, then it XORs salt across the pad at a data-dependent stride. The
+`& 3` selector that reaches all four, rather than v5's `% 3` that never reached
+Skein (F10), **is v8's defining difference from v5**.
+
+The obvious design move was to drop the expensive half and keep the cheap one:
+the pad XOR is 17.9% of a nonce by the eager profile and is provably not hard
+(F51 reorders 30 sweeps into two passes bit-identically), while the extra hash
+is 3.2% and is the only thing forcing a specialised implementation to carry four
+more hash cores than AES and keccak. That is an area argument, and F38's rule is
+about time, so the rule does not settle it.
+
+**The move does not exist.** Three variants, one thread:
+
+| | cycles/nonce | core | nonce | digest FNV-1a |
+|---|---|---|---|---|
+| v8 as it stands | 2,414,385 | baseline | baseline | `4cf5b55ca66f6f21` |
+| pad sweep removed, extra hash kept | 1,122,383 | +115.1% | +21.7% | `84be284becf1ae99` |
+| whole `salt_pad_v8` gone | 1,104,258 | +118.6% | +22.0% | `84be284becf1ae99` |
+
+**The last two digests are identical**, so everything that differs between them
+is dead code: with the pad XOR gone, the extra hash and its salt patch still run,
+still cost cycles and influence nothing.
+
+#### Why, and it is structural rather than a bug
+
+`randomize_scratchpad_256k_v8` consumes `salt[0 .. 262143]` in full **before**
+the main loop (F23). After that the only thing that reads the salt again is
+`salt_pad_v8` itself: its extra hash reads `salt[0..200)` and its patch writes 32
+bytes back. That is a closed loop feeding nothing unless the pad XOR carries it
+into the pad, which is what the main loop then reads through `state_index`. Sever
+the XOR and the loop is severed with it.
+
+So the four extra hashes are load-bearing **only** in the presence of the sweep,
+and the `& 3` widening that makes v8 v8 is load-bearing only in the same sense.
+
+#### Consequences
+
+- **D1 is binary.** There is no cheap way to keep hash-function diversity for
+  ASIC area while dropping the pad sweep. Keeping it would mean rewiring the
+  extra hash into something that is actually read, which is a new construction
+  rather than a trim, and would need its own justification.
+- **The 22% is a floor, not a point estimate.** It is the measured core saving
+  scaled by F52's 40.5% core share, and F52 states its fill figure is an upper
+  bound because the daemon's pad is cold where `v8bench`'s is warm. A colder pad
+  means a larger core share and a larger saving.
+- The saving is flat across thread counts: 21.7% at 1 thread, 22.1% at 16,
+  22.1% at 30, so it is not a cache artefact.
+
+#### Two harness bugs on the way here, both of which hid the result
+
+Recorded because both are the same family and the family is common.
+
+1. **A XOR accumulator over an A-B-B-A pattern cancels itself.** Each arm hashes
+   twice per group from a restored salt, so the digests are identical and the
+   accumulator goes to zero. It read 0 of 256 bits on both arms, which looks
+   like a broken hash and is a broken check. Replaced with FNV-1a, which does
+   not cancel.
+2. **Comparing every arm only against the baseline misses arms agreeing with
+   each other**, which was the entire finding. It now compares every pair.
+
+Neither invented a result; both concealed one. That is the better direction to
+fail in, but the only reason this was caught at all is that two timings looked
+implausibly close and the digests were checked on a hunch.
+
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell
