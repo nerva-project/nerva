@@ -162,6 +162,7 @@ $CC -O2 $ARCHFLAGS -fno-strict-aliasing -ffp-contract=off \
     -DSLOW_HASH_HW_AES_BUILT=1 \
     $BOOSTINC -I src -I src/crypto -I contrib/epee/include -I contrib/hf14checks \
     contrib/powbench/v8bench.c \
+    contrib/hf14checks/v5pad025.c contrib/hf14checks/v5pad05.c \
     contrib/hf14checks/v5pad1.c contrib/hf14checks/v5pad2.c \
     contrib/hf14checks/v5pad4.c contrib/hf14checks/v5pad8.c \
     src/crypto/slow-hash.c src/crypto/slow-hash-hw.c src/crypto/slow-hash-sw.c \

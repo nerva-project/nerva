@@ -79,6 +79,6 @@ hf14check(t_v8_chain t_v8_chain.c)
 # main build uses for slow-hash-hw.c, taken from its flags.make.
 # -fno-strict-aliasing is not optional: slow-hash type-puns the scratchpad.
 set_source_files_properties(
-  v5pad1.c v5pad1_25.c v5pad1_5.c v5pad2.c v5pad4.c v5pad8.c
+  v5pad025.c v5pad05.c v5pad1.c v5pad1_25.c v5pad1_5.c v5pad2.c v5pad4.c v5pad8.c
   PROPERTIES COMPILE_OPTIONS "-O2;-DNDEBUG;-maes;-march=x86-64;-fno-strict-aliasing")
-hf14check(t_bench_v5v6 "t_bench_v5v6.cpp;v5pad1.c;v5pad1_25.c;v5pad1_5.c;v5pad2.c;v5pad4.c;v5pad8.c")
+hf14check(t_bench_v5v6 "t_bench_v5v6.cpp;v5pad025.c;v5pad05.c;v5pad1.c;v5pad1_25.c;v5pad1_5.c;v5pad2.c;v5pad4.c;v5pad8.c")

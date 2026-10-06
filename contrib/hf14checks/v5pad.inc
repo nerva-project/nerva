@@ -98,8 +98,15 @@ _Static_assert((CN_SALT_MEMORY & (CN_SALT_MEMORY - 1)) == 0,
    function. Once v8 became pad-aware and stopped needing the wrap at all, a
    wrap left on v5 alone turned the 1 MB v5-against-v8 comparison into wrapped
    against unwrapped, which overstated v8 by 3 to 5 points on the two narrower
-   cores and tripped the harness's own consistency check. */
-#if CN_SCRATCHPAD_MEMORY == 1048576
+   cores and tripped the harness's own consistency check.
+
+   Identity at and BELOW 1 MB, not only at exactly 1 MB. v5's smallest stride
+   is 4, so the salt index tops out at pad / 4, which reaches CN_SALT_MEMORY
+   only at exactly 1 MB and is short of it at every smaller size. Written as
+   `== 1048576` the sub-1 MB rows added for PLAN-v8-PHASE7 C1 would carry an AND
+   the 1 MB control does not, which is the same wrapped-against-unwrapped
+   asymmetry described above. */
+#if CN_SCRATCHPAD_MEMORY <= 1048576
 #define V5PAD_SALT_WRAP(i) (i)
 #else
 #define V5PAD_SALT_WRAP(i) ((i) & (uint32_t)(CN_SALT_MEMORY - 1))

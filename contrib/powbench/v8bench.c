@@ -236,10 +236,14 @@ typedef void (*hashfn)(cn_hash_context_t *, const void *, size_t, char *,
                        size_t, uint8_t, uint16_t, uint16_t);
 
 /* the resized recompilations, from contrib/hf14checks/v5pad{1,4}.c */
+void cn_slow_hash_v11_p025(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
+void cn_slow_hash_v11_p05(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v11_p1(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v11_p2(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v11_p4(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v11_p8(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
+void cn_slow_hash_v14_p025(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
+void cn_slow_hash_v14_p05(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v14_p1(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v14_p2(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v14_p4(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
@@ -733,11 +737,25 @@ static void placement_check(const char *where)
 /* Cost must rise with the pad. A sweep that falls has measured more than one
  * kind of core, whatever the affinity says, so it is checked on its own rather
  * than trusting the placement probes to have noticed. */
-static void check_monotonic(const double ms[4])
+/* The pad sweep, smallest first. 256 KB is the floor: below it the pad stops
+ * being a whole multiple of CN_SALT_MEMORY and the sweep reads past the salt.
+ * PLAN-v8-PHASE7 C1 is why the two sizes below 1 MB are here; Phase 3 never
+ * measured them, so 1 MB was the endpoint of its sample rather than a bracketed
+ * minimum. PAD_1MB is the index anything that wants the shipped size must use:
+ * it was 0 while the sweep started at 1 MB, and a hardcoded 0 left behind here
+ * would silently compare v15 at 1 MB against v8 at 256 KB. */
+#define NPADS   6
+#define PAD_1MB 2
+static const char *const g_pad_short[NPADS] =
+    { "256KB", "512KB", "1MB", "2MB", "4MB", "8MB" };
+static const char *const g_pad_long[NPADS] =
+    { "256 KB", "512 KB", "1 MB", "2 MB", "4 MB", "8 MB" };
+
+static void check_monotonic(const double ms[NPADS])
 {
-    static const char *const names[4] = { "1 MB", "2 MB", "4 MB", "8 MB" };
+    const char *const *names = g_pad_long;
     int i;
-    for (i = 1; i < 4; i++) {
+    for (i = 1; i < NPADS; i++) {
         if (ms[i] > 0.0 && ms[i-1] > 0.0 && ms[i] < ms[i-1] && !g_tainted) {
             snprintf(g_taint, sizeof(g_taint),
                      "%s (%.4f ms) came out cheaper than %s (%.4f ms)",
@@ -763,23 +781,24 @@ static void print_taint(void)
  * keeps every token identical and only breaks where a phone would break it
  * anyway. Splitting on our terms beats letting the terminal split mid-number. */
 static void tag_line(const char *tag, const char *brand, const char *extra,
-                     const char *unit, const double v[4], int decimals)
+                     const char *unit, const double v[NPADS], int decimals)
 {
-    static const char *const pads[4] = { "1MB", "2MB", "4MB", "8MB" };
+    const char *const *pads = g_pad_short;
     int i;
 
     if (!g_narrow) {
         printf("\n  %s %s%s", tag, brand, extra);
-        for (i = 0; i < 4; i++)
+        for (i = 0; i < NPADS; i++)
             printf(" %s=%.*f", pads[i], decimals, v[i]);
         printf("\n");
         return;
     }
 
     printf("\n  %s %s%s\n", tag, brand, extra);
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < NPADS; i++)
         printf("%s%s=%.*f%s", (i % 2) == 0 ? "    " : " ",
                pads[i], decimals, v[i], (i % 2) == 1 ? "\n" : "");
+    if ((NPADS % 2) != 0) printf("\n");
     (void)unit;
 }
 
@@ -934,14 +953,16 @@ int main(int argc, char **argv)
          * the noisiest rows precisely where the pad decision needs precision:
          * two runs minutes apart disagreed by 5.7% at 4 MB. These give roughly
          * 7 s a row, about 30 s for the sweep, and cut that scatter by half. */
-        static const struct { const char *name; hashfn v5, v8; size_t pad; unsigned n; } sweep[] = {
+        static const struct { const char *name; hashfn v5, v8; size_t pad; unsigned n; } sweep[NPADS] = {
+            { "256KB", cn_slow_hash_v11_p025, cn_slow_hash_v14_p025, 256ull*1024, 16000 },
+            { "512KB", cn_slow_hash_v11_p05,  cn_slow_hash_v14_p05,  512ull*1024,  8000 },
             { "1 MB", cn_slow_hash_v11_p1, cn_slow_hash_v14_p1, 1024ull*1024, 4000 },
             { "2 MB", cn_slow_hash_v11_p2, cn_slow_hash_v14_p2, 2048ull*1024, 2500 },
             { "4 MB", cn_slow_hash_v11_p4, cn_slow_hash_v14_p4, 4096ull*1024, 1500 },
             { "8 MB", cn_slow_hash_v11_p8, cn_slow_hash_v14_p8, 8192ull*1024,  800 },
         };
         size_t si;
-        double v8ms[4];
+        double v8ms[NPADS];
 
         if (g_narrow) {
             printf("\n  pad sweep (~30 s)\n");
@@ -953,7 +974,7 @@ int main(int argc, char **argv)
                    "pad", "v5 ms", "v8 ms", "v8 H/s", "v8:v5", "n");
         }
 
-        for (si = 0; si < 4; si++) v8ms[si] = 0.0;
+        for (si = 0; si < NPADS; si++) v8ms[si] = 0.0;
 
         for (si = 0; si < sizeof(sweep)/sizeof(sweep[0]); si++)
         {
@@ -1007,8 +1028,12 @@ int main(int argc, char **argv)
          * rather than a fixed sample count that is too small on a slow box and
          * wasteful on a fast one. */
         {
-            unsigned hw = 0, tcounts[6], ntc = 0, ti;
-            double base[4];
+            /* 12, not 6: both writers below are bounded at 12, and on a
+             * 32-thread machine the default ladder produces 8 entries
+             * (1,2,4,8,14,16,24,32), so a 6-element array was written two past
+             * its end. An explicit thread list of more than six counts did the
+             * same. Caught 2026-10-06 while sizing a run on the 7950X. */
+            unsigned hw = 0, tcounts[12], ntc = 0, ti;
             long procs;
 
 #if defined(_SC_NPROCESSORS_ONLN)
@@ -1080,7 +1105,7 @@ int main(int argc, char **argv)
                 printf("  %s\n", "peak");
             }
 
-            for (si = 0; si < 4 && ntc > 0; si++)
+            for (si = 0; si < NPADS && ntc > 0; si++)
             {
                 double best = 0.0, one = 0.0;
                 unsigned n, best_t = 0;
@@ -1160,10 +1185,10 @@ int main(int argc, char **argv)
                 for (p = brand; *p; p++) if (*p == ' ') *p = '_';
                 snprintf(extra, sizeof(extra), " cpus=%u", hw);
                 tag_line("SCALE", brand, extra, "H/s", v8ms, 1);
-                if (v15peak > 0.0 && v8ms[0] > 0.0)
+                if (v15peak > 0.0 && v8ms[PAD_1MB] > 0.0)
                     printf("  FPSCALE %s v8=%.1f v15=%.1f (%+.2f%%)\n",
-                           brand, v8ms[0], v15peak,
-                           (v15peak - v8ms[0]) / v8ms[0] * 100.0);
+                           brand, v8ms[PAD_1MB], v15peak,
+                           (v15peak - v8ms[PAD_1MB]) / v8ms[PAD_1MB] * 100.0);
                 if (g_narrow) {
                     printf("  ^ peak total H/s per pad.\n");
                     printf("  Send this and the SWEEP line.\n");
