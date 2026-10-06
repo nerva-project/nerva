@@ -122,6 +122,14 @@ nonce and 59.5% of a v8 nonce**. The 59.5% is confirmed three independent ways
 (the instrumented profile, the external review's 63% unscreenable prefix, and
 F52's 1.348 ms real nonce against `v8bench`'s 0.535 ms hash core).
 
+**MEASURED 2026-10-06, and the prediction below missed by more than 4x. See
+FINDINGS F57.** The fill speedup is 1.110x under v14, not 1.57x, because the
+fork measured it under v13 where an 8 MB pad per thread leaves far more memory
+latency to hide. A1 removes 5.8% of a v8 nonce, a 1.062x speedup, and it is
+about a quarter the size of PLAN-v8-PHASE8's D1. It remains worth doing: it is
+bit-identical, verified 64 of 64 against real chain data, and it speeds
+verification for everyone. The prediction is kept below as written.
+
 **Prediction, stated before measuring, per the discipline Phase 1e set:**
 
 ```

@@ -2809,6 +2809,130 @@ Neither invented a result; both concealed one. That is the better direction to
 fail in, but the only reason this was caught at all is that two timings looked
 implausibly close and the digests were checked on a hunch.
 
+### F57. The chain fill is 56% of a v8 nonce, the run-ahead is worth 6% not 27%, and the same function costs 1.6x more under v13 than under v14
+
+*Measured 2026-10-06 on a 7950X, machine quiet, in the daemon with HF14
+temporarily lowered to 4,400,000 so v14 was actually active, 30 threads, over
+1,005,568 nonces. Figures are invariant-TSC ticks, not core cycles; every ratio
+and share below is therefore valid, and none of them converts to seconds without
+the TSC frequency.*
+
+PLAN-v8-PHASE7's A1 proposed porting the fork's run-ahead rewrite of
+`get_cna_v6_data`, predicting roughly +27% on a v8 nonce from a 1.57x fill
+speedup at a 59.5% fill share. **Both inputs were wrong and they were wrong in
+opposite directions.**
+
+#### What was measured
+
+```
+v14 active, 30 threads, 1,005,568 nonces
+  whole nonce                11,274,230
+  chain fill, reference loop  6,819,499
+  chain fill, run-ahead       6,142,082   1.110x
+  hash core, by subtraction   4,793,440
+```
+
+| | removes | speedup | fill share | ASIC bound |
+|---|---|---|---|---|
+| v8 with the reference fill | | | 58.7% | 1.70x |
+| v8 with the run-ahead, **A1** | **5.8%** | **1.062x** | 56.2% | 1.78x |
+| and with D1's sweeps removed | 23.9% | 1.313x | 73.8% | 1.36x |
+
+**The port is bit-identical**, which it must be because `get_cna_v6_data` is
+shared with live v13: `NERVA_SALT_SELFCHECK` computed both loops and compared
+all 256 KB plus the final cipher state, 64 of 64, against the real chain at
+height 4,424,751, with zero disagreements.
+
+Internal consistency: 11,782 H/s times 30 threads times 11,274,230 ticks gives
+4.43 GHz per thread against the part's 4.5 GHz base, which is what invariant TSC
+should read. Two independent timers and the reported hashrate agree.
+
+#### The finding that generalises: the fill's cost depends on the algorithm around it
+
+The same function, measured in two versions of the daemon on the same machine
+against the same database:
+
+| | fill, reference | fill, run-ahead | run-ahead is worth |
+|---|---|---|---|
+| under v13, 30 threads | 11,114,446 | 7,767,445 | 1.431x |
+| under v14, 30 threads | 6,819,499 | 6,142,082 | **1.110x** |
+
+**The chain fill costs 1.63x more under v13 than under v14, and the
+optimisation is worth 1.29x more there.** The cause is the pad: v13 holds 8 MB
+per thread, which at 30 threads is 240 MB against 64 MB of L3, so the fill's
+block-cache reads miss constantly and there is a great deal of memory latency
+for a run-ahead to hide. v14's 1 MB pad leaves the fill already fast and little
+left to recover.
+
+So a figure for this function does not transfer between versions **even though
+it is literally the same code**. That is lesson 5 in its sharpest form so far,
+and it is what produced the two errors below.
+
+#### Two corrections to this project's own numbers
+
+**The 59.5% fill share was right and the 68% that briefly replaced it was
+wrong.** The 68% came from composing a fill measured under v13 with a core
+measured in a harness, and inherited v13's inflated fill cost. The real share is
+56.2% with the run-ahead and 58.7% without, which is where the original
+instrumented profile always had it. Everything scaled by that number in
+PLAN-v8-PHASE8 stands.
+
+**A1's prediction of +27% was wrong by more than 4x.** The honest reading is
+that the prediction was stated before measuring, per Phase 1e's discipline, which
+is the only reason the miss is visible at all.
+
+#### The cold-pad question, closed
+
+F52 notes that its own fill figure is an upper bound because the daemon's pad
+goes cold during the chain-cache walk while `v8bench`'s stays warm. That caveat
+was bounded here at anywhere from 1% to 20% of a nonce, which is too wide to
+leave underneath the share that scales every projection in Phase 8.
+
+Measured: the harness core at 30 threads is 4,640,763 ticks and the daemon core
+is 4,793,440, so **the cold-pad penalty is +3.3%.** The bound was honest and
+nearly useless; the measurement cost one build and is now a number.
+
+#### A void run, and why the obvious design was the broken one
+
+The first attempt ran A-B-B-A as **four separate daemon processes**, one per arm.
+It came back with its two A arms 25.1% apart against a 2% tolerance, after
+discarding the first window of each to remove cold-cache bias. Void.
+
+The cause is structural rather than noise: between-process variation on a 5 GB
+database swamps an effect of this size, and the arms drifted in different
+directions within their own runs (one trending down 17%, another up 20%).
+
+The fix was to **interleave the arms per call inside one process** against one
+block cache, selected by `NERVA_SALT_AB`, which is what `t_v8_nt.c` already does
+across threads. The interleaved run was stable to 0.5% across six checkpoints
+immediately. Both arms produce identical output, so alternating them is
+invisible to consensus and only the timing differs.
+
+Also recorded: the reported figure was a **cumulative** mean, which is not
+comparable across runs that reached different call counts, because a shorter run
+carries proportionally more cold-cache calls. Per-window figures are the ones to
+read.
+
+#### Measurement-only changes, not committed
+
+HF14 was lowered from 4,500,000 to 4,400,000 so v14 would be active on a chain
+copy whose tip was 4,424,751. **The daemon then popped the chain back to exactly
+4,400,000**, since the blocks above it had been mined under v13 rules, which
+truncated the database copy. That is worth knowing before anyone repeats this: it
+writes to the copy and the copy is not reusable for v13 work afterwards. The fork
+height was restored immediately and a nonce timer added to
+`get_block_longhash_v14` for this run was reverted, being scaffolding in a
+consensus-critical file.
+
+#### What it means for the plan
+
+A1 is still worth doing: it is bit-identical, it is verified, and it speeds
+verification and sync for everyone. But at 1.062x on v8 it is **a quarter of the
+size of D1**, it does not justify the position it was given in the running order,
+and it slightly loosens the ASIC bound it was partly meant to pay for, from 1.70x
+to 1.78x, exactly as F38 predicts for anything that accelerates the half an
+attacker cannot specialise.
+
 ## Working environment
 
 ### F14. The Bash tool cannot build here; use PowerShell

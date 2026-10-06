@@ -139,6 +139,12 @@ Projected from the measured shares, with the caveat below:
 | verify, 7950X 1T | 1.32 ms | ~1.04 ms |
 | absolute chained AES, the GPU gate | 1 MB | **1 MB, unchanged** |
 
+**Measured 2026-10-06 in the daemon with v14 active, F57, and the projection
+held.** D1 removes **23.9%** of a nonce, a 1.313x speedup, taking the fill share
+to **73.8%** and the ASIC bound to **1.36x**. The projected 0.79, 75.8% and 1.32x
+above were within two points on every axis, which is the first time a linear
+projection on the share table has survived direct measurement.
+
 So it tightens the ASIC bound by a quarter, makes verification 21% cheaper, and
 does not touch the anti-GPU gate. P3 is satisfied because the sweeps are XOR,
 not AES.
@@ -252,8 +258,17 @@ term and cheaper.
 4. D4 only if D2 lands, and only with a new pre-registration.
 ```
 
-**Before any of it: the share table above is from one instrumented profile and
-every projection in this document is linear arithmetic on it.** That is exactly
+**Update 2026-10-06: the share table has now been checked directly and it
+holds.** F57 measured the whole v8 nonce in the daemon with v14 active: the
+chain fill is 56.2% with the run-ahead and 58.7% without, against the table's
+59.5%, and the cold-pad correction F52 warned about is +3.3%. So the
+projections below stand. A 68% figure briefly replaced 59.5% during that work
+and was wrong; it came from a fill measured under v13, where an 8 MB pad per
+thread makes the same function cost 1.63x more.
+
+**The original caution, kept because it was right to raise: the share table is
+from one instrumented profile and every projection in this document is linear
+arithmetic on it.** That is exactly
 the kind of reasoning lesson 5 says has produced a wrong prediction twice on this
 project. B4, the daemon-side split timing of `get_block_longhash_v14`, would
 replace the modelled half with a measured one and is cheap. It should come
