@@ -3471,12 +3471,29 @@ hardware, and the two thirds that is key setup is the most regular part of it.
 **This is now the sharpest open question in the project**, and it is a better
 question for Bento-Box than the one already sent.
 
+*ANSWERED 2026-10-07, F65, and the guess in the paragraph above was right.* The
+expansion half of the key setup is SHA-256's message schedule (F64) and prices
+at **about 500,000x cheaper** in current silicon than in `hc128.c`. **It is the
+31x row, not the 1.78x row**, and no outside opinion was needed. The sentence
+"the truth is between them" is withdrawn: the truth is at the top of the range.
+The consequence is in F65 section 3, and it is that this table's two rows are
+really one question asked of two different machines.
+
 **Against GPUs it may still be fine, for a reason nobody wrote down.** The
 HC-128 state is `P[512] + Q[512]`, **4 KB per instance**. A 32-lane warp needs
 128 KB of it, far beyond any shared memory, so on a card it has to live in
 global memory with a per-lane access pattern. HC-128 is ASIC-friendly and
 GPU-hostile at the same time, and the two pull in opposite directions. That
 asymmetry is unmeasured and is the second question worth asking.
+
+*Measured, F62, and then corrected, F64.* The asymmetry is real: 12.1x against a
+GPU while being near-free in an ASIC. But the mechanism named here, the 4 KB
+state, is only half of it. F64 section 2 shows the published GPU work reaches
+**31 Gbps on HC-128** given 32,768 parallel streams, so the state size alone
+does not stop a card. What stops it here is that **our fill re-keys 257 times a
+nonce and never amortises a key setup**, which is the regime that paper never
+enters. The 4 KB makes a setup expensive; the reseed count is what prevents it
+being paid once.
 
 #### 4. What F38's rule should say instead
 
@@ -3759,6 +3776,17 @@ state is `P[512] + Q[512]`, **4 KB per instance**, so a 32-lane warp would need
 128 KB and cannot use shared memory at all. The kernel keeps each item's state
 in global memory, which is what a miner would have to do.
 
+*Corrected 2026-10-07, F64 section 2.* The number reproduces, at 12.4x on a
+re-run with the same work-item sweep. **The stated cause is incomplete and the
+missing half is the more important one.** Published work gets HC-128 to 31 Gbps
+on a card with 32,768 parallel streams, so the 4 KB state is not by itself
+disqualifying. It is disqualifying *here* because this fill re-keys every 16
+messages and so pays a full `HC128_Init` for 76% of its work, where that paper
+amortises the setup away over a long message. **The gate is the reseed
+frequency**; the state size is what makes each reseed cost something. Also note
+12.4x is an upper bound: this kernel is a verified transcription, not an
+optimised one.
+
 Two checks that this is a real number and not a bad port:
 
 - **The kernel agrees with `src/crypto/hc128.c` bit for bit** before any timing
@@ -3925,6 +3953,248 @@ in that arithmetic, being F59's CPU T-table proxy rather than a measured GPU
 number, and measuring it on a card with the `t_hc128` pattern would turn both
 the 9x and the 12x into real figures.
 
+*Two qualifications added 2026-10-07.* **This ceiling is about GPUs only, and
+must not be read as an ASIC statement.** F65 prices HC-128's expansion at around
+500,000x cheaper in silicon, so against an ASIC there is no 12x ceiling and no
+cipher term at all; the only bound is the fill's random reads. The arithmetic
+above stands for cards and nothing else. Second, F64 shows 12.4x is an **upper
+bound** on the GPU gate, since the kernel behind it is a verified transcription
+rather than an optimised implementation, so "three quarters of the way to the
+ceiling" is the optimistic reading of a ceiling that may itself be lower. One
+line above does survive both: **reseed count is not a fraction of a factor.**
+F64 makes it the mechanism of the GPU gate rather than a tuning dial.
+
+### F64. HC-128's key setup is SHA-256's message schedule, and the published GPU win does not reach our fill because we never amortise a key setup
+
+*2026-10-07. Opening the silicon question F60 calls the sharpest one in the
+project: the ASIC bound is 1.78x if HC-128 is expensive in hardware and 31x if
+it is free, and nothing had been done to narrow a 17x spread.*
+
+Two results. The first is structural and points the wrong way for us. The second
+is a challenge from the literature to F62's 12.1x, which the whole ceiling
+argument rests on, and it survives for a sharper reason than F62 gave.
+
+#### 1. `HC128_Init`'s expansion is literally SHA-256's message schedule
+
+Read off [hc128.c:135](../../src/crypto/hc128.c#L135):
+
+    f1(x) = ROTR32(x,7)  ^ ROTR32(x,18) ^ (x >> 3)
+    f2(x) = ROTR32(x,17) ^ ROTR32(x,19) ^ (x >> 10)
+    P[i]  = f2(P[i-2]) + P[i-7] + f1(P[i-15]) + P[i-16] + i
+
+SHA-256 defines `sigma0(x) = ROTR7 ^ ROTR18 ^ SHR3` and
+`sigma1(x) = ROTR17 ^ ROTR19 ^ SHR10`, and expands its message as
+`W[t] = sigma1(W[t-2]) + W[t-7] + sigma0(W[t-15]) + W[t-16]`. **These are the
+same two functions and the same recurrence**, the only difference being the
+added index. Crypto++'s HC-128 carries `f2` in exactly that form, which is a
+second pair of eyes on the identification.
+
+`HC128_Init` runs 256 + 496 + 16 + 496 = **1,264 of them**, then 1,024 warm-up
+cipher steps. At 257 inits per nonce that is **324,848 SHA-256 message-schedule
+steps per nonce.**
+
+**This is the single most ASIC-optimised primitive in existence**, and two
+thirds of our fill's cost is built from it. In hardware the rotations and shifts
+are wiring and cost nothing; what is left is two XOR trees and three 32-bit
+adds. The dependency is only `P[i-2]`, so there are two independent chains and
+the critical path is about 632 deep rather than 1,264.
+
+That is evidence toward the **31x** end, which is the bad end. It is not proof,
+because the bound depends on throughput per unit area and not on how familiar
+the primitive is, and the rest of this entry is why the picture is not settled.
+
+#### 2. The published GPU result says a card wins, and it does not apply here
+
+Khalid, Bagchi, Paul and Chattopadhyay (2013) report HC-128 on a GTX 590 at
+**0.95 Gbps on a single data stream against a CPU's 10.9 Gbps**, and then
+**about 31 Gbps once 32,768 data streams run in parallel**. Taken at face value
+that is a GPU beating a CPU by 2.8x at the primitive F62 calls our strongest
+anti-GPU gate, and it would invert F62, the ceiling argument and the rejection
+of D5 together.
+
+So `t_hc128` was re-run. It already sweeps work-item counts, which is the check
+F63 says to apply, and the sweep is the answer:
+
+| work items | rounds/s | against CPU's 6.107e6 |
+|---|---|---|
+| 1,024 | 3.431e5 | |
+| **8,192** | **4.923e5** | **12.4x worse** |
+| 32,768 | 2.074e5 | 29x worse |
+| 131,072 | 1.929e5 | 32x worse |
+
+**The card peaks at 8,192 items and gets worse from there**, so the paper's
+32,768-stream regime is where our kernel is already 29x down. F62's 12.1x
+reproduces at 12.4x, and the kernel re-verified bit-identical against
+`src/crypto/hc128.c` (`9af7dcfb`) before timing.
+
+**The reconciliation, and it is the useful part.** *This is inference from what
+the paper measures, not a statement it makes.* Its figures are keystream
+throughput in Gbps, which is a rate over message length, so a key setup is paid
+once and amortised away. Our fill re-keys every 16 messages of 64 bytes, 257
+times per nonce, so by F60 **76% of a round is `HC128_Init` and none of it ever
+amortises**. The paper's good regime is one the fill structurally never enters.
+What would refute this is a figure for HC-128 keystream throughput *including*
+per-message re-keying, which no source found here reports.
+
+So the anti-GPU property is **not the 4 KB state on its own**, which is what F62
+and the standing memory both say. It is the **reseed frequency**, which keeps
+the cipher permanently in its setup phase where the state is being written
+rather than streamed. The 4 KB matters because it makes a setup expensive; the
+257 reseeds are what stop anyone amortising it. That is a sharper claim than
+F62's and it says the reseeds are load-bearing for goal 1 as well as for the
+serialisation F60 identified.
+
+#### 3. The hardware numbers that exist, and what they do not answer
+
+- Chattopadhyay, Khalid, Maitra and Raizada, ISCAS 2012, report an HC-128
+  accelerator at **22.88 Gbps in 65 nm**, the fastest at the time.
+- A follow-up achieves **one keystream word per cycle** by splitting P and Q
+  across several SRAMs for parallel access, so the state dependency is not a
+  fundamental barrier in hardware the way it is on a GPU.
+
+Both measure **keystream**, which is the regime section 2 just showed we never
+reach. 22.88 Gbps is 7.15e8 words/s, and a nonce needs 65,536 words, so pure
+keystream for a nonce is about 92 us against a 7950X thread's 744 us whole fill.
+Fast, but it is answering the amortised question.
+
+**What is still missing is the one number that decides this: how many cycles a
+key setup takes in hardware.** Our CPU pays about 8,750 cycles. A one-word-per-
+cycle design would pay roughly 1,264 expansion words plus 1,024 warm-up steps,
+order 2,300 cycles, which at a plausible clock makes a single hardware unit
+**comparable to a single CPU core on our init-dominated workload**. If that
+holds, the attacker's only lever is replication, and replication costs 4 KB of
+SRAM per nonce in flight and then runs into the 16,384 random reads per nonce
+that F62 measured.
+
+That is the shape of the answer and it is not yet a number. The paywalled
+state-splitting paper is the likely source; the ISCAS 2012 one is the other.
+
+#### 4. One caveat on our own 12.4x
+
+The GPU kernel is a transcription verified bit-identical, which makes it
+*correct*, not *optimal*. The paper's authors optimised theirs and had access to
+layout tricks ours does not use. **12.4x should be read as an upper bound on the
+gate**, and a competent GPU implementer would narrow it. The direction survives
+because of section 2's amortisation argument, which is structural and does not
+depend on either kernel's quality.
+
+#### 5. Sources
+
+- HC-128 specification, Hongjun Wu:
+  <https://personal.ntu.edu.sg/wuhj/research/hc/hc128.pdf>, and the project page
+  <https://www3.ntu.edu.sg/home/wuhj/research/hc/index.html>
+- Khalid, Bagchi, Paul, Chattopadhyay, *Optimized GPU Implementation and
+  Performance Analysis of HC Series of Stream Ciphers*, 2013. IACR ePrint
+  <https://eprint.iacr.org/2013/059> (free; the title, authors and all three
+  throughput figures above were read from this record). The GTX 590 attribution
+  comes from the hgpu listing <https://hgpu.org/?p=8899> rather than the
+  abstract, which does not name the device.
+- Chattopadhyay, Khalid, Maitra, Raizada, *Designing High-Throughput Hardware
+  Accelerator for Stream Cipher HC-128*, ISCAS 2012, 22.88 Gbps in 65 nm:
+  <https://publications.rwth-aachen.de/record/206990> and
+  <https://pure.qub.ac.uk/en/publications/designing-high-throughput-hardware-accelerator-for-stream-cipher-/>
+- *One Word/Cycle HC-128 Accelerator via State-Splitting Optimization*,
+  SPACE 2014: <https://doi.org/10.1007/978-3-319-13039-2_17>. **Paywalled and
+  not read.** Only its abstract's claims are used here, via
+  <https://pure.qub.ac.uk/en/publications/one-wordcycle-hc-128-accelerator-via-state-splitting-optimization/>
+- Crypto++ carries HC-128's `f2` in the SHA-256 sigma1 form, a second reading of
+  the identification in section 1:
+  <https://www.cryptopp.com/docs/ref850/hc128_8cpp_source.html>
+
+### F65. The expansion half of the chain fill is 500,000x cheaper in current silicon, so the fill is cipher-bound on a CPU and memory-bound on an ASIC
+
+*2026-10-07, answering F60's "sharpest open question in the project" without a
+paper and without Bento-Box. `contrib/powbench/bitcoin-proxy.py`.*
+
+F64 established that `HC128_Init`'s expansion is SHA-256's message schedule.
+That primitive does not need a synthesis run to price, because **it has a public
+competitive market**: Bitcoin miners are sold on joules per hash, and the
+schedule is a fixed fraction of a hash.
+
+#### 1. The method
+
+Frontier hardware in 2026 is about **9.5 J/TH** (Antminer U3S23H, 1,160 TH/s at
+11,020 W; mainstream parts sit at 12 to 13.5, per
+<https://hashrateindex.com/blog/top-10-bitcoin-mining-asic-machines-for-2026/>).
+Using a frontier part is the conservative choice here: it makes the attacker as
+strong as the market allows, and a mainstream 13.5 J/TH part would only lower
+the ratio by a third, which does not move an order-of-magnitude conclusion. One
+Bitcoin nonce is two SHA-256
+compressions once the first 64 header bytes are reused as a midstate, and each
+compression is 48 schedule steps against 64 main rounds. Weighting those by
+32-bit gate equivalents, with rotations and shifts free because they are wiring,
+puts the schedule at **24.0%** of a compression.
+
+That gives **2.37e-14 J per schedule step** in current silicon. Nerva pays
+1,264 of them per init and 257 inits per nonce, so **324,848 per nonce**.
+
+#### 2. The result, from two independent directions
+
+| | CPU, 7950X at 30 threads | 2026 ASIC | ratio |
+|---|---|---|---|
+| per schedule step | 1.22e-8 J | 2.37e-14 J | **514,606x** |
+| per nonce, expansion only | 4.08e-3 J | 7.71e-9 J | **528,930x** |
+
+The two routes share no intermediate quantity: the first divides 8,750 measured
+cycles per init by step count against per-core-cycle energy, the second takes
+F57's 11,782 H/s at 230 W and F60's share table. **They agree to 3%.**
+
+**The control is what makes it believable.** The same arithmetic says an ASIC
+beats this CPU at Bitcoin itself by 16,140x. Our figure is 32x larger, and it
+should be: `hc128.c` computes the schedule with general-purpose integer ops at
+3.8 cycles per step, while the Bitcoin comparison lets the CPU use SHA-NI. A
+32x gap is the SHA-NI speedup, which is the right size.
+
+So the answer, to an order of magnitude, is **10^5, and the honest reading is
+that the expansion phase provides no ASIC resistance whatsoever.**
+
+#### 3. The fill has a different composition on each machine
+
+This is the part that matters, and it reconciles F38 with F60.
+
+F60 measured the fill at **94% HC-128 and 5.7% memory** and concluded the fill
+is not memory bound. That measurement is correct **and it is a property of the
+CPU**. Make the cipher 10^5 times cheaper and the same fill becomes almost
+entirely memory on the attacker's machine.
+
+| | cipher | memory |
+|---|---|---|
+| on a 7950X, measured, F60 | 94% | 5.7% |
+| on Bitcoin-class silicon | ~0% | ~100% |
+
+**F38 and F60 were both right, about different machines.** F38 said the fill's
+protection is random-access database bandwidth; F60 said the fill's *cost* is a
+stream cipher. Both hold, because cost and protection live on different
+hardware. F60's retraction of F38 went one step too far, and this is the step
+back.
+
+**So the ASIC bound is F60's 31x case, not its 1.78x case**, and 31x is itself
+optimistic for us because it assumes the attacker's memory runs no faster than a
+CPU's, when F62 measured even a consumer GPU doing the gather 1.64x to 2.73x
+better.
+
+#### 4. What this closes
+
+**The synthesis route is no longer worth doing.** The remaining unpriced half is
+the 1,024 warm-up steps, and it cannot rescue the conclusion: it would have to
+be some five orders of magnitude harder than the expansion to move the answer,
+and the state-splitting literature reports HC-128 at one keystream word per
+cycle. Either the warm-up is also cheap, in which case the cipher vanishes
+entirely, or it is merely expensive, in which case the cipher still collapses
+far enough for memory to bind. A day of Verilog would refine a number that does
+not change a decision.
+
+**D1's ASIC-bound claim is void as stated.** Taking the fill from 56% to 74% of
+a nonce "tightens the bound from 1.70x to 1.36x" is arithmetic on the CPU's
+composition. On the attacker's composition it moves nothing, because what it
+raises is the share of a primitive the attacker gets for free. D1's real case is
+the 1.313x verification speedup, which is goal 4 and is measured and solid.
+
+**What actually defends v8 against an ASIC is the 16,384 random reads into a
+database that grows**, which is F38's original claim, now the only one standing.
+The reseeds remain load-bearing against GPUs for F64's amortisation reason, but
+that is a different machine and a different argument.
+
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
 `contrib/hf14checks/CMakeLists.txt` names the resized translation units
@@ -3998,12 +4268,15 @@ remote peer, is the intended anti-Sybil behaviour and is unchanged.
    because it cannot change that conclusion, but it is unexplained and the
    next person to meet it should know it is a known device failure and not
    a property of the kernel.
-7. **The real cost of `get_cna_v6_data` against LMDB is unmeasured.** F38
-   puts the ASIC bound at 1.6x using a modelled fill; the real one should
-   be more expensive and the bound stronger. F42 narrows this by
-   subtraction, 0.927 ms as an upper bound against the harness's 0.721 ms,
-   but timing `get_block_longhash_v14`'s two halves in the daemon is still
-   what settles it, and would also say exactly where sync time goes.
+7. ~~**The real cost of `get_cna_v6_data` against LMDB is unmeasured.**~~
+   **Closed twice over.** F57 did the daemon-side split timing asked for
+   here, over 1,005,568 nonces with v14 active: the fill is 56.2% of a
+   nonce and the cold-pad correction is +3.3%. And the reason the question
+   was being asked, to tighten an ASIC bound, no longer applies: F65 shows
+   every `1 / (fill share)` bound is void against an ASIC, because the
+   cipher that makes up the fill is near-free in silicon. The sentence "the
+   real one should be more expensive and the bound stronger" was the
+   intuition this project held for months, and it was backwards.
 8. **Whether a GPU can feed v8's chain fill to a CPU.** F43, confirmed
    independently by F46 at 1.95x. The limit is PCIe bandwidth at 256 KB of
    salt per nonce. Neither side has been built; PLAN-v8 Phase 6 B2 is the

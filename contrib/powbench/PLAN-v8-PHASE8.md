@@ -13,6 +13,42 @@ has the implementation gap and the pad decision,
 already settles, states what each remaining option costs, and names the one
 measurement that gates half of it. Nothing here should be built before its gate.
 
+## Status as of 2026-10-07: read this before the body
+
+F64 and F65 answered the question this document called its sharpest open one,
+and the answer moves several things below. Nothing is deleted, so the reasoning
+stays auditable, but these four corrections apply throughout.
+
+1. **Every ASIC bound figure in this document is void as an ASIC statement.**
+   They are all `1 / (fill share)` computed on the premise that the fill is the
+   part nobody can specialise. F65 prices `HC128_Init`'s expansion, two thirds
+   of the fill, at roughly **500,000x cheaper in 2026 silicon** than in
+   `hc128.c`, because it *is* SHA-256's message schedule (F64). Against an ASIC
+   the cipher is free and only the 16,384 random reads bind. So the bound is
+   F60's **31x** row, raising the fill's share does not improve it, and D1's
+   "1.68x to 1.32x" and D2's "1.16x" buy nothing on this axis.
+
+2. **The share table still describes a CPU, and that is now a feature.** Its
+   "can a specialist avoid or accelerate it" column reads "no: random-access
+   storage bandwidth plus chain dependence" for the fill. F60 appeared to refute
+   that and F65 restores it: the fill's **cost** is a cipher on a CPU, its
+   **protection** is memory on an attacker's machine. Both are true at once.
+
+3. **The ceiling section is about GPUs only.** There is no 12x ASIC ceiling.
+   Against cards it stands, with the caveat that 12.4x is an upper bound from a
+   transcribed kernel rather than an optimised one.
+
+4. **Reseed count is promoted from tuning dial to mechanism.** F64 shows
+   published work reaches 31 Gbps for HC-128 on a GPU given enough parallel
+   streams, and the only reason that regime is unreachable here is that the fill
+   re-keys 257 times per nonce and never amortises a setup. Anything that cuts
+   reseeds, D5 above all, is cutting the GPU gate itself.
+
+The practical effect: **D1 is now justified by verification speed alone**, its
+security case having gone; B3 and the Bento-Box questions in "The gate on half
+of this" and "Proposed sequence" are no longer gating; and goal 1 against ASICs
+rests entirely on the chain fill's random reads into a database that grows.
+
 ## The goals, in the order they constrain
 
 1. Resistant to GPUs and specialised hardware
@@ -88,6 +124,13 @@ attacker struggles with. Pool resistance is unaffected, because it rests on the
 binding rather than on the cost. The ASIC bounds are: they range from the 1.78x
 quoted here to **31x** depending on what HC-128 costs in hardware, which nobody
 has established.
+
+*Established 2026-10-07, F65: it is the 31x end.* HC-128's key expansion is
+SHA-256's message schedule, and 2026 silicon runs that about 500,000x cheaper
+per joule than `hc128.c` does. So "raise the fill's share" buys nothing at all
+against an ASIC, and the sentence above should be read with "which nobody has
+established" struck out. The line two paragraphs up, "against an ASIC it barely
+resists at all", was the right instinct and is now the measured position.
 
 So there is exactly one lever that improves goal 1 without trading against it:
 **raise the fill's share of a nonce, never the core's.** F38 also states the
@@ -547,4 +590,10 @@ Stated now, so it is recognisable later:
   anything. The ASIC bound does not: it ranges from 1.78x to 31x depending on
   what HC-128 costs in silicon. This was the item flagged as deserving its own
   measurement rather than inheritance, and it did.
+  *Resolved 2026-10-07, F65: 31x.* And the first sentence needs splitting, which
+  is the real lesson. "The premise that random-access database bandwidth is the
+  binding constraint is false" is true **of a CPU** and false **of an ASIC**, on
+  which the cipher is free and the reads are all that is left. The premise was
+  not wrong, it was being asked of the wrong machine. So this bullet did happen,
+  but less of it happened than it claimed.
 - **The share table being wrong.** Everything here is proportions. B4 settles it.
