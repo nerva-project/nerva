@@ -249,11 +249,6 @@ void cn_slow_hash_v14_p2(cn_hash_context_t *, const void *, size_t, char *, size
 void cn_slow_hash_v14_p4(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v14_p8(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 
-/* PLAN-v8 Phase 2 prototype: v8 with the floating-point stage. Declared here
- * rather than taken from hash-ops.h alongside the others only because it may
- * not exist in an older tree someone builds this against. */
-void cn_slow_hash_v15(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
-
 static double now_sec(void)
 {
     struct timespec ts;
@@ -743,7 +738,7 @@ static void placement_check(const char *where)
  * measured them, so 1 MB was the endpoint of its sample rather than a bracketed
  * minimum. PAD_1MB is the index anything that wants the shipped size must use:
  * it was 0 while the sweep started at 1 MB, and a hardcoded 0 left behind here
- * would silently compare v15 at 1 MB against v8 at 256 KB. */
+ * would silently compare a 1 MB row against a 256 KB one. */
 #define NPADS   6
 #define PAD_1MB 2
 static const char *const g_pad_short[NPADS] =
@@ -818,8 +813,7 @@ int main(int argc, char **argv)
 {
     const unsigned n1 = argc > 1 ? (unsigned)atoi(argv[1]) : 2000;
     const unsigned n4 = argc > 2 ? (unsigned)atoi(argv[2]) : 600;
-    struct result v5ref, v8ref, v5ctl, v8ctl, v5p4, v8p4, v15r;
-    double v15peak = 0.0;
+    struct result v5ref, v8ref, v5ctl, v8ctl, v5p4, v8p4;
     int ok1, ok2;
     double ctl_noise, d1, d4, gate;
 
@@ -909,28 +903,26 @@ int main(int argc, char **argv)
      * hugepage-backed, while the recompiled ones read a plain malloc buffer,
      * so a small difference is expected and is not a fault in either. */
     {
-        /* v15 joins the 1 MB group rather than getting its own pass, because
-         * the whole point of interleaving is that drift cannot land on one
-         * variant and not another. The Phase 2 decision is a difference of a
-         * few percent between v8 and v15 on the same machine, which a separate
-         * pass could manufacture or hide on its own. */
-        hashfn one_mb[5]  = { cn_slow_hash_v11,       /* shipped v5, 1 MB */
+        /* The 1 MB group carried a fifth row, v15, the floating-point stage,
+         * until that was removed from the tree. It is preserved at tag
+         * archive/cna-v8-fp-stage, and runs from before then interleaved five
+         * variants rather than four. */
+        hashfn one_mb[4]  = { cn_slow_hash_v11,       /* shipped v5, 1 MB */
                               cn_slow_hash_v11_p1,    /* recompiled v5, 1 MB */
                               cn_slow_hash_v14_p1,    /* recompiled v8, 1 MB */
-                              cn_slow_hash_v14,       /* shipped v8, 1 MB */
-                              cn_slow_hash_v15 };     /* v8 + FP stage, 1 MB */
+                              cn_slow_hash_v14 };     /* shipped v8, 1 MB */
         hashfn four_mb[2] = { cn_slow_hash_v11_p4,    /* recompiled v5, 4 MB */
                               cn_slow_hash_v14_p4 };  /* recompiled v8, 4 MB */
-        struct result r1[5], r4[2];
+        struct result r1[4], r4[2];
 
         rng_state = 0x9E3779B9u;
-        bench_group(one_mb, r1, 5, 1024ull*1024, n1, &ok1);
+        bench_group(one_mb, r1, 4, 1024ull*1024, n1, &ok1);
         rng_state = 0x9E3779B9u;
         bench_group(four_mb, r4, 2, 4096ull*1024, n4, &ok2);
 
         if (!ok1 || !ok2) { printf("setup failed (out of memory?)\n"); return 1; }
 
-        v5ref = r1[0]; v5ctl = r1[1]; v8ctl = r1[2]; v8ref = r1[3]; v15r = r1[4];
+        v5ref = r1[0]; v5ctl = r1[1]; v8ctl = r1[2]; v8ref = r1[3];
         v5p4  = r4[0]; v8p4  = r4[1];
     }
 
@@ -1142,53 +1134,12 @@ int main(int argc, char **argv)
                 v8ms[si] = best;   /* reuse the slot to carry peak H/s to the SCALE line */
             }
 
-            /* The one thing single-thread latency cannot answer: SMT siblings
-             * share FP units, so a stage that is fair thread-for-thread need
-             * not be fair machine-for-machine once every core is loaded. This
-             * row is v15 at 1 MB across the same thread counts, so the peak
-             * total throughput with and without the stage can be compared on
-             * each machine and then across machines.
-             *
-             * Sized from v15's own single-thread time rather than v8's, so it
-             * gets the same wall time per configuration and not a shorter one. */
-            if (ntc > 0 && v15r.mean_ms > 0.0) {
-                double best = 0.0, one = 0.0;
-                unsigned n, best_t = 0;
-
-                n = (unsigned)(1200.0 / v15r.mean_ms);
-                if (n < 8) n = 8;
-
-                if (g_narrow) printf("  1 MB FP\n");
-                else          printf("  %-5s", "1MBFP");
-                for (ti = 0; ti < ntc; ti++) {
-                    const double hs = bench_threads(cn_slow_hash_v15, 1024ull*1024, n, tcounts[ti]);
-                    if (ti == 0) one = hs;
-                    if (hs > best) { best = hs; best_t = tcounts[ti]; }
-                    if (g_narrow) {
-                        printf("%s%uT=%.1f", (ti % 3) == 0 ? "    " : " ",
-                               tcounts[ti], hs);
-                        if ((ti % 3) == 2 || ti + 1 == ntc) printf("\n");
-                    } else {
-                        printf(" %9.1f", hs);
-                    }
-                }
-                if (g_narrow)
-                    printf("    peak %.2fx @%uT\n", one > 0.0 ? best / one : 0.0, best_t);
-                else
-                    printf("  %5.2fx @%uT\n", one > 0.0 ? best / one : 0.0, best_t);
-                v15peak = best;
-            }
-
             if (ntc > 0) {
                 char brand[49]; char *p; char extra[24];
                 cpu_brand(brand);
                 for (p = brand; *p; p++) if (*p == ' ') *p = '_';
                 snprintf(extra, sizeof(extra), " cpus=%u", hw);
                 tag_line("SCALE", brand, extra, "H/s", v8ms, 1);
-                if (v15peak > 0.0 && v8ms[PAD_1MB] > 0.0)
-                    printf("  FPSCALE %s v8=%.1f v15=%.1f (%+.2f%%)\n",
-                           brand, v8ms[PAD_1MB], v15peak,
-                           (v15peak - v8ms[PAD_1MB]) / v8ms[PAD_1MB] * 100.0);
                 if (g_narrow) {
                     printf("  ^ peak total H/s per pad.\n");
                     printf("  Send this and the SWEEP line.\n");
@@ -1209,7 +1160,6 @@ int main(int argc, char **argv)
     row("v8 1MB SHIPPED", &v8ref);
     row("v5 4MB recomp",  &v5p4);
     row("v8 4MB recomp",  &v8p4);
-    row("v15 1MB FP",     &v15r);
 
     /* The verdict below was wrong three separate ways and all three are fixed
      * here, because each of them produced a confident and false statement.
@@ -1261,32 +1211,7 @@ int main(int argc, char **argv)
         printf("%s  1 MB: %s   4 MB: %s%s", g_narrow ? "\n" : "",
                d1 <= gate ? "PASS" : "SLOWER THAN GATE",
                d4 <= gate ? "PASS" : "SLOWER THAN GATE",
-               g_narrow ? "\n" : "");   /* wide continues on this line */
-
-        /* Phase 2's number. The gate above asks whether v8 costs more than v5;
-         * this asks what the FP stage costs on top of v8, which is the figure
-         * that goes into the spread arithmetic. It is not a pass or fail: the
-         * stage is meant to cost something, and whether that cost is worth it
-         * is decided across machines, not on one. */
-        {
-            const double dfp = (v15r.mean_ms - v8ref.mean_ms) / v8ref.mean_ms * 100.0;
-            char brand[49];
-            char *q;
-            cpu_brand(brand);
-            for (q = brand; *q; q++) if (*q == ' ') *q = '_';
-
-            printf("%s  FP stage: %+.2f%% over v8\n",
-                   g_narrow ? "\n" : "   ", dfp);
-            if (g_narrow) {
-                printf("\n  FPSTAGE %s\n", brand);
-                printf("    v8=%.4f v15=%.4f\n",
-                       v8ref.mean_ms, v15r.mean_ms);
-            } else {
-                printf("  FPSTAGE %s v8=%.4f v15=%.4f\n",
-                       brand, v8ref.mean_ms, v15r.mean_ms);
-            }
-            if (g_narrow) printf("  ^ spread is across machines.\n");
-        }
+               "\n");
 
 
         /* The two builds are already proven identical by output at startup, so
@@ -1310,6 +1235,6 @@ int main(int argc, char **argv)
     if (g_narrow)
         printf("\n  Report the SWEEP line plus these\n  verdict lines.\n");
     else
-        printf("  Send the SWEEP, SCALE and FPSTAGE lines.\n");
+        printf("  Send the SWEEP and SCALE lines.\n");
     return g_tainted ? 2 : 0;
 }

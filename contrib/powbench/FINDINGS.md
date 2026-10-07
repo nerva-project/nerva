@@ -755,6 +755,14 @@ run on display-attached cards under Windows.
 
 ## Phase 2
 
+**The floating-point stage was removed from the tree so it does not ship, and
+is preserved at the signed tag `archive/cna-v8-fp-stage`.** At that tag the
+stage (`cn_slow_hash_v15`, `slow-hash-fp.h`, `slow-hash-v8fp-{hw,sw}.c`), its
+startup self-test, `t_fp_stage` and the fp-portability CI workflow all build
+and pass. Everything below is unchanged and still describes that code. The
+primitive-level probes `t_fp_determinism.c` and `t_fp_cost.c` need nothing from
+`src/` and stay in the tree, as do the GPU harness's FP kernels behind F37.
+
 ### F29. FP determinism holds between x86-64 and aarch64 under the Phase 2 constraints
 
 `t_fp_determinism.c` exercises the five permitted operations (add, sub, mul,
@@ -5765,8 +5773,7 @@ remote peer, is the intended anti-Sybil behaviour and is unchanged.
         contrib/powbench/screen_grid.c \
         src/crypto/slow-hash.c src/crypto/slow-hash-hw.c \
         src/crypto/slow-hash-sw.c src/crypto/slow-hash-v8-hw.c \
-        src/crypto/slow-hash-v8-sw.c src/crypto/slow-hash-v8fp-hw.c \
-        src/crypto/slow-hash-v8fp-sw.c src/crypto/cna-vm.c \
+        src/crypto/slow-hash-v8-sw.c src/crypto/cna-vm.c \
         src/crypto/hc128.c src/crypto/oaes_lib.c src/crypto/aesb.c \
         src/crypto/keccak.c src/crypto/hash.c src/crypto/blake256.c \
         src/crypto/groestl.c src/crypto/jh.c src/crypto/skein.c \

@@ -362,7 +362,12 @@ trimmed, stays an engineering estimate under open item 3.
 - RESULTS.md carries the four-machine table, and this section records the
   measured figure, not the predicted one
 
-## Phase 2: floating point  [BUILT AND MEASURED, not shipped]
+## Phase 2: floating point  [BUILT AND MEASURED, not shipped, removed from the tree]
+
+**Removed so it does not ship, and preserved at the signed tag
+`archive/cna-v8-fp-stage`**, where the stage, its self-test, `t_fp_stage` and
+the fp-portability workflow all build and pass. This section describes the code
+as it stands at that tag; FINDINGS F29 to F41 are the evidence.
 
 The stage exists as `cn_slow_hash_v15`, wired into nothing. Consensus still
 routes HF14 to `cn_slow_hash_v14`. Every question raised against it has been

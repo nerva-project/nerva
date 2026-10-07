@@ -487,9 +487,12 @@ __kernel void cna_v5(__global ulong *b0, const ulong qw,
 
 // ---------------------------------------------------------------------------
 // PLAN-v8 Phase 2: the floating-point stage, ported from src/crypto/slow-hash-fp.h.
+// That file and the CN_FP_STAGE() hook have left the tree; both are at tag
+// archive/cna-v8-fp-stage. This port and vm_ref.h's twin are self-contained
+// and kept as the evidence behind FINDINGS F37.
 //
 // Runs once per nonce, between the xx/yy loop and the iters loop, exactly
-// where CN_FP_STAGE() sits in slow-hash-v8-impl.h. Seeded from a and two pad
+// where CN_FP_STAGE() sat in slow-hash-v8-impl.h. Seeded from a and two pad
 // lines, folded back into both pad lines and a. 9,600 rounds of five
 // operations, with the rounding mode reselected from data every sixteenth
 // round.

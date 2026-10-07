@@ -258,12 +258,6 @@ void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t lengt
 /* Consensus entry for v8: salt fetched inside the hash via salt_fn, seeded
  * from the AES fill. iters/xx/yy come back through the callback. */
 void cn_slow_hash_v14_chain(cn_hash_context_t *context, const void *data, size_t length, char *hash, uint8_t init_size_blk, cn_v8_salt_fn salt_fn, void *salt_user);
-/* PLAN-v8 Phase 2 prototype; no consensus path calls this. */
-void cn_slow_hash_v15(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
-int cn_slow_hash_v15_selftest(void);
-/* 1 = this build computes the FP reference vector. Note the inversion against
- * cn_slow_hash_v15_selftest above, which returns 0 on success. */
-int cn_fp_stage_self_test(void);
 void cn_slow_hash_v13(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
 void cn_slow_hash_v10(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, uint16_t zz, uint16_t ww);
 void cn_slow_hash_v9(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters);

@@ -843,19 +843,6 @@ std::string get_nix_version_display_string()
     }
 #endif // !defined NO_AES
 
-    /* Checked on every build, including software-AES ones: floating point has
-     * nothing to do with AES. Warns rather than refuses because no consensus
-     * path routes to v15, so a divergent build cannot fork anything today. */
-    if (!crypto::cn_fp_stage_self_test())
-    {
-      MGUSER_YELLOW(
-          "Floating-point self-test FAILED: this build does not compute the "
-          "reference vector. Nothing in consensus uses floating point today, so "
-          "this is not fatal, but this build must not be used to mine or "
-          "validate if a future fork enables the FP stage. Please report it "
-          "with your compiler and platform.");
-    }
-
     return true;
   }
 

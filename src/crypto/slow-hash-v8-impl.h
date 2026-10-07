@@ -90,14 +90,9 @@
 #define post_aes_variant_v8() post_aes_variant()
 #define aes_sw_variant_v8()   aes_sw_variant()
 
-/* Floating-point stage, compiled in only by slow-hash-v8fp-{hw,sw}.c.
- * Without CN_V8_FP this expands to nothing and v8 is unchanged. */
-#if defined(CN_V8_FP)
-#include "slow-hash-fp.h"
-#define CN_FP_STAGE() cn_fp_stage(hp_state, a)
-#else
-#define CN_FP_STAGE() do { } while (0)
-#endif
+/* The floating-point stage that used to hook in between the xx/yy loop and the
+ * iters loop was never in consensus and is removed. It is preserved, building
+ * and with its tests, at tag archive/cna-v8-fp-stage. FINDINGS F29 to F41. */
 
 /* Runs between the AES fill and the first thing that reads the salt. `text`
  * holds the fill's final chain state at this point. A NULL salt_fn leaves the
@@ -163,9 +158,6 @@ static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t leng
         }
     }
 
-
-    CN_FP_STAGE();
-
     for (i = 0; i < iters; i++)
     {
         pre_aes_v8();
@@ -203,9 +195,6 @@ static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t leng
             aes_sw_variant_v8();
         }
     }
-
-
-    CN_FP_STAGE();
 
     for (i = 0; i < iters; i++) {
         aes_sw_variant_v8();

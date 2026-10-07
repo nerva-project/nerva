@@ -302,7 +302,8 @@ static uint64_t vm_v7(uint64_t *buf, uint64_t qw, const cn_ins_t *prog,
 
 
 // --------------------------------------------------------------------------
-// PLAN-v8 Phase 2: the floating-point stage, mirroring src/crypto/slow-hash-fp.h.
+// PLAN-v8 Phase 2: the floating-point stage, mirroring src/crypto/slow-hash-fp.h,
+// which is now only at tag archive/cna-v8-fp-stage.
 //
 // This is the reference the OpenCL kernels are checked against, so it uses the
 // real rounding-mode changes rather than the kernels' emulation of them. A row

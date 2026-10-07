@@ -34,7 +34,7 @@ for d in /opt/homebrew/include /usr/local/include /mingw64/include /usr/include;
 done
 [ -z "$BOOSTINC" ] && BOOSTINC="-I contrib/powbench/noboost"
 
-gcc -O2 -maes -march=x86-64 -fno-strict-aliasing -ffp-contract=off \
+gcc -O2 -maes -march=x86-64 -fno-strict-aliasing \
     -DSLOW_HASH_HW_AES_BUILT=1 \
     $BOOSTINC -I src -I src/crypto -I contrib/epee/include -I contrib/hf14checks \
     contrib/powbench/t_v8_sweep.c \
@@ -42,7 +42,6 @@ gcc -O2 -maes -march=x86-64 -fno-strict-aliasing -ffp-contract=off \
     contrib/hf14checks/v5pad1.c \
     src/crypto/slow-hash.c src/crypto/slow-hash-hw.c src/crypto/slow-hash-sw.c \
     src/crypto/slow-hash-v8-hw.c src/crypto/slow-hash-v8-sw.c \
-    src/crypto/slow-hash-v8fp-hw.c src/crypto/slow-hash-v8fp-sw.c \
     src/crypto/cna-vm.c src/crypto/hc128.c src/crypto/oaes_lib.c \
     src/crypto/aesb.c src/crypto/keccak.c src/crypto/hash.c \
     src/crypto/blake256.c src/crypto/groestl.c src/crypto/jh.c \

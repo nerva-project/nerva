@@ -62,7 +62,6 @@ extern void cn_slow_hash_v11_hw(cn_hash_context_t *context, const void *data, si
 extern void cn_slow_hash_v13_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
 extern void cn_slow_hash_v14_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 extern void cn_slow_hash_v14_chain_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, uint8_t init_size_blk, cn_v8_salt_fn salt_fn, void *salt_user);
-extern void cn_slow_hash_v15_hw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 #endif
 
 extern void cn_slow_hash_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters);
@@ -73,8 +72,6 @@ extern void cn_slow_hash_v11_sw(cn_hash_context_t *context, const void *data, si
 extern void cn_slow_hash_v13_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, const uint8_t *seed);
 extern void cn_slow_hash_v14_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 extern void cn_slow_hash_v14_chain_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, uint8_t init_size_blk, cn_v8_salt_fn salt_fn, void *salt_user);
-extern void cn_slow_hash_v15_sw(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
-extern int cn_slow_hash_v15_selftest(void);
 
 /* Runtime CPU detection. Cached in a function-static so the per-hash overhead
  * is one branch on a hot variable. Override with NERVA_FORCE_SOFTWARE_AES=1 to
@@ -199,15 +196,6 @@ void cn_slow_hash_v14_chain(cn_hash_context_t *ctx, const void *data, size_t len
     cn_pads_require(ctx, 1, 0);
     CN_DISPATCH(cn_slow_hash_v14_chain_hw(ctx, data, length, hash, init_size_blk, salt_fn, salt_user),
                 cn_slow_hash_v14_chain_sw(ctx, data, length, hash, init_size_blk, salt_fn, salt_user));
-}
-
-/* CNA v8 plus the floating-point stage. PROTOTYPE: no consensus path routes
- * here. Exists so it can be measured against v14 in the same process. */
-void cn_slow_hash_v15(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
-{
-    cn_pads_require(ctx, 1, 0);
-    CN_DISPATCH(cn_slow_hash_v15_hw(ctx, data, length, hash, iters, init_size_blk, xx, yy),
-                cn_slow_hash_v15_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy));
 }
 
 void cn_slow_hash_v13(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, const uint8_t *seed)
@@ -532,21 +520,6 @@ void cn_hash_context_free(cn_hash_context_t *context)
     }
 
     free(context);
-}
-
-/* Separate from cn_slow_hash_self_test: that one gates startup and is gated on
- * hardware AES, and neither fits a prototype that has nothing to do with AES.
- * Catches a build whose floating point diverges, which would fork rather than
- * fail to compile.
- *
- * Returns 1 on success, inverting cn_slow_hash_v15_selftest, to match
- * cn_slow_hash_self_test's convention.
- *
- * WHEN v15 SHIPS: make this fatal and move the hw-vs-sw comparison into
- * cn_slow_hash_self_test beside v14's. */
-int cn_fp_stage_self_test(void)
-{
-    return cn_slow_hash_v15_selftest() == 0 ? 1 : 0;
 }
 
 /* Known-answer vectors for the algorithms that validate mainnet today,

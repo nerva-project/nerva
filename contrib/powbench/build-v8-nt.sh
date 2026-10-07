@@ -16,9 +16,6 @@
 #                               assumption in e2i.
 #   -fno-strict-aliasing        slow-hash type-puns the scratchpad.
 #
-# -ffp-contract=off matches CMakeLists.txt's setting for these translation
-# units, so the harness builds the same code the daemon does.
-#
 # The v5pad*.c units are what make this a sweep rather than a single point:
 # each is a recompilation of the v8 bodies at one pad size, with renamed
 # symbols. They are shared with v8bench; see contrib/hf14checks/v5pad.inc for
@@ -46,7 +43,7 @@ for d in /opt/homebrew/include /usr/local/include /mingw64/include /usr/include;
 done
 [ -z "$BOOSTINC" ] && BOOSTINC="-I contrib/powbench/noboost"
 
-gcc -O2 -maes -march=x86-64 -fno-strict-aliasing -ffp-contract=off \
+gcc -O2 -maes -march=x86-64 -fno-strict-aliasing \
     -DSLOW_HASH_HW_AES_BUILT=1 \
     $BOOSTINC -I src -I src/crypto -I contrib/epee/include -I contrib/hf14checks \
     contrib/powbench/t_v8_nt.c \
@@ -55,7 +52,6 @@ gcc -O2 -maes -march=x86-64 -fno-strict-aliasing -ffp-contract=off \
     contrib/hf14checks/v5pad4.c contrib/hf14checks/v5pad8.c \
     src/crypto/slow-hash.c src/crypto/slow-hash-hw.c src/crypto/slow-hash-sw.c \
     src/crypto/slow-hash-v8-hw.c src/crypto/slow-hash-v8-sw.c \
-    src/crypto/slow-hash-v8fp-hw.c src/crypto/slow-hash-v8fp-sw.c \
     src/crypto/cna-vm.c src/crypto/hc128.c src/crypto/oaes_lib.c \
     src/crypto/aesb.c src/crypto/keccak.c src/crypto/hash.c \
     src/crypto/blake256.c src/crypto/groestl.c src/crypto/jh.c \

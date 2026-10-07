@@ -51,8 +51,6 @@ set(crypto_sources
   slow-hash.c
   slow-hash-sw.c
   slow-hash-v8-sw.c
-  # FP prototype. Built so it keeps compiling; no consensus path calls it.
-  slow-hash-v8fp-sw.c
   tree-hash.c)
 
 set(crypto_headers)
@@ -91,15 +89,15 @@ set(_slow_hash_hw_supported FALSE)
 if (NOT NO_AES)
   if (ARM8 AND CN_ARM_CRYPTO_FLAG)
     set(_slow_hash_hw_supported TRUE)
-    list(APPEND crypto_sources slow-hash-hw.c slow-hash-v8-hw.c slow-hash-v8fp-hw.c)
-    set_source_files_properties(slow-hash-hw.c slow-hash-v8-hw.c slow-hash-v8fp-hw.c PROPERTIES
+    list(APPEND crypto_sources slow-hash-hw.c slow-hash-v8-hw.c)
+    set_source_files_properties(slow-hash-hw.c slow-hash-v8-hw.c PROPERTIES
       COMPILE_FLAGS "${CN_ARM_CRYPTO_FLAG}")
   elseif (NOT ARM AND NOT PPC64LE AND NOT PPC64 AND NOT PPC AND NOT S390X AND NOT RISCV AND NOT LOONGARCH)
     # x86, both 32- and 64-bit. AES-NI works in 32-bit mode too, and slow-hash.h's
     # HW gate now covers __i386__; the path is runtime-gated by detect_hardware_aes()
     # (cpuid) and guarded by the startup self-test, so a non-AES CPU stays on SW.
     set(_slow_hash_hw_supported TRUE)
-    list(APPEND crypto_sources slow-hash-hw.c slow-hash-v8-hw.c slow-hash-v8fp-hw.c)
+    list(APPEND crypto_sources slow-hash-hw.c slow-hash-v8-hw.c)
     # -maes is already on CMAKE_C_FLAGS / CMAKE_CXX_FLAGS for x86 (32- and 64-bit).
   endif ()
 endif ()
@@ -118,15 +116,8 @@ target_link_libraries(cncrypto
   PRIVATE
     ${EXTRA_LIBRARIES})
 
-# The FP stage is contraction-immune by construction (every write passes
-# through integer bit manipulation, so no a*b+c exists to fuse). The flag is
-# belt and braces against an edit that breaks that property.
-# cn_slow_hash_v15_selftest() is the runtime backstop.
-set_property(SOURCE slow-hash-v8fp-hw.c slow-hash-v8fp-sw.c APPEND_STRING
-  PROPERTY COMPILE_FLAGS " -ffp-contract=off")
-
 if (_slow_hash_hw_supported)
-  set_property(SOURCE slow-hash.c slow-hash-hw.c slow-hash-v8-hw.c slow-hash-v8fp-hw.c APPEND
+  set_property(SOURCE slow-hash.c slow-hash-hw.c slow-hash-v8-hw.c APPEND
     PROPERTY COMPILE_DEFINITIONS SLOW_HASH_HW_AES_BUILT=1)
 endif ()
 
@@ -135,10 +126,10 @@ if (ARM)
 	   "Compute multiply using generic C implementation instead of ARM ASM" OFF)
   if(NO_OPTIMIZED_MULTIPLY_ON_ARM)
     message(STATUS "Using generic C implementation for multiply")
-    set_property(SOURCE slow-hash.c slow-hash-sw.c slow-hash-v8-sw.c slow-hash-v8fp-sw.c
+    set_property(SOURCE slow-hash.c slow-hash-sw.c slow-hash-v8-sw.c
       APPEND PROPERTY COMPILE_DEFINITIONS "NO_OPTIMIZED_MULTIPLY_ON_ARM")
     if (_slow_hash_hw_supported)
-      set_property(SOURCE slow-hash-hw.c slow-hash-v8-hw.c slow-hash-v8fp-hw.c APPEND
+      set_property(SOURCE slow-hash-hw.c slow-hash-v8-hw.c APPEND
         PROPERTY COMPILE_DEFINITIONS "NO_OPTIMIZED_MULTIPLY_ON_ARM")
     endif()
   endif()
