@@ -64,6 +64,15 @@ numbers rather than merely adding to them.
    capacity argument rather than an AES-volume one, and F63's curve for it was
    measured on pre-D1 v8 with the naive kernel.
 
+   **Then corrected again by a harness review, F79 to F82.** `t_aes` let the
+   compiler delete six of its eight AES blocks: the real gate is **about 4.2x,
+   not 1.04x**, so P3 stands rather than being void. `t_hc128` consumed one
+   keystream word in sixteen: HC-128 in `__local` is **3.11x**, and the reseeds
+   are worth about 1.04x, so they are not the GPU mechanism and F60's lever 1
+   is open again. The whole-nonce 3.04x is unaffected. Separately, the B2 seed
+   used two of the fill's eight AES lanes and now folds all eight (F81, a v14
+   consensus change covered by the owed testnet round).
+
 4. **Every GPU figure in this document predates D1.** The harness modelled the
    `salt_pad` sweeps until F77 fixed it, so F63's pad curve, which is the whole
    evidence base for D6, describes an algorithm that no longer exists. D6 must

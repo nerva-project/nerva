@@ -3445,6 +3445,10 @@ memory-level parallelism is already extracted, by us, in A1. There is very
 little left for an attacker to win, and that is the point: this is the residual
 after the best optimisation we know, not an artifact of a lazy loop.
 
+*Corrected by F82: about 40% of the all-history arm's increment is extra
+HC-128 work from rejection sampling, not memory, because the hot arm draws at
+the shipped odds. Memory at 100% full history is about 10% of the fill.*
+
 **Even at 100% full-history draws the memory is 17 to 29% of the fill.** So D3,
 raising `CNA_V6_FULL_HISTORY_ODDS`, cannot repair this. Its ceiling is too low
 to matter, and that is now measured rather than assumed.
@@ -4028,6 +4032,11 @@ the primitive is, and the rest of this entry is why the picture is not settled.
 
 #### 2. The published GPU result says a card wins, and it does not apply here
 
+*Corrected by F80: the inference in this section, that the reseed frequency is
+the gate, came from a kernel that consumed one keystream word in sixteen. With
+all sixteen, keystream is as GPU-hostile as key setup and the reseeds buy about
+1.04x.*
+
 Khalid, Bagchi, Paul and Chattopadhyay (2013) report HC-128 on a GTX 590 at
 **0.95 Gbps on a single data stream against a CPU's 10.9 Gbps**, and then
 **about 31 Gbps once 32,768 data streams run in parallel**. Taken at face value
@@ -4363,6 +4372,9 @@ the thresholds been chosen after seeing that the fairness cost was 3.6%, no one
 could tell whether 2.50x was reasoning or rationalisation.
 
 #### 3. Why the fairness cost is so small, and it is F65's point again
+
+*F82 qualifies the caveat below: the window-only arm draws less keystream than
+the hot arm, so coming in under it is a real effect and not noise.*
 
 Because the fill is **94% HC-128 on both machines**: 93.9% and 94.1% on the
 laptop here, against F60's 94% on the desktop, measured independently. The odds
@@ -4996,6 +5008,12 @@ state in `__global`. Staged into `__local` the gate is **2.92x**, and the
 reseeds are worth 1.13x rather than the 1.36x below. The correction to 12.1x
 and the mechanism finding both stand; the level does not.
 
+**The mechanism finding does not stand either: F80.** The kernels consumed one
+keystream word in sixteen, so the card skipped most of its keystream work and
+looked better the more keystream a row had. With all sixteen consumed the
+disadvantage is flat across the reseed mix, 7.5x to 8.3x in `__global`, and
+the shipped mix reads 7.8x there and 3.11x in `__local`.
+
 *2026-10-07, the first of the three measurements opened after D1 and D3 shipped.
 `t_hc128` extended to sweep the reseed mix and to resolve the work-item curve.
 Transcripts in `results/hc128-reseed-sweep-2026-10-07.txt` (fine grid, the one
@@ -5048,6 +5066,9 @@ the resolution of the grid around it*. `t_hc128`'s array now has twelve points
 with the region around the peak sampled at 1,024-item spacing.
 
 #### 2. The reseeds are the mechanism, measured rather than inferred
+
+*Refuted by F80: this sweep ran on a kernel that consumed one keystream word in
+sixteen. With all sixteen the curve is flat.*
 
 F64 argued from a paper's units that the gate is the reseed frequency and not
 the 4 KB state, since a throughput figure in Gbps amortises key setup away and
@@ -5292,6 +5313,13 @@ was item 3 on the list this work came from.
 
 ### F78. Almost all of v8's measured GPU resistance was our kernel. With the tables and state placed competently it is 3 to 5x, not 19x and not 9x, and the AES contributes nothing at all
 
+**Corrected in part by F79 and F80, same day.** The AES row was a harness
+defect: `t_aes` let the compiler delete six of eight blocks, and the corrected
+gate is **about 4.2x, not 1.04x**, so "the AES contributes nothing at all" is
+withdrawn and P3 stands. HC-128 in `__local` is **3.11x**, not 2.92x, and the
+reseeds are worth about 1.04x of it. The whole-nonce 3.04x and the core's
+~10.7x come from `nerva-gpubench`, which has no such defect, and stand.
+
 *2026-10-07, the third measurement, and the one that decides the others.
 `t_aes.cpp` is new; `t_hc128` and `vm_kernels.cl.h` gained local-memory arms
 generated from the existing code by address-space substitution rather than
@@ -5410,6 +5438,223 @@ and probably better.
 card than on a CPU, and no dial inside it changes that by much.** Moving
 meaningfully past it is a design question, which is what F63 section 5 said when
 it thought the ceiling was 12x. The ceiling is about 3x.
+
+### F79. `t_aes` timed a quarter of the GPU's AES, so the AES gate is about 4x, not parity
+
+*2026-10-07, review of the harnesses behind F78. Transcript of the corrected run
+in `results/aes-table-placement-allwords-2026-10-07.txt`.*
+
+**F78's 1.04x is wrong, and the whole-nonce figures in F78 are not.** The
+correction is to the AES component and to the reasoning built on it.
+
+#### 1. The defect
+
+Every `t_aes` kernel ended with `out[gid] = s[0] ^ s[31]`. The eight 16-byte
+blocks are independent chains, exactly as in `aes_pseudo_round`, so that output
+depends on blocks 0 and 7 alone. Blocks 1 to 6 were dead code and the OpenCL
+compiler deleted them. The card did two blocks of AES per iteration and the rate
+was divided by eight. The correctness gate compared the same two words, so it
+passed.
+
+The CPU arm was never affected: `cpu_state` is not inlined and its disassembly
+stores all eight blocks through memory, 80 `aesenc` per iteration.
+
+#### 2. Two independent ways to see it
+
+**It exceeded the hardware's ceiling.** An RTX 3050 has 20 SMs, each serving 32
+four-byte shared-memory loads per clock at about 1.78 GHz, so about 1.14e12
+loads/s. A T-table round needs 16 lookups, so the ceiling is about 7.1e10
+rounds/s with no bank conflicts at all. F78 published 9.04e10.
+
+**Changing only the output moves the rate by the predicted 4x.** Same session,
+same machine, the only edit being that every kernel folds all 32 state words:
+
+| arm | `s[0] ^ s[31]` | all 32 words | ratio |
+|---|---|---|---|
+| `__constant` | 4.883e9 | 1.210e9 | 4.04x |
+| `__local` | 9.349e10 | 2.351e10 | 3.98x |
+| four tables in `__local` | 9.354e10 | 2.352e10 | 3.98x |
+
+#### 3. The corrected figures
+
+The repository `t_aes` now folds every word on both sides. 7950X at 30 threads
+against the RTX 3050, peaks interior, gate MATCH on all three arms:
+
+| table placement | rounds/s | CPU better by |
+|---|---|---|
+| `__constant` | 1.218e9 | 79.9x |
+| `__local` | 2.336e10 | **4.16x** |
+| four tables in `__local` | 2.339e10 | 4.16x |
+
+A scratch run of the same change read 4.37x, so call it **4.2 to 4.4x**.
+
+#### 4. What it changes
+
+- **P3 is not void.** AES is a gate of about 4x against a competent T-table
+  kernel on this pairing. It is still an upper bound: bitsliced AES has no
+  tables and was not tried.
+- **F78's headline sentence, "the AES contributes nothing at all", is
+  withdrawn.** The core's ~10.7x in F78 section 2 is mostly this 4x, which
+  removes the need F78 section 5 saw for a capacity mechanism to explain it.
+- **F78's whole-nonce 3.04x and core ~10.7x stand.** `nerva-gpubench` writes
+  every pad word to global memory and folds all 32 finalize words into its
+  output, so nothing in it is dead.
+
+#### 5. The lesson
+
+**An output that reads part of a state made of independent lanes lets the
+compiler delete the rest, and a correctness gate on the same partial output
+cannot see it.** GPU compilers do this routinely. Fold every word of every lane
+into the output on both sides, and check any rate against the device's
+theoretical ceiling before believing it. F80 is the same defect in a second
+harness.
+
+### F80. `t_hc128` consumed one keystream word in sixteen; with all sixteen the reseeds are not the GPU mechanism
+
+*2026-10-07. Transcripts `results/hc128-allwords-2026-10-07.txt` (corrected)
+and `results/hc128-wordzero-same-session-2026-10-07.txt` (the old harness,
+re-run in the same session as the control).*
+
+#### 1. The defect
+
+Both kernels accumulated `acc ^= ks[0]` after each 16-step block. In emit mode a
+step's only effect beyond updating `P[i0]` is `ks[j] = t3 ^ P[i0]`, where `t3`
+is two Q-table lookups, so words 1 to 15 were dead on the card and their
+lookups could be dropped. The CPU's `HC128_NextKeys` lives in `hc128.c`, a
+separate translation unit, and always computes all sixteen. Every row with
+keystream in it was biased toward the card, more so as keystream grew.
+
+#### 2. Same session, old harness against corrected
+
+7950X at 30 threads against the RTX 3050, state in `__global`:
+
+| NextKeys per Init | GPU worse by, `ks[0]` only | GPU worse by, all 16 words |
+|---|---|---|
+| 0, pure key setup | 7.56x | 7.52x |
+| 10 | 6.76x | 7.62x |
+| **40, shipped** | **5.90x to 6.04x** | **7.77x to 7.79x** |
+| 160 | 4.05x | 7.74x |
+| 640, keystream dominated | 3.40x | 8.29x |
+
+The two agree at `nextper` 0, where there is no keystream to skip, which is the
+control. The old harness reproduces F76's curve; the corrected one is **flat**.
+
+State in `__local`, shipped mix: **3.11x** (the old harness gave 2.87x in the
+same session and 2.92x in F78). At pure key setup both give 3.23x.
+
+#### 3. What it changes
+
+- **F76's mechanism finding and F64's amortisation argument are refuted on this
+  harness.** Keystream generation is as GPU-hostile as key setup, about 7.5x to
+  8.3x in `__global` and about 3.1x to 3.2x in `__local`. What the card
+  struggles with is the 4 KB per-instance state, which is F62's original reading.
+- **The reseeds buy about 1.04x of the gate in `__local`**, not 1.13x (F78) or
+  1.36x (F76). F76's "defend them" loses its GPU reason; their other job, making
+  the index stream depend on data already read (F60 section 5), is untouched.
+- **F60's lever 1 is no longer priced against the GPU gate.** Fewer reseeds
+  would take the fill to 0.27x to 0.35x of its cost on a CPU (F60, F67) while
+  keeping the cipher ratio. What it would still cost: the gather becomes a
+  larger share of the fill and a card is better at gather (F66), and the
+  precomputation argument needs restating. A lever to evaluate, not a decision.
+
+#### 4. The caveat that still points the other way
+
+The kernels give each work-item a contiguous 4 KB block, so in `__local` every
+lane of a work-group strides through the same banks, and the measured peak at a
+work-group of 4 fills 4 of 32 lanes. An interleaved layout was not tried.
+**3.11x is an upper bound for that reason**, no longer for the DCE one.
+
+### F81. The B2 seed used two of the fill's eight AES lanes, so a feeder needed a quarter of the fill
+
+*2026-10-07. A consensus change to v14's chain entry, made because v8 has never
+validated a mainnet block. Verified as listed in section 3.*
+
+#### 1. The defect
+
+`aes_pseudo_round` encrypts each of the eight 16-byte blocks of `text`
+independently under one key, so the 1 MB fill is **eight separate chains** of
+8,192 dependent steps. `CN_V8_FETCH_SALT` handed `text` to the callback and
+`v14_fetch_salt` keyed HC-128 from its first 32 bytes, which are lanes 0 and 1
+alone. The salt and every draw were therefore a function of two lanes: a device
+producing salts needed 16,384 AES pseudo-rounds per candidate, not 65,536.
+
+PLAN-v8 Phase 6 B2, the comment in `hash-ops.h` and the one at the call site all
+say the seed requires the whole fill. It required a quarter of it.
+
+No test could see it. HW == SW compares two arms that do the same thing; the
+known-answer vectors pass no callback; `t_v8_grid` compares arms with each
+other; and `t_v8_chain`'s check that the seed moves with `init_size_blk` passes
+either way, because changing the width changes lanes 0 and 1 too.
+
+#### 2. The fix
+
+The seed is now every byte of `text` folded into 32, byte-wise, `seed[i & 31] ^=
+text[i]`. Every lane reaches the seed. Byte-wise means both arms and both byte
+orders compute the same bytes, and the loop runs to `init_size_byte`, so it
+cannot read past `text` at any width. Cost: 128 XORs per nonce.
+
+#### 3. How it was checked
+
+- **The 13 existing vectors are byte-identical**: the generator's v10, v11, v13
+  and v14 tables match `slow-hash.c` exactly. The fold reaches only the chain
+  entry, which those vectors never called.
+- **A new chain-entry vector pins the seed and the hash.** It runs
+  `cn_slow_hash_v14_chain` with `cn_selftest_salt` and compares both the 32-byte
+  seed handed to the callback and the digest. `t_gen_kat.c` emits it.
+- `t_kat` passes on hardware dispatch and with `NERVA_FORCE_SOFTWARE_AES=1`.
+- `t_v8_grid` passes all checks and its digest is unchanged at
+  `09d34831c25f506c`, as it must be, since it hashes through the plain entry.
+- **The new vector fails when the fold is reverted**, in a scratch copy of
+  `src/crypto`, while HW == SW still passes: exactly the gap it closes.
+
+#### 4. What it does and does not change
+
+v14's chain entry computes a different hash, so every testnet node has to be
+rebuilt, and C-5's testnet round, already owed for D1 and D3, now covers this
+too. It makes B2's stated property true; it does not make it large, since F79
+puts AES at about 4x against a card.
+
+### F82. `t_v8_fill`'s hot arm is a floor only at the shipped odds; rejection sampling is about 40% of what F60 and F67 booked as memory at odds 256
+
+*2026-10-07. One run of each arm set, 7950X, height 4.5M, 8 s, quiet machine.*
+
+`t_v8_fill` claimed every arm does identical cipher work. It does not.
+`HC128_U32` masks to the next power of two and redraws on overflow: a
+full-history pick accepts `height / 2^ceil(log2 height)`, 53.6% at 4.5M, and a
+window pick accepts 76.3%. An arm with more full-history picks draws more
+keystream and runs more `HC128_NextKeys` before it touches any memory. F69 found
+the same mechanism from the height side.
+
+A scratch copy with the hot arm drawing at odds 256, so it is the cipher floor
+for the all-history arm:
+
+| | ms per fill |
+|---|---|
+| hot arm, odds 13 (the shipped floor) | 0.7299 |
+| **hot arm, odds 256** | **0.7893, +8.1%** |
+| all full history | 0.8706 and 0.8783 |
+| shipped, 13 of 256 | 0.7532 and 0.7425 |
+
+Of the all-history arm's increment over the shipped floor, about 0.14 ms, about
+**0.059 ms is cipher and 0.089 ms memory**. Memory at odds 256 is about 10% of
+the fill, not the 17% to 29% F60 section 2 reports.
+
+**What it changes:**
+
+- **C-7 roughly halves.** The pre-registration modelled D3's whole CPU increment
+  as memory a card barely pays. A card pays the rejection draws too. Recomposed
+  with `c7-composed.py`'s inputs, cipher at odds 256 is about 759 us and memory
+  about 143 us: with HC-128 at 12.1x as the prereg used, 11.43x goes to 10.25x,
+  **-10.3%** rather than -17%; with F80's 3.11x, 2.95x goes to 2.69x, -8.7%. The
+  direction favours D3 and the decision is unchanged.
+- **F67's "physically impossible" is not.** Window-only at odds 0 draws less
+  keystream than the odds-13 hot arm, so it can legitimately come in under it.
+- **The measured totals are unaffected**: C-2, C-3 and C-4 used totals, never
+  the split.
+
+The harness comment is corrected. A permanent per-odds floor arm is the clean
+fix and is not added here, since it changes the arm table the pre-registration's
+runs were taken with.
 
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 

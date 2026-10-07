@@ -363,3 +363,10 @@ this branch, so nothing is broken, but it is load-bearing for D3 now.
 **Not adopted on its own merits alone:** D3 still only buys what F66 and F67
 measure, and the ASIC row of its threat table is void per C-6. The case is the
 FPGA one.
+
+**C-7 revisited again, F82, recorded here rather than edited above.** The
+`t_v8_fill` floor the composition used draws at 13 of 256, but full-history
+picks rejection-sample more often, so about 40% of the CPU's odds-256 increment
+is cipher work a card pays as well, not memory it skips. Recomposed, C-7's
+regression is about -10% rather than -17%. The criterion passed before and
+passes by more now; the decision is unchanged.

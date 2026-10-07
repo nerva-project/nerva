@@ -999,6 +999,12 @@ with `init_size_blk`: that is what distinguishes "the fill produced this" from
 cannot change `keccak(blob)`. A future simplification back to the blob hash
 would pass every test that only compares hashes.
 
+**As first built, the seed covered a quarter of the fill (FINDINGS F81).** The
+fill is eight independent AES chains and the seed was the first 32 bytes of the
+final state, lanes 0 and 1 only; the `init_size_blk` assertion above passed
+anyway. The seed now folds all eight lanes, and a chain-entry known-answer
+vector pins it.
+
 Stated limits, which are real: it does not stop a device that has AES, so FPGA
 and ASIC are unaffected, and it does not stop a GPU computing the whole hash,
 which rests on the ordinary argument instead.
