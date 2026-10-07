@@ -74,6 +74,14 @@ binding comes from needing the right 16,384 blocks to get the right answer, and
 is intact and cheap. The cost is a stream cipher, and a stream cipher is close
 to the friendliest thing here to put in silicon.
 
+**Against a GPU the rule's conclusion is right and its reason is wrong, F62.**
+The fill is a strong anti-GPU gate, 10.5x, but the gate is HC-128 and not
+memory: a card is **1.64x to 2.73x better** than a CPU at random gather and
+**12.1x worse** at HC-128, whose 4 KB per-instance state no warp can hold. So
+"random-access database bandwidth" is the half a card is good at. Read the rule
+as: against a GPU the fill resists because of its cipher; against an ASIC it
+barely resists at all; against a pool it resists because of the binding.
+
 So **everything below that reads "raise the fill's share" should be read as
 "raise the share of HC-128"**, which is not obviously the share of anything an
 attacker struggles with. Pool resistance is unaffected, because it rests on the
@@ -126,6 +134,11 @@ at 1.8x, because a main-loop step is memory bound and the AES is a small part of
 it. So **the gate is the pad fill, and pad size is what sets it**, not the
 chained loop. B2's feeder gate is the 8x part, which is better than this plan
 claimed.
+
+**And it is not even the strongest gate, F62.** HC-128 in the chain fill costs a
+GPU **12.1x**, against the AES asymmetry's 4.9x to 8.0x. The anti-GPU argument
+leans more on the fill's cipher than on the pad fill's AES, which is the reverse
+of this plan's ordering.
 
 **By machine, and this is the uncomfortable one:** the figures above are the
 i7-7700HQ. A 7950X reads 8.0x, 3.8x, 16.0x and 2.4x, roughly double on every
@@ -284,6 +297,24 @@ Raising the odds forces more of the database to be hot per nonce, which is goal
 v14-only fill as D2, and the two should be decided together since they trade
 against the same budget.
 
+### D6. Grow the pad. Measured 2026-10-06 and it is worth about 2x. Marginal.
+
+**v8's own pad curve had never been measured**; the case for growing it was
+carried over from v5's curve in RESULTS.md. F63 measured v8's and it is much
+flatter: **1.46x at 2 MB and 1.96x at 4 MB**, against 2.4x verification cost at
+4 MB (1.92 ms to 4.62 ms single-threaded).
+
+Readings of 8.7x were produced first, on two unrelated GPUs, and were an
+artifact of the harness's launch cap starving exactly the rows under test. See
+F63 section 3 before running any GPU comparison in this tree.
+
+So the pad is a real but modest lever, comparable to the others rather than
+dominant, and it has to be weighed against F54's closed decision rather than
+treated as overturning it. **A claim that v8 is less GPU-resistant than live v13
+was made from absolute GPU:CPU figures and is withdrawn as unestablished**, that
+column being a property of the CPU and GPU in a given box rather than of the
+algorithm.
+
 ### D4. Reconsider the pad once the fill changes. Not now.
 
 The pad verdict was reached with the fill held at 256 KB. The two are coupled
@@ -292,7 +323,34 @@ is a different question. **It would need a new pre-registration, not an
 amendment**, per the closing note in
 [PAD-DECISION-PREREG.md](PAD-DECISION-PREREG.md).
 
-### D5. Chain the fill's reads and drop the reseeds. The largest measured gain on the table.
+### D5. Chain the fill's reads and drop the reseeds. MEASURED AND REJECTED.
+
+**Verdict 2026-10-06, F62: do not build this as specified.** It costs about
+**1.8x of v8's GPU resistance**. Both halves of what it trades have now been
+measured on an RTX 3050 against a 7950X, so this is no longer a judgement call.
+
+A GPU is **1.64x better** than a CPU at the fill's random gather today, rising
+to 2.73x as the chain outgrows cache, and **12.1x worse** at HC-128, because the
+cipher's `P[512] + Q[512]` state is 4 KB per instance and a warp cannot hold it.
+D5 deletes the HC-128 and adds gather, so it removes the fill's anti-GPU half to
+buy more of its pro-GPU half:
+
+| | CPU fill | GPU fill | GPU disadvantage |
+|---|---|---|---|
+| today | 0.744 ms | 8.50 ms | **11.4x** |
+| after D5 | 0.603 ms | 2.54 ms | **4.2x** |
+
+The rest of this entry is kept because the arithmetic in it is right and the
+cheaper nonce and tighter ASIC bound are real. What it got wrong is which
+direction the change moves goal 1, which it assumed and did not measure.
+
+**The salvageable part** is that the fill's cost is in the wrong place for ASIC
+resistance, which F60 established and F62 does not disturb. Any replacement has
+to keep a component a GPU is bad at. HC-128 is currently that component, and it
+is a stronger GPU gate than the AES: 12.1x against F59's 4.9x to 8.0x.
+
+#### The original entry, superseded above
+
 
 **New 2026-10-06, out of F60, and it is the first candidate that improves goals
 1 and 4 together by a large margin rather than a few percent.**
@@ -350,6 +408,24 @@ chain length it is not load-bearing for sync speed, so reversing it is a far
 cheaper decision than this plan assumed.
 
 F60 sections 6 to 8 have the measurements and the full list of objections.
+
+## The ceiling on tuning, F62 and F63 together
+
+The measured component ratios are HC-128 **12.1x**, AES roughly **6x**, random
+gather **0.6x** (a GPU advantage), and loop divergence ~1.9x. A whole nonce
+lands near 9x.
+
+**An average cannot exceed its largest term.** Rebalancing v8's existing parts
+is therefore bounded by HC-128's 12.1x, and v8 already sits at about three
+quarters of it. That is why every dial in this document buys a fraction: the pad
+about 2x at 4 MB, a doubled salt about 1.1x, more reseeds under 1.2x, each at a
+real verification cost.
+
+**Moving meaningfully past 12x needs a component more GPU-hostile than HC-128**,
+which is a design question and not a tuning one. The weakest number in that
+arithmetic is the ~6x for AES, which is F59's CPU T-table proxy rather than a
+measured GPU figure; measuring it on a card with the `t_hc128` pattern would
+turn both the 9x and the 12x into real numbers and is the cheapest next step.
 
 ## What is closed, and must not be reopened without new evidence
 

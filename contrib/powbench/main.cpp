@@ -51,6 +51,13 @@ static const Variant ALL_VARIANTS[] = {
     { "v8+fp rne", 9,  1024, 0 },   // FP stage, rounding fixed at nearest-even
     { "v8+fp",    10,  1024, 0 },   // FP stage as specified, mode from data
     { "v5 1MB end",5,  1024, 0 },   // the control again, AFTER the FP rows
+    { "v8 2MB",    8,  2048, 1 },   // v8's OWN pad curve. Added for F63: the
+    { "v8 4MB",    8,  4096, 1 },   // curve had only ever been measured on v5,
+                                    // and v8's turns out to be much flatter.
+                                    // A row whose batch hits the launch cap is
+                                    // starved and reads far too well; check the
+                                    // nonce count against the cap before
+                                    // believing either of these.
     { "v5 4MB",    5,  4096, 1 },
     { "v5 8MB",    5,  8192, 1 },
     { "v6 1MB",    6,  1024, 1 },
@@ -801,7 +808,7 @@ int main(int argc, char **argv) {
     {
         int ib = -1, ir = -1, im = -1, ic = -1, ic2 = -1;
         for (int i = 0; i < NV; i++) {
-            if (VARIANTS[i].gen == 8)  ib = i;
+            if (VARIANTS[i].gen == 8 && VARIANTS[i].pad_kb == 1024) ib = i;
             if (VARIANTS[i].gen == 9)  ir = i;
             if (VARIANTS[i].gen == 10) im = i;
             if (VARIANTS[i].gen == 5 && VARIANTS[i].pad_kb == 1024) {

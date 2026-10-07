@@ -3696,6 +3696,217 @@ in full, through `add_new_block` to `handle_block_to_main_chain`, with
 `precomputed=0`. That was doubted during the above and the doubt was unfounded.
 It is a sound way to force verification of real blocks on demand.
 
+### F62. A GPU beats a CPU at the fill's memory access and loses 12x at its cipher, so D5 would trade the fill's only anti-GPU property away
+
+PLAN-v8-PHASE8 D5 proposes chaining the fill's reads and deleting 255 of the 257
+reseeds. The objection on record was that a dependent chain serialises one nonce
+while an attacker runs thousands, so it might cost the honest CPU more than the
+attacker. That was waiting on an outside opinion. It did not need one.
+
+The objection reduces to two rates, because every device needs 16,384 random
+reads and 257 inits plus ~10,500 keystream blocks per nonce whatever the design.
+Both are measured here on the same machine, against an **RTX 3050** and a
+**7950X capped at 30 threads**.
+
+`contrib/powbench/t_gather.cpp` and `t_hc128.cpp`, both using the existing
+`clmin.h` runtime loader, so no OpenCL SDK is needed.
+
+#### 1. Random gather: the GPU wins
+
+| table | CPU peak reads/s | GPU peak reads/s | GPU / CPU |
+|---|---|---|---|
+| 224 MB, mainnet today | 2.42e9 | 3.97e9 | **1.64x** |
+| 896 MB | 1.39e9 | 2.45e9 | 1.77x |
+| 3.5 GB, nothing caches | 8.70e8 | 2.38e9 | **2.73x** |
+
+The gap widens as the chain grows, because the CPU loses its cache and the GPU
+has little to lose. At 3.5 GB the absolutes check out as fractions of peak
+bandwidth: 56 GB/s for the CPU against DDR5's ~83, and 76 GB/s for the card
+against its ~224. At that size the GPU curve is **flat across every work-item
+count**, which is the signature of a bandwidth-bound measurement and the check
+that the number is real.
+
+*At 224 MB the CPU rate implies 150 GB/s, which exceeds DDR5 dual-channel.* That
+is not an error: a 7950X holds roughly a third of a 224 MB table in its 96 MB of
+cache. It is a true property of the chain today and it is why the sweep matters.
+
+#### 2. HC-128: the GPU loses, badly
+
+| | CPU (30 threads) | GPU (8,192 items) | GPU / CPU |
+|---|---|---|---|
+| rounds/s, 1 init + 40 NextKeys | 6.310e6 | 5.215e5 | **0.083x** |
+
+**The CPU is 12.1x faster.** The cause is the one F60 section 3 guessed at: the
+state is `P[512] + Q[512]`, **4 KB per instance**, so a 32-lane warp would need
+128 KB and cannot use shared memory at all. The kernel keeps each item's state
+in global memory, which is what a miner would have to do.
+
+Two checks that this is a real number and not a bad port:
+
+- **The kernel agrees with `src/crypto/hc128.c` bit for bit** before any timing
+  runs, and refuses to report if it does not.
+- The CPU arm independently reproduces F60's decomposition: 2.57 us per round
+  here against F60's 1.95 us per init plus 40 x 15.6 ns, from a different
+  harness.
+
+#### 3. What the fill is actually made of, as a defence
+
+Combining, per fill (257 rounds of HC-128 and 16,384 reads):
+
+| | CPU | GPU | ratio |
+|---|---|---|---|
+| HC-128 portion | 40.7 us | 492.9 us | 12.1x worse |
+| gather portion | 6.8 us | 4.1 us | 1.64x better |
+| **whole fill** | **47.5 us** | **497.0 us** | **10.5x worse** |
+
+**So the chain fill is a strong anti-GPU gate, and the mechanism is HC-128, not
+memory.** F38's rule said the fill is the part an attacker cannot specialise and
+attributed that to random-access database bandwidth. The conclusion was right
+and the reason was wrong: memory is the half a card is *better* at.
+
+That also makes HC-128 a **stronger** GPU gate than the AES. F59 put the
+AES-NI against T-tables asymmetry at 4.9x to 8.0x; this is 12.1x.
+
+#### 4. D5 is a regression on goal 1, quantified
+
+D5 removes the inits, which are 76% of a round, and adds dependent gather.
+Both halves of what it trades are now measured:
+
+| | CPU fill | GPU fill | GPU disadvantage |
+|---|---|---|---|
+| today | 0.744 ms | 8.50 ms | **11.4x** |
+| after D5, 4 chains | 0.603 ms | 2.54 ms | **4.2x** |
+
+**D5 cuts the fill's GPU disadvantage by 2.7x.** Carrying it to a whole nonce
+with F59's AES penalty gives roughly 9x today against 5x after, so D5 costs
+about **1.8x of v8's GPU resistance** to buy a cheaper nonce and a tighter ASIC
+bound.
+
+That is a real trade rather than the free win the plan describes, and it points
+the opposite way to PLAN-v8-PHASE8's framing. **D5 should not be built as
+specified.**
+
+#### 5. What this does not settle
+
+One card, and a low-end one. An RTX 4090 has about 4.5x this card's bandwidth,
+which would widen section 1's gather gap and narrow nothing in section 2, since
+HC-128 is bound by per-lane state rather than bandwidth. A better GPU programmer
+might beat my kernel; 4 KB per lane is a hard constraint, not an implementation
+detail, but a factor of two or three there would still leave the card far
+behind.
+
+The whole-nonce figures in section 4 carry F59's AES penalty, which is a CPU
+T-table proxy rather than a measured GPU number. The fill figures do not depend
+on it.
+
+An ASIC is not here and is not implied: HC-128's 4 KB is nothing in silicon, so
+section 2's gate is specific to GPUs. F60's ASIC bound stands unchanged.
+
+### F63. v8's own pad curve is 2x, not the 8.7x first measured, and three ways a GPU bench lies
+
+F62 established that a GPU is better than a CPU at the fill's gather and 12.1x
+worse at HC-128. The obvious follow-up was pad size, since a bigger pad means
+fewer nonces resident on a card. **Every number this entry first produced was
+wrong, in the favourable direction, and the corrections are more useful than the
+result.**
+
+`contrib/powbench/main.cpp` gained `v8 2MB` and `v8 4MB` rows. **v8's pad curve
+had never been measured**; PLAN-v8-PHASE8's argument for growing the pad was
+carried over from v5's curve in RESULTS.md, and v8's turns out to be much
+flatter.
+
+#### 1. The result
+
+Vega FE, 5600X host, `vram=90 cap=60`, the only run where the 4 MB row was not
+starved. Within-machine, which is the only transferable form (see section 3):
+
+| pad | GPU slowdown | CPU slowdown | **pad's value** |
+|---|---|---|---|
+| 1 MB | 1.0x | 1.0x | baseline |
+| 2 MB | 2.33x | 1.59x | **1.46x** |
+| 4 MB | 6.45x | 3.30x | **1.96x** |
+
+2 MB reproduces across every run and both vendors at **1.40x to 1.53x**. 4 MB is
+**1.96x**, and it costs 2.4x verification: 1.92 ms to 4.62 ms single-threaded.
+
+**Pad size is not the dominant GPU lever.** It is worth about 2x at 4 MB, which
+is comparable to the other dials and smaller than this project believed when it
+reopened the question.
+
+#### 2. What the first numbers said, and why they were wrong
+
+| run | card | 4 MB reads as |
+|---|---|---|
+| RTX 3050, `vram=50 cap=25` | 8 GB | 8.70x |
+| RTX 3050, `vram=90 cap=25` | 8 GB | 5.14x |
+| Vega FE, `vram=50 cap=25` | 16 GB | 8.65x |
+| **Vega FE, `vram=90 cap=60`** | 16 GB | **1.96x** |
+
+The 8.7x was reproduced on two unrelated GPUs, which felt like confirmation and
+was not: both were hitting the same wall. **The 4 MB row was starved by the
+launch cap**, running 448 nonces against a 25 s ceiling. Given 60 s it ran 1,728
+nonces and its rate went 19.5 to 75.3 H/s, a factor of 3.9 that came from
+nothing but being allowed to run.
+
+RESULTS.md section 7 already warned that capped rows are starved and that
+"magnitudes are floors". That warning was read and then not applied.
+
+#### 3. Three ways this harness misleads, all hit in one session
+
+**The launch cap starves exactly the rows under test.** The cap is per launch
+and exists so a display-attached card does not trip the driver timeout. A
+bigger pad makes each nonce slower, so the batch that fits the cap shrinks, so
+occupancy collapses, so the GPU looks worse *because the pad is bigger*. That is
+the measurement arguing for its own hypothesis. **Divide nonces by GPU H/s: if
+it is near the cap, the row is a floor and not a measurement.**
+
+**Absolute GPU:CPU is a property of the pairing, not the algorithm.** v8 at 1 MB
+reads 0.0525x on a 7950X with an RTX 3050 and 0.1455x on a 5600X with a Vega,
+3x apart for identical code. Only the within-machine ratio of slowdowns
+transfers, because there the hardware cancels. **Every cross-machine comparison
+of the raw column in this file and in RESULTS.md is suspect**, including the
+claim this entry started from, that v8 is 4x less GPU-resistant than live v13.
+*That claim is withdrawn as unestablished.* It may be true; this data cannot
+show it.
+
+**The CPU side silently changes thread count with pad size.** The harness chose
+12 threads at 1 MB, 9 at 4 MB and 3 at 8 MB on the Vega, because pad x threads
+has to fit L3. On the 3050 the same 4 MB row ran at 16 threads in one run and 24
+in the next, and 24 threads gave *half* the throughput of 16 while per-thread
+cost was identical. Since GPU:CPU divides by that figure, **every large-pad row
+understates the CPU**, and `v6 8MB` at 3 of 12 threads is not interpretable at
+all.
+
+#### 4. The run that drifted, and the control that said so
+
+`cap=60` is several minutes of near-continuous full load per row: a sizing ramp
+of up to 4 launches, then `GPU_REPS = 3` timed launches, then the CPU passes.
+Six rows is 18 to 20 minutes.
+
+The paired control caught the cost: `v5 1MB` at the start and end of the run
+read 1.2% apart at `cap=25` and **3.8% apart at `cap=60`**, the card losing
+performance monotonically as it heated. The 1.96x result is well clear of 3.8%
+and stands, but nothing smaller than about 4% from that run should be believed.
+
+**If a longer run is needed, raise the cooldown, not the cap.** And read the
+control pair first, every time.
+
+#### 5. What it leaves
+
+The pad question is answered and the answer is "not much": about 2x at 4 MB for
+2.4x verification. More useful is what it implies with F62. The component
+ratios are HC-128 12.1x, AES roughly 6x, gather 0.6x against us, divergence
+1.9x, and a whole nonce lands near 9x. **An average cannot exceed its largest
+term, so rebalancing v8's existing parts is bounded by HC-128's 12.1x, and v8 is
+already at about three quarters of that.**
+
+So pad size, salt size and reseed count are all fractions of a factor. Moving
+meaningfully past 12x needs a component more GPU-hostile than HC-128, which is a
+design question rather than a tuning one. The ~6x AES term is the weakest link
+in that arithmetic, being F59's CPU T-table proxy rather than a measured GPU
+number, and measuring it on a card with the `t_hc128` pattern would turn both
+the 9x and the 12x into real figures.
+
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
 `contrib/hf14checks/CMakeLists.txt` names the resized translation units
