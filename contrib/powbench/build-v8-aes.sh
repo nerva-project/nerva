@@ -11,8 +11,13 @@
 # software against software, which would pass and mean nothing. The binary
 # refuses to run on a CPU without AES-NI for the same reason.
 #
-# contrib/powbench/v8ns-{hw,sw}.c are the D1 candidate: the same core with
-# CN_V8_NO_SWEEP and renamed symbols, so it links beside the shipped v8.
+# The "no-sweep" rows were the D1 candidate, built from v8ns-{hw,sw}.c. D1
+# shipped on 2026-10-07 and those files were deleted, because the shipped v8 IS
+# the no-sweep core now (F72). The build pointed at them anyway and failed, so
+# the v14ns symbols are aliased to the shipped arms below: the two row pairs
+# now time the same function, which makes the second pair a within-run control
+# rather than a candidate. F59's pre-D1 "v8" rows cannot be reproduced from this
+# tree any more.
 #
 # -fno-strict-aliasing and -ffp-contract=off match CMakeLists.txt for these
 # translation units, so this builds the same code the daemon does.
@@ -39,9 +44,10 @@ done
 
 gcc -O2 -maes -march=x86-64 -fno-strict-aliasing -ffp-contract=off \
     -DSLOW_HASH_HW_AES_BUILT=1 \
+    -Dcn_slow_hash_v14ns_hw=cn_slow_hash_v14_hw \
+    -Dcn_slow_hash_v14ns_sw=cn_slow_hash_v14_sw \
     $BOOSTINC -I src -I src/crypto -I contrib/epee/include \
     contrib/powbench/t_v8_aes.c \
-    contrib/powbench/v8ns-hw.c contrib/powbench/v8ns-sw.c \
     src/crypto/slow-hash.c src/crypto/slow-hash-hw.c src/crypto/slow-hash-sw.c \
     src/crypto/slow-hash-v8-hw.c src/crypto/slow-hash-v8-sw.c \
     src/crypto/slow-hash-v8fp-hw.c src/crypto/slow-hash-v8fp-sw.c \

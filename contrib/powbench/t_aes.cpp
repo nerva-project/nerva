@@ -24,6 +24,13 @@
  *   lds     te0 copied to __local once per work-group
  *   lds4    four pre-rotated tables in __local, so the round has no ROTL32
  *
+ * Every arm folds all 32 state words into its output. The first version wrote
+ * only s[0] ^ s[31], which depends on blocks 0 and 7 alone; the OpenCL compiler
+ * deleted the other six blocks, the GPU did a quarter of the work it was
+ * credited with, and the LDS arms read 1.04x against AES-NI where the full
+ * computation reads 4.4x. The CPU arm was never affected, since its blocks pass
+ * through memory. FINDINGS F79.
+ *
  * Every arm is checked against the CPU's AES-NI output bit for bit before it is
  * timed. The S-box is computed here from the GF(2^8) inverse and the affine
  * map rather than copied, so a wrong table cannot silently agree with itself:
@@ -140,13 +147,22 @@ static void cpu_state(uint32_t gid, uint32_t iters, uint32_t out[32])
     for (int b = 0; b < 8; b++) _mm_storeu_si128((__m128i *)(out + b * 4), s[b]);
 }
 
+/* The CPU twin of the kernels' OUT_ALL: every word of all eight blocks, so the
+ * correctness gate checks every block the GPU is timed on. */
+static uint32_t fold_all(const uint32_t st[32])
+{
+    uint32_t x = 0;
+    for (int i = 0; i < 32; i++) x ^= st[i];
+    return x;
+}
+
 struct cpu_arg { uint32_t iters; uint32_t acc; int id; };
 static void *cpu_worker(void *p)
 {
     cpu_arg *a = (cpu_arg *)p;
     uint32_t st[32];
     cpu_state((uint32_t)a->id, a->iters, st);
-    a->acc = st[0] ^ st[31];
+    a->acc = fold_all(st);
     return NULL;
 }
 
@@ -179,6 +195,15 @@ static double cpu_rounds_per_s(int threads, double seconds, uint32_t *sink)
 
 static const char *K_SRC =
 "#define ROTL32(x,n) (((x) << (n)) | ((x) >> (32 - (n))))\n"
+"\n"
+"/* Fold EVERY state word into the output. The eight blocks are independent\n"
+" * chains, so an output that reads only s[0] and s[31] leaves blocks 1 to 6\n"
+" * dead and the compiler deletes them: the GPU then does a quarter of the AES\n"
+" * the rate is divided by. That is what F78's 1.04x measured. FINDINGS F79. */\n"
+"#define OUT_ALL(out, gid, s)                                                 \\\n"
+"    {   uint acc_ = 0;                                                       \\\n"
+"        for (int i_ = 0; i_ < 32; i_++) acc_ ^= s[i_];                       \\\n"
+"        out[gid] = acc_; }\n"
 "\n"
 "#define SEED_STATE(s, gid)                                                   \\\n"
 "    {   uint sd = (uint)(gid) * 2654435761u + 1u;                            \\\n"
@@ -226,7 +251,7 @@ static const char *K_SRC =
 "            for (int r = 0; r < 10; r++) RND(te0, a0,a1,a2,a3, rk, r)\n"
 "            s[b*4+0]=a0; s[b*4+1]=a1; s[b*4+2]=a2; s[b*4+3]=a3;\n"
 "        }\n"
-"    out[gid] = s[0] ^ s[31];\n"
+"    OUT_ALL(out, gid, s)\n"
 "}\n"
 "\n"
 "/* ARM 2: the same table staged into __local once per work-group. */\n"
@@ -246,7 +271,7 @@ static const char *K_SRC =
 "            for (int r = 0; r < 10; r++) RND(T, a0,a1,a2,a3, rk, r)\n"
 "            s[b*4+0]=a0; s[b*4+1]=a1; s[b*4+2]=a2; s[b*4+3]=a3;\n"
 "        }\n"
-"    out[gid] = s[0] ^ s[31];\n"
+"    OUT_ALL(out, gid, s)\n"
 "}\n"
 "\n"
 "/* ARM 3: four pre-rotated tables in __local, 4 KB, no rotates in the round. */\n"
@@ -270,7 +295,7 @@ static const char *K_SRC =
 "            for (int r = 0; r < 10; r++) RND4(T0,T1,T2,T3, a0,a1,a2,a3, rk, r)\n"
 "            s[b*4+0]=a0; s[b*4+1]=a1; s[b*4+2]=a2; s[b*4+3]=a3;\n"
 "        }\n"
-"    out[gid] = s[0] ^ s[31];\n"
+"    OUT_ALL(out, gid, s)\n"
 "}\n";
 
 struct Arm { const char *name; int local_tbl_uints; };
@@ -385,7 +410,7 @@ int main(int argc, char **argv)
             bool ok = true;
             for (uint32_t g = 0; g < 4; g++) {
                 uint32_t st[32]; cpu_state(g, vi, st);
-                if (got[g] != (st[0] ^ st[31])) ok = false;
+                if (got[g] != fold_all(st)) ok = false;
             }
             printf("    %-10s against AES-NI: %s\n", ARMS[a].name, ok ? "MATCH" : "MISMATCH");
             cl.ReleaseMemObject(vo);

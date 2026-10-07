@@ -16,10 +16,21 @@
  * The assumption has never been tested. This tests it.
  *
  * METHOD. Four arms over the same loop body, differing only in which index the
- * pick returns. The HC-128 work is identical in all four by construction: the
- * selector draw happens whether or not its branch is taken, and the hot arm
- * computes a real index and then discards it, so no arm consumes a different
- * amount of keystream from any other.
+ * pick returns. The selector draw happens whether or not its branch is taken,
+ * and the hot arm computes a real index and then discards it.
+ *
+ * CORRECTION, 2026-10-07 (FINDINGS F82). This used to claim that the HC-128
+ * work is therefore identical in every arm. It is identical only between arms
+ * with the SAME odds. HC128_U32 rejection-samples: a full-history pick draws
+ * over `height` and accepts height / 2^ceil(log2 height), 53.6% at 4.5M, while
+ * a window pick draws over 100,000 and accepts 76.3%. So an arm with more
+ * full-history picks consumes more keystream, takes more NextKeys and
+ * mispredicts the redraw branch more often, before it touches any memory.
+ * ARM_HOT is a true floor for ARM_SHIPPED, which shares its odds, and NOT for
+ * ARM_ALL, ARM_WINDOW or the odds sweep: "all full history minus hot" is extra
+ * memory PLUS extra cipher, and "window only" can legitimately come in under
+ * the hot arm. F69 found the same mechanism from the height side. The measured
+ * totals are unaffected; only their split into memory and cipher is.
  *
  *   shipped        13/256 full history, the rest in the 100,000-block window
  *   window only    odds forced to 0: everything in 5.6 MB
@@ -191,11 +202,12 @@ static void fill(unsigned char *out, HC128_State *rng, uint32_t height, int arm,
     uint64_t idx[16][4];
     uint32_t ks[16][16];
 
-    /* Both branches of the selector consume keystream the same way, so the
-     * cipher work does not depend on the arm. ARM_HOT computes the index and
-     * then throws it away, which keeps that true for the hot arm too: it must
-     * cost less in memory and exactly the same in compute, or it is not a
-     * floor for anything. */
+    /* The selector is drawn whatever the odds, but the two branches do NOT
+     * consume keystream the same way: HC128_U32 redraws on overflow and the
+     * full-history range accepts less often than the window's (see the header
+     * correction). ARM_HOT computes the index and throws it away, so it costs
+     * exactly what ARM_SHIPPED costs in compute and is a floor for that arm,
+     * and only that arm. */
     #define PICK() ({                                                        \
         uint64_t i_ = (HC128_U32(rng, &ki, 256) < odds)                      \
                     ? (uint64_t)HC128_U32(rng, &ki, height)                  \

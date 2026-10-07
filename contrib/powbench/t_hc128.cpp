@@ -94,6 +94,19 @@ static double now_s(void)
 
 /* ---------------- CPU ---------------- */
 
+/* All sixteen keystream words, on both sides. The first version consumed only
+ * keystream[0], so on the GPU the Q-table lookups behind words 1 to 15 were
+ * dead and the compiler was free to drop them, while the CPU's NextKeys lives
+ * in another translation unit and always computed all sixteen. That biased
+ * every nextper > 0 row toward the card. KS_FOLD in the kernel source is the
+ * same fold. FINDINGS F80. */
+static uint32_t ks_fold(const uint32_t ks[16])
+{
+    uint32_t x = 0;
+    for (int w = 0; w < 16; w++) x ^= ks[w];
+    return x;
+}
+
 struct cpu_arg { uint32_t rounds; uint32_t acc; int id; };
 
 static void *cpu_worker(void *p)
@@ -113,7 +126,7 @@ static void *cpu_worker(void *p)
          * entitled to delete the thing under test. The GPU arm does the same,
          * so the correctness gate still compares like with like. */
         acc ^= st.P[0];
-        for (n = 0; n < g_nextper; n++) { HC128_NextKeys(&st); acc ^= st.keystream[0]; }
+        for (n = 0; n < g_nextper; n++) { HC128_NextKeys(&st); acc ^= ks_fold(st.keystream); }
     }
     a->acc = acc;
     return NULL;
@@ -156,6 +169,7 @@ static const char *K_SRC =
 "#define F1(x) (ROTR32((x),7) ^ ROTR32((x),18) ^ ((x) >> 3))\n"
 "#define F2(x) (ROTR32((x),17) ^ ROTR32((x),19) ^ ((x) >> 10))\n"
 "#define FF(a,b,c,d) (F2(a) + (b) + F1(c) + (d))\n"
+"#define KS_FOLD(acc, ks) { for (int w_ = 0; w_ < 16; w_++) (acc) ^= (ks)[w_]; }\n"
 "\n"
 "static void hc_sixteen(__global uint *P, __global uint *Q, uint *counter, uint *ks, int emit)\n"
 "{\n"
@@ -284,7 +298,7 @@ static const char *K_SRC =
 "        hc_init_l(P, Q, &counter, (uint)gid ^ r, 0x11223344u, 0x55667788u, 0x99aabbccu,\n"
 "                0x01020304u, 0x05060708u, 0x090a0b0cu, 0x0d0e0f10u);\n"
 "        acc ^= P[0];\n"
-"        for (n = 0; n < nextper; n++) { hc_sixteen_l(P, Q, &counter, ks, 1); acc ^= ks[0]; }\n"
+"        for (n = 0; n < nextper; n++) { hc_sixteen_l(P, Q, &counter, ks, 1); KS_FOLD(acc, ks); }\n"
 "    }\n"
 "    out[gid] = acc;\n"
 "}\n"
@@ -300,7 +314,7 @@ static const char *K_SRC =
 "        hc_init(P, Q, &counter, (uint)gid ^ r, 0x11223344u, 0x55667788u, 0x99aabbccu,\n"
 "                0x01020304u, 0x05060708u, 0x090a0b0cu, 0x0d0e0f10u);\n"
 "        acc ^= P[0];\n"
-"        for (n = 0; n < nextper; n++) { hc_sixteen(P, Q, &counter, ks, 1); acc ^= ks[0]; }\n"
+"        for (n = 0; n < nextper; n++) { hc_sixteen(P, Q, &counter, ks, 1); KS_FOLD(acc, ks); }\n"
 "    }\n"
 "    out[gid] = acc;\n"
 "}\n";
@@ -414,7 +428,7 @@ int main(int argc, char **argv)
                 uint32_t vw[4] = { 0x01020304u, 0x05060708u, 0x090a0b0cu, 0x0d0e0f10u };
                 HC128_Init(&st, (unsigned char *)kw, (unsigned char *)vw);
                 cpu_acc ^= st.P[0];
-                for (uint32_t n = 0; n < vn; n++) { HC128_NextKeys(&st); cpu_acc ^= st.keystream[0]; }
+                for (uint32_t n = 0; n < vn; n++) { HC128_NextKeys(&st); cpu_acc ^= ks_fold(st.keystream); }
             }
             printf("    kernel against src/crypto/hc128.c: %s (gpu %08x, cpu %08x)\n",
                    gpu_acc == cpu_acc ? "MATCH" : "MISMATCH", gpu_acc, cpu_acc);
@@ -521,7 +535,7 @@ int main(int argc, char **argv)
                     uint32_t vw[4] = { 0x01020304u, 0x05060708u, 0x090a0b0cu, 0x0d0e0f10u };
                     HC128_Init(&st, (unsigned char *)kw, (unsigned char *)vw);
                     ca ^= st.P[0];
-                    for (uint32_t n = 0; n < vn; n++) { HC128_NextKeys(&st); ca ^= st.keystream[0]; }
+                    for (uint32_t n = 0; n < vn; n++) { HC128_NextKeys(&st); ca ^= ks_fold(st.keystream); }
                 }
                 lok = (ga == ca);
                 printf("    hcbench_lds against src/crypto/hc128.c: %s\n", lok ? "MATCH" : "MISMATCH");
