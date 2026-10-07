@@ -106,12 +106,12 @@ void cn_fast_hash(const void *data, size_t length, char *hash);
 #define CN_V8_INIT_SIZE_BLK 8
 
 /* v8 fetches its chain salt from inside the hash, after the AES fill, and the
- * seed it passes out is the fill's final chain state. A device that wants to
- * produce salts for a CPU therefore has to run the whole 1 MB fill per
- * candidate first, which on anything without an AES unit is ~655K software
- * block rounds. The per-nonce draws come back with the salt because they are
- * taken from the salt-advanced keystream and are not knowable any earlier.
- * PLAN-v8 Phase 6 B2, FINDINGS.md F46. */
+ * seed it passes out is the fill's final chain state, all eight lanes folded
+ * into 32 bytes. A device that wants to produce salts for a CPU therefore has
+ * to run the whole 1 MB fill per candidate first: 65,536 AES blocks of ten
+ * rounds, in eight chains of 8,192 dependent steps. The per-nonce draws come
+ * back with the salt because they are taken from the salt-advanced keystream
+ * and are not knowable any earlier. PLAN-v8 Phase 6 B2, FINDINGS.md F46, F81. */
 typedef struct {
     uint16_t xx;
     uint16_t yy;
@@ -247,9 +247,9 @@ int cn_slow_hash_known_answer_test(void);
 
 void cn_slow_hash(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters);
 void cn_slow_hash_v11(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
-/* v14 (CNA v8): v11 with salt_pad's extra-hash selector widened from three
- * entries to four, so Skein joins Blake, Groestl and JH. Same pad and
- * parameters as v11.
+/* v14 (CNA v8): v11's core at the same 1 MB pad with no salt_pad at all (D1),
+ * so neither the sweeps nor the extra hashes run. Same signature as v11; the
+ * hash depends on xx, yy and iters only through (xx-1)*yy + iters.
  *
  * Named for the hard fork, not the CNA generation, which is why there is no
  * v12 and why CNA v8 is called v14. The name previously held CNA v7, which was

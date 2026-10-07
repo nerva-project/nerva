@@ -100,20 +100,30 @@
 #endif
 
 /* Runs between the AES fill and the first thing that reads the salt. `text`
- * holds the fill's final chain state at this point, so the seed cannot be
- * produced without the fill; init_size_byte is 32 at the smallest blk, so
- * text[0..32) is always there. A NULL salt_fn leaves the context's salt and
- * the caller's parameters alone, which is what the benchmarks and the
- * self-test want. PLAN-v8 Phase 6 B2. */
+ * holds the fill's final chain state at this point. A NULL salt_fn leaves the
+ * context's salt and the caller's parameters alone, which is what the
+ * benchmarks and the self-test want. PLAN-v8 Phase 6 B2.
+ *
+ * The seed folds ALL of `text`, not its first 32 bytes. aes_pseudo_round
+ * encrypts each 16-byte lane independently, so the fill is eight separate
+ * chains, and text[0..32) is lanes 0 and 1 alone. Seeding from those let a
+ * device produce the salt after a quarter of the fill's AES. With the fold,
+ * every lane reaches the seed, so the seed needs the whole fill. FINDINGS F81.
+ * Byte-wise, so both arms and both byte orders compute the same bytes. */
 #define CN_V8_FETCH_SALT()                                   \
     do {                                                     \
         if (salt_fn != NULL)                                 \
         {                                                    \
+            unsigned char seed_[32];                         \
+            uint32_t s_;                                     \
             cn_v8_draw_t draw;                               \
+            memset(seed_, 0, sizeof(seed_));                 \
+            for (s_ = 0; s_ < init_size_byte; s_++)          \
+                seed_[s_ & 31] ^= text[s_];                  \
             draw.xx = xx;                                    \
             draw.yy = yy;                                    \
             draw.iters = iters;                              \
-            salt_fn(salt_user, text, salt, &draw);           \
+            salt_fn(salt_user, seed_, salt, &draw);          \
             xx = draw.xx;                                    \
             yy = draw.yy;                                    \
             iters = draw.iters;                              \

@@ -64,6 +64,23 @@ static void emit(const char *h)
 
 static const char in[] = "nerva live-algorithm known-answer vector";
 
+/* A copy of cn_selftest_salt in slow-hash.c, which is static there. The chain
+ * vectors depend on it, so the two must not drift. */
+static void gen_chain_salt(void *user, const unsigned char seed[32], char *salt_out, cn_v8_draw_t *draw_out)
+{
+    size_t i;
+    if (user != NULL && seed != NULL)
+        memcpy(user, seed, 32);
+    for (i = 0; i < CN_SALT_MEMORY; i++)
+        salt_out[i] = (char)(i * 31u + 7u);
+    if (draw_out != NULL)
+    {
+        draw_out->xx = 8;
+        draw_out->yy = 8;
+        draw_out->iters = 63;
+    }
+}
+
 int main(void)
 {
     cn_hash_context_t *ctx = cn_hash_context_create();
@@ -152,6 +169,26 @@ int main(void)
         }
     }
     printf("};\n");
+
+    /* The chain entry. The table above passes no salt callback, so it cannot
+     * see how the seed handed to the callback is derived from the fill. This
+     * pins that seed and the hash it leads to. gen_chain_salt must stay
+     * byte-for-byte what cn_selftest_salt in slow-hash.c does. */
+    {
+        static const char v8_in[] = "nerva cna v8 known-answer vector";
+        unsigned char got_seed[32];
+        memset(got_seed, 0, sizeof(got_seed));
+        memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+        cn_slow_hash_v14_chain(ctx, v8_in, sizeof(v8_in) - 1, h,
+                               CN_V8_INIT_SIZE_BLK, gen_chain_salt, got_seed);
+        printf("\n/* The chain entry with cn_selftest_salt's fixed salt and draws. */\n");
+        printf("static const unsigned char cn_v14_chain_seed_kat[32] = ");
+        emit((const char *)got_seed);
+        printf(";\n");
+        printf("static const unsigned char cn_v14_chain_kat[32] = ");
+        emit(h);
+        printf(";\n");
+    }
 
     cn_hash_context_free(ctx);
     return 0;

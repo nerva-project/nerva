@@ -716,8 +716,9 @@ namespace cryptonote
     };
 
     // Called from inside cn_slow_hash_v14, after the AES fill and before
-    // anything reads the salt. `seed` is the fill's final chain state, so a
-    // device cannot produce salts without first running the whole 1 MB fill.
+    // anything reads the salt. `seed` is the fill's final chain state with all
+    // eight AES lanes folded in, so a device cannot produce salts without first
+    // running the whole 1 MB fill. FINDINGS.md F81.
     //
     // The draws stay here, after the fill, because get_cna_v6_data re-seeds its
     // HC128 state from bytes it has already written: they depend on the salt's
@@ -738,13 +739,10 @@ namespace cryptonote
       HC128_State rng_state;
       HC128_Init(&rng_state, const_cast<unsigned char *>(seed), const_cast<unsigned char *>(seed) + 16);
 
-      // v6's windowed fill: ~95% of block reads come from the most recent
-      // CNA_V6_WINDOW_BLOCKS_V13 so they stay cache-resident, which stops per-nonce
-      // cost growing with chain length. The other ~5% still draw from the whole
-      // history, so a miner still needs the full block cache.
-      // D3: every pick draws from the whole chain, so the 5.3 MB window stops
-      // being the thing 95% of reads land in. The window fits in an FPGA's
-      // block RAM, which is what made it worth giving up. FINDINGS F66, F67.
+      // v6's chain fill, but with every pick drawn from the whole chain (D3).
+      // v13 still sends ~95% of its reads to a 5.3 MB window of recent blocks;
+      // v14 does not, because that window fits in an FPGA's block RAM, which is
+      // what made it worth giving up. FINDINGS F66, F67.
       c->db->get_cna_v6_data(salt_out, &rng_state, c->stable_height,
                              (uint32_t)CNA_V6_FULL_HISTORY_ODDS_V14);
 
@@ -788,9 +786,9 @@ namespace cryptonote
   //---------------------------------------------------------------
   bool get_block_longhash_v14(crypto::cn_hash_context_t *context, BlockchainDB &db, const blobdata &blob, crypto::hash &res, uint64_t height)
   {
-    // CryptoNight-Adaptive v8: v5 at v5's pad, with salt_pad's extra-hash
-    // selector widened from three entries to four. Mirrors
-    // get_block_longhash_v11 except for the chain fill, which is v6's.
+    // CryptoNight-Adaptive v8: v5's core at v5's 1 MB pad with no salt_pad
+    // (D1), over v6's chain fill drawing every pick from full history (D3).
+    // The salt is fetched from inside the hash, after the AES fill (B2).
     if (height < CN_SEED_MIN_HEIGHT)
       return false;
     const uint64_t stable_height = height - 256;
