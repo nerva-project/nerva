@@ -600,9 +600,13 @@ static void cn_selftest_salt(void *user, const unsigned char seed[32], char *sal
         salt_out[i] = (char)(i * 31u + 7u);
     if (draw_out != NULL)
     {
-        draw_out->xx = 3;
-        draw_out->yy = 3;
-        draw_out->iters = 64;
+        /* The busiest point consensus can draw: 119 steps, and salt_pad_v8
+         * runs (xx-1)*yy = 56 times. See the domain note in
+         * cn_slow_hash_self_test. Any caller comparing the chain entry against
+         * the caller-supplied-salt entry has to pass these same three. */
+        draw_out->xx = 8;
+        draw_out->yy = 8;
+        draw_out->iters = 63;
     }
 }
 
@@ -730,32 +734,55 @@ int cn_slow_hash_self_test(void)
      *
      * These are the variants that actually secure the chain (mainnet PoW
      * routes through cn_slow_hash_v11), and they're where HW and SW differ
-     * in r2's source buffer (&c on HW, &b on SW in slow-hash-impl.h). xx/yy
-     * picked small so the test runs in milliseconds but still triggers
-     * salt_pad at least once per inner level. */
+     * in r2's source buffer (&c on HW, &b on SW in slow-hash-impl.h).
+     *
+     * Every draw below is one consensus can actually produce. iters was 64 for
+     * both, and no caller can reach that: both derive it as a modulus by at
+     * most 64, so it lies in [0, 63]. v11's xx/yy were 2, and v11 draws both
+     * from [4, 8], so the one point its two arms were compared on was a point
+     * the chain never asks for. v10's xx/yy/zz/ww of 2 are reachable and are
+     * kept, since v10 draws them from roughly [2, 7]. */
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
     memset(ctx->salt, 0, CN_SALT_MEMORY);
-    cn_slow_hash_v10_hw(ctx, input, sizeof(input) - 1, hw, 64, 8, 2, 2, 2, 2);
+    cn_slow_hash_v10_hw(ctx, input, sizeof(input) - 1, hw, 63, 8, 2, 2, 2, 2);
     memset(ctx->salt, 0, CN_SALT_MEMORY);
-    cn_slow_hash_v10_sw(ctx, input, sizeof(input) - 1, sw, 64, 8, 2, 2, 2, 2);
+    cn_slow_hash_v10_sw(ctx, input, sizeof(input) - 1, sw, 63, 8, 2, 2, 2, 2);
     if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
 
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
     memset(ctx->salt, 0, CN_SALT_MEMORY);
-    cn_slow_hash_v11_hw(ctx, input, sizeof(input) - 1, hw, 64, 8, 2, 2);
+    cn_slow_hash_v11_hw(ctx, input, sizeof(input) - 1, hw, 63, 8, 4, 4);
     memset(ctx->salt, 0, CN_SALT_MEMORY);
-    cn_slow_hash_v11_sw(ctx, input, sizeof(input) - 1, sw, 64, 8, 2, 2);
+    cn_slow_hash_v11_sw(ctx, input, sizeof(input) - 1, sw, 63, 8, 4, 4);
     if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
 
     /* v14 (CNA v8). The two arms are separate copies whose r2 aliases a
      * different register on purpose, so a slip between them is invisible to
-     * review and would split the chain along the AES-NI line. xx/yy run to 3 so
-     * the inner loop runs more than once and actually varies the selector. */
+     * review and would split the chain along the AES-NI line.
+     *
+     * Both ends of the consensus domain, which is what this check used to miss
+     * entirely. get_block_longhash_v14 draws xx and yy from [4, 8] and iters
+     * from [0, 63] (cryptonote_tx_utils.cpp), so the single point this used to
+     * test, (3, 3, 64), was outside that range on all three axes: the arms were
+     * only ever compared where the chain never asks. (4, 4, 0) and (8, 8, 63)
+     * are the fewest and the most steps it can draw, 12 and 119, and the second
+     * runs salt_pad_v8 56 times against the old point's 6.
+     *
+     * Exhaustive coverage of the 5 x 5 x 64 product lives in
+     * contrib/powbench/t_v8_grid.c; this one gates startup, so it takes the
+     * corners. */
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
     memset(ctx->salt, 0, CN_SALT_MEMORY);
-    cn_slow_hash_v14_hw(ctx, input, sizeof(input) - 1, hw, 64, 8, 3, 3);
+    cn_slow_hash_v14_hw(ctx, input, sizeof(input) - 1, hw, 0, 8, 4, 4);
     memset(ctx->salt, 0, CN_SALT_MEMORY);
-    cn_slow_hash_v14_sw(ctx, input, sizeof(input) - 1, sw, 64, 8, 3, 3);
+    cn_slow_hash_v14_sw(ctx, input, sizeof(input) - 1, sw, 0, 8, 4, 4);
+    if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
+
+    memset(&ctx->random_values, 0, sizeof(ctx->random_values));
+    memset(ctx->salt, 0, CN_SALT_MEMORY);
+    cn_slow_hash_v14_hw(ctx, input, sizeof(input) - 1, hw, 63, 8, 8, 8);
+    memset(ctx->salt, 0, CN_SALT_MEMORY);
+    cn_slow_hash_v14_sw(ctx, input, sizeof(input) - 1, sw, 63, 8, 8, 8);
     if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
 
     /* The chain entry, which is the one consensus uses and the one nothing
@@ -780,7 +807,7 @@ int cn_slow_hash_self_test(void)
      * salt and the same draws, which is what stops the two from drifting */
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
     cn_selftest_salt(NULL, NULL, ctx->salt, NULL);
-    cn_slow_hash_v14_hw(ctx, input, sizeof(input) - 1, sw, 64, 8, 3, 3);
+    cn_slow_hash_v14_hw(ctx, input, sizeof(input) - 1, sw, 63, 8, 8, 8);
     if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
 
     /* v14 must also differ from v11 on the same inputs, which catches a build
@@ -789,7 +816,7 @@ int cn_slow_hash_self_test(void)
      * in all of those. */
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
     memset(ctx->salt, 0, CN_SALT_MEMORY);
-    cn_slow_hash_v11_hw(ctx, input, sizeof(input) - 1, sw, 64, 8, 3, 3);
+    cn_slow_hash_v11_hw(ctx, input, sizeof(input) - 1, sw, 63, 8, 8, 8);
     if (memcmp(hw, sw, HASH_SIZE) == 0) ok = 0;
 
     /* v13: 8 MB scratchpad + VM. seed is a fixed 32-byte value; salt and

@@ -3018,6 +3018,24 @@ so the one point the arms were ever compared on is **outside the range the chain
 asks for**. That is a gap in v8 as it stands today and has nothing to do with
 D1.
 
+*Fixed 2026-10-07, and it was wider than this entry found.* v11 had the same
+gap, at `(xx, yy) = (2, 2)` against its own drawn `[4, 8]`
+([cryptonote_tx_utils.cpp:893](../../src/cryptonote_core/cryptonote_tx_utils.cpp#L893)),
+and both v10 and v11 passed an `iters` of 64 that no caller can produce, since
+both derive it as a modulus by at most 64. **v11 is a live algorithm**, so the
+gap was not confined to the unreleased one. v14 now takes both ends of its
+domain, 12 steps at `(4, 4, 0)` and 119 at `(8, 8, 63)`, the second running
+`salt_pad_v8` 56 times against the old point's 6.
+
+Inert with respect to consensus, and checked rather than asserted: `t_kat`
+passes both gates on Zen 4 and on the i7-7700HQ, with `hardware AES dispatch:
+yes` on both so the comparison actually ran. The known-answer vectors are
+untouched, and they are what would catch a change that moved both arms
+together. Worth noting that a self-test failure is **fatal** at startup
+([util.cpp:827](../../src/common/util.cpp#L827) refuses to start), so pointing
+the test at new draws is a change that has to be run on more than one
+microarchitecture before it ships, not reasoned about.
+
 It matters because the two arms are separate copies of the core, not one body
 behind a macro, and they differ in source on purpose: `r2` aliases `&c` in the
 hardware arm and `&b` in the software arm. A disagreement there splits mining
