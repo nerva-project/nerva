@@ -4763,6 +4763,78 @@ to verify than shipping neither, C-2 at 2.338x against a 2.50x threshold.
 point. v8 has never validated a block, so changing what it computes is a
 question we are allowed to ask. v13 validates mainnet today and is untouched.
 
+### F73. D3 is implemented: v14 draws every pick from full history, v13 keeps its window
+
+*2026-10-07. The port. The runtime observation on the v14 path is owed and is
+named as such below.*
+
+#### 1. What changed, and what it did not cost
+
+`CNA_V6_FULL_HISTORY_ODDS_V14` is 256, and `v14_fetch_salt` passes it.
+`get_block_longhash_v13` passes the old 13. **The fork cost the
+pre-registration said would not apply did not apply:** `odds` became one
+parameter threaded through `get_cna_v6_data`, the two fill bodies and the
+selfcheck call. There is no v14-only copy of the fill and no second consensus
+path to keep in step.
+
+**The known-answer vectors did not move**, and that is expected rather than
+lucky: the KAT entry point takes no salt callback, so `CN_V8_FETCH_SALT` does
+nothing and the fill never runs. D3 changes which blocks a real nonce reads,
+not the hash function. `t_kat` passes both gates unchanged.
+
+#### 2. The window is now version-scoped, and the compiler enforces it
+
+At odds 256 every pick is full-history, so the window branch is unreachable for
+v14 while v13 still uses it. One constant meaning two things is the kind of
+thing this project has been bitten by, so it is pinned from both directions:
+
+- renamed to **`CNA_V6_WINDOW_BLOCKS_V13`**, so a reader sees the scope
+- a **`static_assert`** in db_lmdb.cpp ties the name to the value:
+  `CNA_V6_FULL_HISTORY_ODDS_V14 == 256`, with a message pointing at F66 and F67
+
+The name is a claim that nothing structural enforces, since `get_cna_v6_data`
+is shared and only the value keeps v14 out of the window branch. The assert is
+what makes the claim true.
+
+**The assert was tested by making it fail.** Setting v14's odds to 128 gives
+`static assertion failed: v14 below 256 makes the window live again`. An assert
+that is never seen to fire is indistinguishable from one that does not compile,
+which is worth thirty seconds to rule out.
+
+#### 3. What is NOT yet verified, stated plainly
+
+**That the v14 call site passes 256 at runtime.** The constant is passed
+directly at one readable call site and the build type-checks it, but that is
+reading, not observing.
+
+**No consensus test can catch this.** If the odds were mis-wired, every node
+would be mis-wired identically and would agree with each other perfectly, so a
+testnet round would pass with D3 silently inert. That is the same shape as F61,
+where instrumented code looked dead for hours because its log category was
+never enabled.
+
+So the daemon now **announces each distinct odds value once** at INFO:
+`chain fill: full-history odds 256 of 256, window unused`. It is cheap, it is
+permanent, and it turns "the call site reads correctly" into "the daemon said
+so". F61's lesson is that an instrumented path which never announces itself
+cannot be distinguished from one that never runs.
+
+Observing it needs v14 blocks, which mainnet does not have: HF14 sits at
+4,500,000 and the chain is at 4,431,763. The measurement is therefore a
+mainnet-copy experiment, recorded separately, and testnet is the wrong venue
+for the cost half of it because its block cache is far smaller than mainnet's
+237 MB and the memory behaviour would not transfer.
+
+#### 4. What the cost is expected to be
+
+From measurements already taken, so these are predictions to check against:
+
+| | source |
+|---|---|
+| fill, odds 13 to 256 | **1.1949x** in the daemon on real blocks, F68 |
+| same, harness | 1.183x, F67 |
+| whole nonce with D1 also in | 11% **faster** than shipping neither, F70 |
+
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
 `contrib/hf14checks/CMakeLists.txt` names the resized translation units

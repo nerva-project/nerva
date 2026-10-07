@@ -686,7 +686,10 @@ namespace cryptonote
     HC128_State rng_state;
     HC128_Init(&rng_state, (unsigned char *)blob_hash.data, (unsigned char *)blob_hash.data + 16);
 
-    db.get_cna_v6_data(context->salt, &rng_state, stable_height);
+    // v13 keeps the 95/5 window it shipped with. It validates mainnet, so this
+    // value is not ours to change; D3 raised the odds for v14 only.
+    db.get_cna_v6_data(context->salt, &rng_state, stable_height,
+                       (uint32_t)CNA_V6_FULL_HISTORY_ODDS);
 
     // Build 32-byte program seed: blob_hash XOR first 32 bytes of chain salt.
     // This seed is unique per (height, nonce) and requires the blockchain DB,
@@ -736,10 +739,14 @@ namespace cryptonote
       HC128_Init(&rng_state, const_cast<unsigned char *>(seed), const_cast<unsigned char *>(seed) + 16);
 
       // v6's windowed fill: ~95% of block reads come from the most recent
-      // CNA_V6_WINDOW_BLOCKS so they stay cache-resident, which stops per-nonce
+      // CNA_V6_WINDOW_BLOCKS_V13 so they stay cache-resident, which stops per-nonce
       // cost growing with chain length. The other ~5% still draw from the whole
       // history, so a miner still needs the full block cache.
-      c->db->get_cna_v6_data(salt_out, &rng_state, c->stable_height);
+      // D3: every pick draws from the whole chain, so the 5.3 MB window stops
+      // being the thing 95% of reads land in. The window fits in an FPGA's
+      // block RAM, which is what made it worth giving up. FINDINGS F66, F67.
+      c->db->get_cna_v6_data(salt_out, &rng_state, c->stable_height,
+                             (uint32_t)CNA_V6_FULL_HISTORY_ODDS_V14);
 
       HC128_NextKeys(&rng_state);
       size_t rng_key_idx = 0;

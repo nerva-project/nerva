@@ -123,8 +123,31 @@ typedef void (*cn_v8_salt_fn)(void *user, const unsigned char seed[32],
 
 #define CN_SALT_MEMORY 262144
 
-#define CNA_V6_WINDOW_BLOCKS     100000U        // recent-block window for sliding reads (~5.6 MB)
+/* The sliding window, ~5.6 MB of recent blocks, which a windowed fill keeps
+ * cache-resident. Named _V13 because that is the only algorithm it still
+ * affects: v14 passes CNA_V6_FULL_HISTORY_ODDS_V14 below, at which every pick
+ * is full-history and the window branch is unreachable. That is not structural,
+ * it follows from the value being 256, so db_lmdb.cpp carries a static_assert
+ * tying the two together. Change one and the compiler makes you consider the
+ * other. */
+#define CNA_V6_WINDOW_BLOCKS_V13 100000U
 #define CNA_V6_FULL_HISTORY_ODDS 13U            // out of 256 (~5%) go to full history
+
+/* v14 draws EVERY pick from full history. D3, adopted 2026-10-07.
+ *
+ * The 13 above was never argued for, only inherited: it was chosen so a syncing
+ * node kept 95% of its reads inside the window and therefore in cache.
+ * That also hands the same residency to an attacker, and the window is 5.3 MB,
+ * which fits in an FPGA's block RAM. At 13 of 256 an FPGA serves 94.9% of its
+ * reads on-chip; at 256 it serves none.
+ *
+ * Costs measured on a 7950X and an i7-7700HQ against the thresholds fixed in
+ * D3-ODDS-PREREG.md before the run: the whole-nonce cross-machine spread moves
+ * 2.171x to 2.338x with D1 also in, against a 2.50x limit, and sync gains
+ * nothing at the fork because PoW is skipped below ASSUME_VALID_HEIGHT.
+ *
+ * v13 keeps 13 and must: it validates mainnet today. FINDINGS F66, F67, F68. */
+#define CNA_V6_FULL_HISTORY_ODDS_V14 256U       // every pick draws from full history
 #define CN_RANDOM_VALUES 32
 
 enum {

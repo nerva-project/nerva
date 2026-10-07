@@ -2757,11 +2757,14 @@ void BlockchainLMDB::get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t
 
 static void cna_v6_data_reference(const block_cache_data *cache, uint64_t height,
                                   uint64_t window_size, uint64_t window_base,
-                                  HC128_State *rng_state, char *out)
+                                  HC128_State *rng_state, char *out, uint32_t odds)
 {
   size_t rng_key_idx = 0;
+  /* The selector draw happens whether or not its branch is taken, so odds
+   * changes which blocks are read but never how much keystream is consumed.
+   * At odds 256 the comparison is always true and the window is never read. */
   auto pick_index = [&]() -> uint64_t {
-    if (HC128_U32(rng_state, &rng_key_idx, 256) < CNA_V6_FULL_HISTORY_ODDS)
+    if (HC128_U32(rng_state, &rng_key_idx, 256) < odds)
       return HC128_U32(rng_state, &rng_key_idx, height);
     return window_base + HC128_U32(rng_state, &rng_key_idx, window_size);
   };
@@ -2954,7 +2957,7 @@ static std::atomic<uint64_t> g_odds_cycles[2] = {{0}, {0}};
 static std::atomic<uint64_t> g_odds_calls[2]  = {{0}, {0}};
 static std::atomic<uint64_t> g_odds_turn(0);
 
-void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t height)
+void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t height, uint32_t odds)
 {
   CHECK_AND_ASSERT_MES(height > 0, , "get_cna_v6_data called with height == 0");
 
@@ -2996,12 +2999,32 @@ void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t
     }
   } fill_timer{ab_mode ? cn_fill_tsc() : 0, arm, ab_mode};
   // Sliding window variant of get_cna_v5_data: 95% of block reads are biased
-  // to the most recent CNA_V6_WINDOW_BLOCKS blocks (~5.6 MB), which fits in L3
+  // to the most recent CNA_V6_WINDOW_BLOCKS_V13 blocks (~5.6 MB), which fits in L3
   // and reduces post-HF13 sync time regardless of chain length.  The remaining
   // ~5% draw from the full history to preserve pool resistance.
   build_block_cache(height);
   boost::shared_lock<boost::shared_mutex> cache_lock(m_block_cache_lock);
-  const uint64_t window_size = (height > (uint64_t)CNA_V6_WINDOW_BLOCKS) ? (uint64_t)CNA_V6_WINDOW_BLOCKS : height;
+  /* The window is reachable only while some pick can take the else branch
+   * below, which needs odds < 256. v14 passes exactly 256, so for v14 this is
+   * computed and never read. Pinned rather than left to a comment: drop v14's
+   * odds and an FPGA goes back to serving ~95% of its reads from the 5.3 MB
+   * window held in block RAM, which is the property D3 bought. */
+  static_assert(CNA_V6_FULL_HISTORY_ODDS_V14 == 256,
+                "v14 below 256 makes the window live again: see FINDINGS F66, F67");
+
+  /* Announce each distinct odds value once, so which fill a daemon is actually
+   * running can be read off the log rather than inferred from the height. F61
+   * is the reason: an instrumented path that never says anything is
+   * indistinguishable from one that never runs, and that cost hours. Across a
+   * fork this prints twice, which is the interesting moment. */
+  {
+    static std::atomic<uint32_t> announced(0xFFFFFFFFu);
+    uint32_t prev = announced.load(std::memory_order_relaxed);
+    if (prev != odds && announced.compare_exchange_strong(prev, odds, std::memory_order_relaxed))
+      MGINFO("chain fill: full-history odds " << odds << " of 256"
+             << (odds >= 256 ? ", window unused" : ", windowed"));
+  }
+  const uint64_t window_size = (height > (uint64_t)CNA_V6_WINDOW_BLOCKS_V13) ? (uint64_t)CNA_V6_WINDOW_BLOCKS_V13 : height;
   const uint64_t window_base = height - window_size;
 
   /* NERVA_SALT_ODDS_AB: what is the 100,000-block window actually worth, in
@@ -3069,7 +3092,7 @@ void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t
   // A dedicated selector byte precedes each index pick; consecutive HC128
   // outputs are cryptographically independent so selector and index are uncorrelated.
   auto pick_index = [&]() -> uint64_t {
-    if (HC128_U32(rng_state, &rng_key_idx, 256) < CNA_V6_FULL_HISTORY_ODDS)
+    if (HC128_U32(rng_state, &rng_key_idx, 256) < odds)
       return HC128_U32(rng_state, &rng_key_idx, height);
     return window_base + HC128_U32(rng_state, &rng_key_idx, window_size);
   };
@@ -3082,7 +3105,7 @@ void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t
   if (arm == 0)
   {
     cna_v6_data_reference(m_block_cache.data(), height, window_size, window_base,
-                          rng_state, out);
+                          rng_state, out, odds);
     return;
   }
 
@@ -3096,7 +3119,7 @@ void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t
     rng_before = *rng_state;
     ref_out.resize(CN_SALT_MEMORY);
     cna_v6_data_reference(m_block_cache.data(), height, window_size, window_base,
-                          rng_state, ref_out.data());
+                          rng_state, ref_out.data(), odds);
     rng_after_ref = *rng_state;
     *rng_state = rng_before;
   }

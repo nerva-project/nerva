@@ -216,7 +216,7 @@ full fill. Do not move them to the stable block hash.
 
 Ranked by evidence behind them, not by appeal.
 
-### D1. Remove `salt_pad_v8` and its extra hashes. 21.1% of a nonce, provably not hard.
+### D1. ADOPTED 2026-10-07. Remove `salt_pad_v8` and its extra hashes. 21.1% of a nonce, provably not hard.
 
 **The strongest candidate, and the only one that improves every goal at once.**
 
@@ -322,7 +322,7 @@ salt size, and the real fill is a random-access gather against a 236 MB block
 cache whose behaviour under a doubled working set is not linear and has not been
 measured.
 
-### D3. Raise the full-history draw odds. REOPENED 2026-10-07, closed on the wrong metric.
+### D3. Raise the full-history draw odds. ADOPTED 2026-10-07 at 256 of 256.
 
 **Measured 2026-10-06 and it has nowhere to go.** Forcing *every* draw to full
 history, `odds = 256`, moves the fill from 1.06x the HC-128 floor to 1.29x. So

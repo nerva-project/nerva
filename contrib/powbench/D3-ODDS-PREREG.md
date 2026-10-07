@@ -316,6 +316,17 @@ measurement including a number F62 had already published.
 conditions, and treat the predictions as a way of finding out how the system
 works rather than as a forecast worth trusting.**
 
+**IMPLEMENTED 2026-10-07, F73.** `CNA_V6_FULL_HISTORY_ODDS_V14` is 256 and
+`v14_fetch_salt` passes it; v13 keeps 13. The fork cost this file predicted
+would not apply did not: one parameter, no second consensus path. The window
+constant is renamed `_V13` and a static_assert ties the name to the value.
+
+**Still owed:** C-5's testnet round, and a runtime observation that the v14 path
+really passes 256. The second is not pedantry: a mis-wire would leave every node
+mis-wired identically, so they would agree with each other and a testnet round
+would pass with this change inert. The daemon now announces the odds once at
+INFO so the question can be answered by looking rather than by reasoning.
+
 **Decision: adopt 256 of 256 at HF14**, subject to C-4 and C-5. It is the most
 efficient point on the curve rather than a compromise, because the cost is
 convex, and it retires `CNA_V6_WINDOW_BLOCKS` entirely, which removes the
