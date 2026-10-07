@@ -671,7 +671,7 @@ static void cna_core(__global ulong *b0, const ulong qw,
                      __constant uint *te0, __constant uint *rk,
                      __global ulong *out, __global ulong *b1, __global ulong *b2,
                      __global ulong *b3, const uint per_buf,
-                     const int fp_mode, const uint fp_rounds)
+                     const int fp_mode, const uint fp_rounds, const int no_sweep)
 {
     const size_t gid = get_global_id(0);
     __global ulong *pad = PICK_BUF(gid, per_buf, qw, b0, b1, b2, b3);
@@ -743,6 +743,11 @@ static void cna_core(__global ulong *b0, const ulong qw,
             // salt_pad: a strided sweep of the whole pad against the salt.
             // The 200-byte extra_hash is replaced by a mix64 chain of the same
             // call count; measured at well under 1% of a nonce.
+            //
+            // D1 DELETED ALL OF THIS from consensus on 2026-10-07, dbd4fd7.
+            // no_sweep is a literal at every call site, so the compiler drops
+            // this block from cna_v8_d1 and leaves cna_v8 exactly as it was.
+            if (!no_sweep) {
             salt_acc = mix64(salt_acc ^ a0, (uint)(k * 31u + l));
             uint off1 = ((uint)(salt_acc & 63)) + 1u;
             uint off2 = (((uint)(salt_acc >> 8) * off1) % 125u) + 4u;
@@ -753,6 +758,7 @@ static void cna_core(__global ulong *b0, const ulong qw,
             for (uint jj = off1; jj < nbytes; jj += off2) {
                 p8[jj] ^= s8[sx & salt_mask8];
                 sx++;
+            }
             }
         }
     }
@@ -790,6 +796,28 @@ static void cna_core(__global ulong *b0, const ulong qw,
     out[gid] = acc ? acc : 1UL;
 }
 
+// v8 AS SHIPPED, post-D1. Identical to cna_v8 with the salt_pad sweep and its
+// mix64 stand-in removed, which is what commit dbd4fd7 did to consensus on
+// 2026-10-07. Added because every GPU figure this project has published was
+// taken against cna_v8, which models an algorithm that no longer exists: the
+// sweeps were 23.9% of a nonce (F57) and are the part F59 found to be
+// AES-neutral, so leaving them in understates v8's current GPU resistance.
+//
+// It is a separate kernel rather than an edit to cna_v8 so that one run gives
+// both and the delta is within-run, which F63 section 3 establishes is the only
+// form that transfers between machines.
+__kernel void cna_v8_d1(__global ulong *b0, const ulong qw,
+                     __global const uchar *params, __global ulong *salts_all,
+                     const uint salt_qw,
+                     __constant uint *te0, __constant uint *rk,
+                     __global ulong *out, __global ulong *b1, __global ulong *b2,
+                     __global ulong *b3, const uint per_buf,
+                     const uint fp_rounds)
+{
+    cna_core(b0, qw, params, salts_all, salt_qw, te0, rk, out, b1, b2, b3, per_buf,
+             -1, fp_rounds, 1);
+}
+
 __kernel void cna_v8(__global ulong *b0, const ulong qw,
                      __global const uchar *params, __global ulong *salts_all,
                      const uint salt_qw,
@@ -799,7 +827,7 @@ __kernel void cna_v8(__global ulong *b0, const ulong qw,
                      const uint fp_rounds)
 {
     cna_core(b0, qw, params, salts_all, salt_qw, te0, rk, out, b1, b2, b3, per_buf,
-             -1, fp_rounds);
+             -1, fp_rounds, 0);
 }
 
 #ifdef CN_HAVE_FP64
@@ -812,7 +840,7 @@ __kernel void cna_v8_fp_rne(__global ulong *b0, const ulong qw,
                             const uint fp_rounds)
 {
     cna_core(b0, qw, params, salts_all, salt_qw, te0, rk, out, b1, b2, b3, per_buf,
-             0, fp_rounds);
+             0, fp_rounds, 0);
 }
 
 __kernel void cna_v8_fp(__global ulong *b0, const ulong qw,
@@ -824,7 +852,7 @@ __kernel void cna_v8_fp(__global ulong *b0, const ulong qw,
                         const uint fp_rounds)
 {
     cna_core(b0, qw, params, salts_all, salt_qw, te0, rk, out, b1, b2, b3, per_buf,
-             1, fp_rounds);
+             1, fp_rounds, 0);
 }
 #endif /* CN_HAVE_FP64 */
 

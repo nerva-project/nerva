@@ -3956,7 +3956,16 @@ control pair first, every time.
 The pad question is answered and the answer is "not much": about 2x at 4 MB for
 2.4x verification. More useful is what it implies with F62. The component
 ratios are HC-128 12.1x, AES roughly 6x, gather 0.6x against us, divergence
-1.9x, and a whole nonce lands near 9x. **An average cannot exceed its largest
+1.9x, and a whole nonce lands near 9x.
+
+*VOID, 2026-10-07 later the same day. Every input to this paragraph was wrong.*
+HC-128 is **6.04x** (F76: the work-item grid skipped the peak), the core is
+**64.9x** (F77: B3 ran, and the AES term here was a CPU proxy), and a whole
+nonce measures **18.8x** rather than composing to 9x. The ceiling argument below
+is kept for the shape of the reasoning, which is sound, and for none of its
+numbers.
+
+**An average cannot exceed its largest
 term, so rebalancing v8's existing parts is bounded by HC-128's 12.1x, and v8 is
 already at about three quarters of that.**
 
@@ -4979,6 +4988,295 @@ are a part of it, worth 12.8% between them by F74.
 **It is the laptop**, which F58 puts at roughly 2.2x slower than the desktop, so
 the absolute milliseconds are that machine's. The 3.98x ratio is within-machine
 and is the figure that transfers.
+
+### F76. HC-128's GPU gate is 6.0x, not 12.1x, because the work-item grid skipped the peak; and the reseeds are confirmed as the mechanism but priced out as a lever
+
+*2026-10-07, the first of the three measurements opened after D1 and D3 shipped.
+`t_hc128` extended to sweep the reseed mix and to resolve the work-item curve.
+Transcripts in `results/hc128-reseed-sweep-2026-10-07.txt` (fine grid, the one
+to read) and `results/hc128-reseed-sweep-coarse-2026-10-07.txt`.*
+
+Two results. The second is the one the measurement was built for and it confirms
+F64. The first was not being looked for and it halves a number this project has
+built three arguments on.
+
+#### 1. The correction: 12.4x was a resolution failure, and the old points still reproduce
+
+F62 published HC-128 at 12.1x and F64 reproduced it at 12.4x, both from a
+work-item array of `{1024, 8192, 32768, 131072}`. F64 applied F66's void test,
+found the peak interior at 8,192, and passed it.
+
+**The peak is at 4,096, which neither run sampled.** Filling the grid in:
+
+| work items | rounds/s, nextper 40 |
+|---|---|
+| 1,024 | 3.533e5 |
+| 2,048 | 6.987e5 |
+| 3,072 | 8.852e5 |
+| **4,096** | **1.027e6** |
+| 5,120 | 8.461e5 |
+| 6,144 | 5.964e5 |
+| 8,192 | 5.063e5 |
+
+A smooth interior maximum with a shoulder on both sides, reproduced at every
+point of the reseed sweep and across two runs with different grids.
+
+**The old points reproduce, which is what makes this a resolution failure rather
+than a disagreement.** At 1,024 F64 read 3.431e5 against 3.533e5 here, at 8,192
+4.923e5 against 5.063e5, and the CPU side 6.107e6 against 6.207e6. Everything
+F64 measured is confirmed to within a few percent. It simply never looked
+between 1,024 and 8,192, an 8x gap with the answer inside it.
+
+| | published | corrected |
+|---|---|---|
+| **HC-128, GPU against CPU** | **12.1x to 12.4x** | **6.04x** |
+
+Two bracketing control arms at the shipped mix read 6.04x and 6.05x, and the
+drift control is **0.2%**, so this is not a noisy reading.
+
+**The lesson is sharper than F66's and is the third time this harness family has
+produced a figure that was really a grid artifact.** F66 established that a peak
+at the end of the swept range voids the row. That test is necessary and **not
+sufficient**: F64's peak was interior and still wrong, because an interior peak
+on a grid with 8x gaps locates nothing. The rule to carry: *a peak is only worth
+the resolution of the grid around it*. `t_hc128`'s array now has twelve points
+with the region around the peak sampled at 1,024-item spacing.
+
+#### 2. The reseeds are the mechanism, measured rather than inferred
+
+F64 argued from a paper's units that the gate is the reseed frequency and not
+the 4 KB state, since a throughput figure in Gbps amortises key setup away and
+our fill never amortises one. That was an inference. Sweeping the mix tests it
+directly: at `nextper = 0` every round is a key setup, and at large `nextper` the
+setup amortises exactly as the paper's regime does.
+
+| NextKeys per Init | GPU is worse by | against shipped |
+|---|---|---|
+| **0, pure key setup** | **7.51x** | 1.24x |
+| 10 | 7.23x | 1.20x |
+| **40, shipped** | **6.04x** | 1.00x |
+| 160 | 4.46x | 0.74x |
+| 640, keystream-dominated | **3.40x** | 0.56x |
+
+**Monotonic, and F64 is confirmed.** The 4 KB state on its own is worth 3.40x;
+the reseeds take it to 6.04x and would reach 7.51x in the limit. So reseed count
+is a mechanism and not a dial, and F64's instruction that it must not be
+*decreased* is now measured: halving the reseed rate would cost 14% of the gate.
+
+The same sweep prices the cipher directly. Fitting per-round cost at one thread
+gives **Init = 1.99 us and NextKeys = 0.0159 us**, so one key setup is worth
+**125 keystream blocks**, and at the shipped mix Init is **76.5%** of the fill's
+cipher cost. F60 reached two thirds by a different route and F64 quoted 76%.
+Three independent confirmations.
+
+#### 3. So the reseed lever is real and still not worth pulling
+
+F67 section 4 priced doubling the reseed rate at roughly 2x on the fill without
+knowing what it buys. Both halves are now measured. Reseeding every 8 bodies
+instead of 16 gives 512 inits against the same ~10,500 NextKeys, so
+`nextper` falls to 20.5:
+
+| | fill cipher cost | GPU gate |
+|---|---|---|
+| shipped, reseed every 16 | 679 us | 6.04x |
+| **reseed every 8** | **1,186 us, 1.75x** | **6.65x, +10.0%** |
+| reseed every 32 | 422 us, 0.62x | 5.18x, -14% |
+
+**1.75x on the fill to buy 10% on one component of goal 1.** The fill is about
+70% of a post-D1 nonce, so that is roughly 1.5x on every honest nonce and on
+every block of sync. Decisively a bad trade, and the curve is convex in the
+unhelpful direction: the reseeds we already have are cheap to keep and expensive
+to add to. **Option 3 is closed as a lever, for the second time and now on both
+sides of the trade.**
+
+#### 4. What the 2x correction does and does not move
+
+**It does not move any decision taken to date**, and C-7 moves slightly in our
+favour rather than cancelling exactly, which is worth stating precisely because
+the loose version of this claim was written first:
+
+- **C-7, D3's GPU criterion, improves from about -14.5% to about -13.6%**,
+  against a -20% threshold. The correction is *not* a clean cancellation: it
+  halves the GPU's cipher term while leaving its memory term alone, so the extra
+  full-history reads are now a larger fraction of what a card pays. Taking F66's
+  own numbers, the GPU's slowdown from odds 13 to 256 goes 1.011x to 1.022x
+  against the CPU's unchanged 1.183x. The *level* falls from 11.4x to about
+  5.7x, but the criterion was written on the regression and not the level.
+- **F66 section 3 still holds.** Its point was that the GPU's memory term is
+  noise beside its cipher term, 10.8 us against 8,504 us. The cipher term halves
+  to about 4,250 us and memory is still a quarter of one percent of it.
+- **F70's whole-nonce sweep survives**, having been computed across a range of
+  core ratios precisely because the core's was unknown. The corrected fill
+  figure of ~5.7x now sits inside that swept range rather than above it.
+- **D5 stays rejected.** It deletes the component this entry just confirmed is
+  the gate.
+
+**It voids the ceiling argument, which is the real cost.** PLAN-v8-PHASE8 and
+F63 section 5 both state that rebalancing v8 is bounded by HC-128's 12.1x and
+that a whole nonce sits near 9x, "about three quarters of the ceiling". With
+HC-128 at 6.04x the composed 9x **exceeds its own largest term**, which is
+impossible, so at least one of the two is wrong. The 9x was composed using an
+AES term of roughly 6x that F59 took from a CPU T-table proxy rather than from a
+card.
+
+**So B3 stops being optional.** It was the cheapest of the three measurements and
+is now the one that decides whether v8's headline GPU figure is 9x or something
+closer to 6x, and therefore whether there is any headroom left in rebalancing at
+all. That is the next entry.
+
+### F77. B3 measured: the hash core is 65x against a card and the fill's cipher is 6x, so the share lever in PLAN-v8-PHASE8 points the wrong way
+
+*2026-10-07, the second of the three measurements opened after D1 and D3
+shipped. It needed two defects in the GPU harness fixed first, and those are
+section 1 because they invalidate figures this project has published.
+Transcripts in `results/b3-core-only-2026-10-07.txt`,
+`results/b3-whole-nonce-2026-10-07.txt` and
+`results/fill-serial-arm-2026-10-07.txt`.*
+
+B3 has been the named open question since PLAN-v8 and has never run. F70 swept
+the core's GPU ratio over 3, 6 and 10 because nobody had measured it, and
+concluded the sweep made the answer not matter. **It is 65, outside that range
+by a factor of six, and the conclusion it supported is reversed.**
+
+#### 1. Two things the harness was measuring that the daemon does not run
+
+Both found while preparing the measurement, neither being looked for.
+
+**It modelled pre-D1 v8.** `vm_ref.h` and `vm_kernels.cl.h` still ran the
+`salt_pad` sweep and its mix64 stand-in inside every `xx`/`yy` step, which D1
+deleted from consensus the same morning (dbd4fd7). So **every GPU figure in this
+file was taken against an algorithm that no longer exists**, including F63's pad
+curve, which is the entire evidence base for growing the pad.
+
+**It modelled the serial fill.** `chain_fill.h` was ported from
+`cna_v6_data_reference` and has no prefetching, while consensus has run the
+run-ahead (4fe2a39) since before v14 existed. That barely mattered at odds 13,
+where 95% of reads are window hits with nothing to overlap. After D3 it matters
+a great deal.
+
+Both are fixed. `cna_v8_d1` is a new kernel rather than an edit, so `cna_v5`,
+`cna_v8` and the FP kernels are byte-for-byte what they were and one run gives
+the delta within-run. `chain_fill_v6_run` mirrors `cna_v6_data_run_ahead`, and
+gpubench now refuses to time it unless it reproduces the serial arm exactly at
+both odds, which is the gate db_lmdb.cpp already applies in the daemon.
+
+**The repaired harness reproduces three independent prior measurements**, which
+is what says the repair is right rather than merely different:
+
+| | prior | gpubench now |
+|---|---|---|
+| D1's verification speedup | 1.313x, F57, daemon | **1.30x** |
+| D3's cost on a nonce | 1.109x, F70 | **1.139x** |
+| D1 and D3 together | 0.889x, F70 | **0.879x** |
+
+#### 2. B3, both arms core-only
+
+`nofill` drops the chain fill from the CPU arm; the GPU arm never had it. 1%
+load, control drift 0.294%, checksum gate passed on every row including the new
+kernel. The `v8 D1` and `v8 D1+D3` rows agree to 0.6%, as they must, since D3
+touches only the fill: a free control on the change itself.
+
+| core only | GPU H/s | CPU H/s, 32T | CPU is better by |
+|---|---|---|---|
+| v5 1MB, port control | 619.8 | 25,871 | 41.7x |
+| v8 pre-D1 | 621.5 | 25,751 | 41.5x |
+| **v8 post-D1** | **829.2** | **53,778** | **64.9x** |
+
+v5 and pre-D1 v8 are the same GPU work by construction and agree to 0.5%, so
+this is not a transcription artifact.
+
+**D1 is worth 1.56x on the core's GPU ratio**, measured on a card. F59 predicted
+"roughly doubles" from a CPU T-table proxy, so the direction holds and the size
+is smaller. D1 removed the AES-neutral half and left the gate, which is a better
+reason than the one in its own record.
+
+#### 3. The whole nonce is 18.8x, not the 9x this project has published
+
+Shipped fill, 5% load, control drift 1.004%.
+
+| whole nonce | GPU:CPU | CPU is better by | verify, 1T |
+|---|---|---|---|
+| v5 1MB | 0.0588x | 17.0x | 2.02 ms |
+| v8 pre-D1 | 0.0486x | **20.6x** | 1.42 ms |
+| v8, D1 only | 0.0477x | **21.0x** | 1.12 ms |
+| **v8, D1 + D3, shipped** | **0.0532x** | **18.8x** | **1.24 ms** |
+
+- **D1 is GPU-neutral on a whole nonce, +2%**, while making verification 1.27x
+  cheaper. It improves the core's ratio by 1.56x and shrinks the core's share at
+  the same time, and the two nearly cancel.
+- **D3 costs 10.6%** of whole-nonce GPU resistance, 21.0x to 18.8x.
+- **The pair costs 8.7%.** F70 predicted **+8 to 10%** and had the sign wrong,
+  because it swept the core ratio over 3, 6 and 10 and wrote "the sign does not
+  flip anywhere in the plausible range". The range was right about itself and
+  wrong about where the answer was. Its own table shows the benefit falling as
+  the ratio rises, 9.6% at 3 to 7.7% at 10, so the direction was visible and
+  nobody extrapolated it.
+
+This does not make D3 a wrong decision. Its case was anti-FPGA, retiring the
+5.3 MB window that F66 showed is block-RAM resident, and that stands untouched.
+What it does mean is that **C-7 was scoped to the fill and could not see the
+whole-nonce price**, which is 10.6% against the -17% it reported on the fill
+alone.
+
+#### 4. What the run-ahead is worth now depends on the odds
+
+The same rows with `serialfill`, which is the reference loop:
+
+| | serial | run-ahead | worth |
+|---|---|---|---|
+| D1, odds 13 | 1.24 ms | 1.23 ms | **~1.0x** |
+| D1 + D3, odds 256 | 1.84 ms | 1.32 ms | **1.39x** |
+
+At odds 13 the run-ahead buys almost nothing in this harness, against F57's 6%
+in the daemon. At odds 256 it is worth 1.39x, because every read is a DRAM miss
+and overlapping them is the whole point.
+
+**So D3 and the run-ahead are coupled, and nobody wrote that down.** D3's cost
+is 1.14x with the run-ahead and about 1.48x without it. The run-ahead is on this
+branch and ships with HF14, so nothing is broken, but it is now load-bearing for
+D3 rather than a 5% optimisation, and reverting it would nearly double D3's
+price.
+
+#### 5. The caveat, and why it does not rescue the old picture
+
+**64.9x is an upper bound and should not be quoted as the gate.** The GPU AES
+reads its T-table from `__constant` memory with sixteen data-dependent indices
+per round ([vm_kernels.cl.h:100](vm_kernels.cl.h#L100)). NVIDIA's constant cache
+broadcasts efficiently only when a warp's lanes read the same address, so 32
+lanes hitting 32 different entries serialise. That is the worst available place
+for an AES table on a GPU, and shared memory or bitslicing would avoid it.
+
+**So the comparison against F76's 6.04x for HC-128 is not like for like**, the
+HC-128 kernel having no table lookups at all. The claim "the core is an order of
+magnitude stronger a gate than the fill" is **not established** by this entry
+and should not be repeated until the AES kernel is fixed.
+
+What survives the caveat, and it is enough to move the design:
+
+1. **The core ratio is far outside 3 to 10**, so every composition in this file
+   that assumed that range is wrong in a known direction.
+2. **The published 9x whole-nonce figure is wrong independently of the AES
+   kernel**, because it was composed from HC-128 at 12.1x, which F76 corrects to
+   6.04x. Measured directly the nonce is 18.8x.
+3. **The relative numbers are sound**, since the same kernel structure serves the
+   control, the pre-D1 row and the post-D1 row. D1's 1.56x and D3's 10.6% do not
+   depend on the AES port's quality.
+
+#### 6. What it does to PLAN-v8-PHASE8
+
+That document states the governing lever as: *"there is exactly one lever that
+improves goal 1 without trading against it: raise the fill's share of a nonce,
+never the core's."* It rests on F38's rule that core work is specialisable,
+which is an ASIC argument, and **F65 voided every ASIC bound in the document**.
+On the live threat the core is worth more than the document allows and the fill
+less, and D3 raising the fill's share at a cost of 10.6% is that sentence being
+wrong in a measurable way.
+
+The rule is not reversed into its opposite, because the AES caveat forbids that.
+It is **suspended**: neither direction is established, and the measurement that
+settles it is a competent GPU AES kernel. That single number decides whether
+goal 1 rests on the core or on nothing, and it now gates the pad question, which
+was item 3 on the list this work came from.
 
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 

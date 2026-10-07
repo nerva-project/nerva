@@ -41,6 +41,14 @@ Run:
                 fpx1 is the real algorithm and is the one to trust for "ok".
   nerva-gpubench.exe 25     use 25% of VRAM (only if it hangs the desktop)
   nerva-gpubench.exe 0      skip the GPU, CPU columns only
+  nerva-gpubench.exe ... nofill      drop the chain fill from the CPU arm. The
+                                     GPU arm never has it, so both sides are
+                                     then core-only and the ratio is B3, the
+                                     hash core alone. FINDINGS F77.
+  nerva-gpubench.exe ... serialfill  use the reference chain fill instead of the
+                                     run-ahead. Only for measuring what the
+                                     run-ahead is worth; the daemon runs the
+                                     run-ahead.
 
 COMPARE MACHINES ONLY AT THE SAME vram= SETTING. The header records it.
 

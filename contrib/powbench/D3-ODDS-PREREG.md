@@ -339,6 +339,27 @@ convex, and it retires `CNA_V6_WINDOW_BLOCKS` entirely, which removes the
 structure F66 showed is a gift to every attacker class at once. The conservative
 alternative is 128, which keeps the window and gives up 1.9x of C-1.
 
+**C-7 revisited 2026-10-07, F76 and F77, and recorded here rather than edited
+above.** C-7 was defined on the *fill's* GPU ratio and passed at -17%. Two
+measurements since change what that number is and what it covers:
+
+- HC-128's GPU gate is **6.04x, not 12.1x** (F76). C-7 itself barely moves, from
+  about -14.5% to -13.6%, because halving the GPU's cipher term makes the extra
+  full-history reads a larger share of what a card pays.
+- Scoped to a **whole nonce**, which C-7 could not see, D3 costs **10.6%** of
+  GPU resistance (F77), because the core measures 64.9x against the fill's 6x
+  and D3 grows the smaller term.
+
+Neither reverses the decision: the case was anti-FPGA and the window is retired
+either way. What it shows is a gap in the criterion, which was written on a
+component and judged a change to the whole algorithm. **The next
+pre-registration should define its GPU criterion on a whole nonce.**
+
+**Also recorded: D3 and the run-ahead fill are coupled.** D3 costs 1.14x with
+`4fe2a39` and about 1.48x without it (F77 section 4), because at odds 256 every
+read is a DRAM miss and prefetching is what hides them. The run-ahead ships on
+this branch, so nothing is broken, but it is load-bearing for D3 now.
+
 **Not adopted on its own merits alone:** D3 still only buys what F66 and F67
 measure, and the ASIC row of its threat table is void per C-6. The case is the
 FPGA one.

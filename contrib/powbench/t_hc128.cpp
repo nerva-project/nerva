@@ -65,7 +65,25 @@ bool cl_load(CL &cl) {
 
 /* 257 HC128_Init and ~10,500 HC128_NextKeys per fill, so 40 NextKeys per
  * init is the shipped mix. F60 section 1. */
-#define NEXT_PER_INIT 40
+#define NEXT_PER_SHIPPED 40
+
+/* The mix is now swept rather than fixed, because F64 made it the mechanism
+ * rather than a parameter.
+ *
+ * F64 concluded that the GPU gate is not HC-128's 4 KB state on its own but
+ * the fact that the fill re-keys every 16 messages and so never leaves the
+ * setup phase, where the published 31 Gbps result lives. That is an inference
+ * from what a paper measures, and it has a direct test: if it is right, the
+ * GPU's disadvantage must be large at nextper = 0, where every round is a key
+ * setup, and small at large nextper, where setup amortises away. If instead
+ * the ratio is flat across the sweep, the gate is the state size and reseed
+ * count is back to being a tuning dial.
+ *
+ * The answer decides whether raising the reseed rate buys anything, which is
+ * the one lever F67 section 4 priced (1.65x on the fill) without knowing what
+ * it purchases. */
+static uint32_t g_nextper = NEXT_PER_SHIPPED;
+static bool g_verbose = false;   /* -v prints every work-item row */
 
 static double now_s(void)
 {
@@ -90,7 +108,12 @@ static void *cpu_worker(void *p)
     for (r = 0; r < a->rounds; r++) {
         key[0] = (unsigned char)r; key[1] = (unsigned char)(r >> 8);
         HC128_Init(&st, key, iv);
-        for (n = 0; n < NEXT_PER_INIT; n++) { HC128_NextKeys(&st); acc ^= st.keystream[0]; }
+        /* Consume a word of the post-init state. Without this, nextper = 0
+         * leaves the init's result unread on both arms and either compiler is
+         * entitled to delete the thing under test. The GPU arm does the same,
+         * so the correctness gate still compares like with like. */
+        acc ^= st.P[0];
+        for (n = 0; n < g_nextper; n++) { HC128_NextKeys(&st); acc ^= st.keystream[0]; }
     }
     a->acc = acc;
     return NULL;
@@ -198,6 +221,7 @@ static const char *K_SRC =
 "    for (r = 0; r < rounds; r++) {\n"
 "        hc_init(P, Q, &counter, (uint)gid ^ r, 0x11223344u, 0x55667788u, 0x99aabbccu,\n"
 "                0x01020304u, 0x05060708u, 0x090a0b0cu, 0x0d0e0f10u);\n"
+"        acc ^= P[0];\n"
 "        for (n = 0; n < nextper; n++) { hc_sixteen(P, Q, &counter, ks, 1); acc ^= ks[0]; }\n"
 "    }\n"
 "    out[gid] = acc;\n"
@@ -205,28 +229,42 @@ static const char *K_SRC =
 
 int main(int argc, char **argv)
 {
-    const double seconds = (argc > 1) ? atof(argv[1]) : 1.5;
+    double seconds = 1.5;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-v")) g_verbose = true;
+        else seconds = atof(argv[i]);
+    }
     uint32_t sink = 0;
     int hw = 30;
 
-    printf("HC-128 throughput, CPU against GPU\n");
-    printf("state is P[512]+Q[512] = 4 KB per instance; %d NextKeys per Init,\n", NEXT_PER_INIT);
-    printf("which is the shipped fill's mix (257 inits, ~10,500 NextKeys)\n\n");
+    printf("HC-128 CPU against GPU, swept over the reseed mix. Shipped is %d\n",
+           NEXT_PER_SHIPPED);
+    printf("NextKeys per Init. Pass -v for the full work-item grid.\n\n");
     fflush(stdout);
 
-    double cpu_best = 0.0;
+    /* The shipped mix runs first AND last. F63 section 4 found this harness
+     * family loses 3.8% to heat over a long run, so a sweep that is not
+     * bracketed by a repeat of one arm cannot tell a trend from drift. */
+    const uint32_t sweep[] = { NEXT_PER_SHIPPED, 0, 10, 160, 640, NEXT_PER_SHIPPED };
+    const int NS = (int)(sizeof(sweep)/sizeof(sweep[0]));
+    double cpu_r[NS], gpu_r[NS];
+    size_t gpu_peak_at[NS];
+    for (int s = 0; s < NS; s++) { cpu_r[s] = 0.0; gpu_r[s] = 0.0; gpu_peak_at[s] = 0; }
+
     printf("  CPU\n");
-    printf("    %-14s %14s %14s %14s\n", "threads", "rounds/s", "inits/s", "nextkeys/s");
-    {
-        const int rows[] = { 1, 8, 30 };
+    printf("    %-10s %-10s %14s %14s %14s\n", "nextper", "threads", "rounds/s", "inits/s", "nextkeys/s");
+    for (int s = 0; s < NS; s++) {
+        g_nextper = sweep[s];
+        const int rows[] = { 1, 30 };
         for (size_t r = 0; r < sizeof(rows)/sizeof(rows[0]); r++) {
             const double rps = cpu_rounds_per_s(rows[r], seconds, &sink);
-            if (rps > cpu_best) cpu_best = rps;
-            printf("    %-14d %14.3e %14.3e %14.3e\n", rows[r], rps, rps,
-                   rps * NEXT_PER_INIT);
+            if (rps > cpu_r[s]) cpu_r[s] = rps;
+            printf("    %-10u %-10d %14.3e %14.3e %14.3e\n", sweep[s], rows[r], rps, rps,
+                   rps * (double)sweep[s]);
         }
-        printf("    %-14s %14.3e\n", "PEAK rounds/s", cpu_best);
+        fflush(stdout);
     }
+    double cpu_best = cpu_r[0];
 
     printf("\n  GPU\n");
     double gpu_best = 0.0;
@@ -279,7 +317,7 @@ int main(int argc, char **argv)
         {
             cl_mem vscr = cl.CreateBuffer(ctx, CL_MEM_READ_WRITE, 1024 * sizeof(uint32_t), NULL, &err);
             cl_mem vout = cl.CreateBuffer(ctx, CL_MEM_READ_WRITE, 4, NULL, &err);
-            cl_uint vr = 2, vn = NEXT_PER_INIT;
+            cl_uint vr = 2, vn = NEXT_PER_SHIPPED;
             cl.SetKernelArg(k, 0, sizeof(vscr), &vscr);
             cl.SetKernelArg(k, 1, sizeof(vr), &vr);
             cl.SetKernelArg(k, 2, sizeof(vn), &vn);
@@ -296,6 +334,7 @@ int main(int argc, char **argv)
                 uint32_t kw[4] = { 0u ^ r, 0x11223344u, 0x55667788u, 0x99aabbccu };
                 uint32_t vw[4] = { 0x01020304u, 0x05060708u, 0x090a0b0cu, 0x0d0e0f10u };
                 HC128_Init(&st, (unsigned char *)kw, (unsigned char *)vw);
+                cpu_acc ^= st.P[0];
                 for (uint32_t n = 0; n < vn; n++) { HC128_NextKeys(&st); cpu_acc ^= st.keystream[0]; }
             }
             printf("    kernel against src/crypto/hc128.c: %s (gpu %08x, cpu %08x)\n",
@@ -307,9 +346,18 @@ int main(int argc, char **argv)
             cl.ReleaseMemObject(vout); cl.ReleaseMemObject(vscr);
         }
 
-        printf("    %-14s %14s %14s %14s\n", "work items", "rounds/s", "inits/s", "nextkeys/s");
-        /* 4 KB of state per item, so the scratch is the limit, not occupancy */
-        const size_t items[] = { 1024, 8192, 32768, 131072 };
+        printf("    %-10s %-14s %14s %14s %14s\n", "nextper", "work items", "rounds/s", "inits/s", "nextkeys/s");
+        if (!g_verbose) printf("    (peaks only; -v for the grid)\n");
+        /* 4 KB of state per item, so the scratch is the limit, not occupancy.
+         *
+         * The array used to start at 1,024. F66 caught the same harness family
+         * reporting a peak that sat at the lowest value tested, which means the
+         * range was too short and the figure is a floor rather than a
+         * measurement, so this starts at 256 and fills in the middle. A peak at
+         * either end of this range still voids the row. */
+        const size_t items[] = { 256, 512, 1024, 2048, 3072, 4096, 5120, 6144, 8192, 16384, 32768, 131072 };
+      for (int s = 0; s < NS; s++) {
+        g_nextper = sweep[s];
         for (size_t it = 0; it < sizeof(items)/sizeof(items[0]); it++) {
             const size_t gsz = items[it];
             const size_t scratch_bytes = gsz * 1024 * sizeof(uint32_t);
@@ -317,7 +365,7 @@ int main(int argc, char **argv)
             cl_mem dscr = cl.CreateBuffer(ctx, CL_MEM_READ_WRITE, scratch_bytes, NULL, &err);
             if (err != CL_SUCCESS) { printf("    %-14zu (scratch alloc failed)\n", gsz); continue; }
             cl_mem dout = cl.CreateBuffer(ctx, CL_MEM_READ_WRITE, gsz * 4, NULL, &err);
-            cl_uint nextper = NEXT_PER_INIT;
+            cl_uint nextper = g_nextper;
             cl.SetKernelArg(k, 0, sizeof(dscr), &dscr);
             cl.SetKernelArg(k, 2, sizeof(nextper), &nextper);
             cl.SetKernelArg(k, 3, sizeof(dout), &dout);
@@ -341,19 +389,40 @@ int main(int argc, char **argv)
                 }
             }
             const double rps = (double)gsz * (double)rounds / el;
-            if (rps > gpu_best) gpu_best = rps;
-            printf("    %-14zu %14.3e %14.3e %14.3e\n", gsz, rps, rps, rps * NEXT_PER_INIT);
+            if (rps > gpu_r[s]) { gpu_r[s] = rps; gpu_peak_at[s] = gsz; }
+            if (g_verbose)
+                printf("    %-10u %-14zu %14.3e %14.3e %14.3e\n", sweep[s], gsz, rps, rps,
+                          rps * (double)sweep[s]);
             cl.ReleaseMemObject(dout); cl.ReleaseMemObject(dscr);
         }
-        printf("    %-14s %14.3e\n", "PEAK rounds/s", gpu_best);
+        printf("    %-10u %-14s %14.3e  at %zu items%s\n", sweep[s], "peak", gpu_r[s],
+               gpu_peak_at[s],
+               (gpu_peak_at[s] == items[0] ||
+                gpu_peak_at[s] == items[sizeof(items)/sizeof(items[0]) - 1])
+                   ? "   <-- VOID: peak at the end of the range" : "");
+        fflush(stdout);
+      }
+        gpu_best = gpu_r[0];
     }
 
-    if (cpu_best > 0.0 && gpu_best > 0.0) {
-        printf("\n  GPU / CPU on HC-128: %.2fx\n", gpu_best / cpu_best);
-        printf("  (F62 measured GPU / CPU on the fill's random gather at 1.64x\n");
-        printf("   today and 2.73x once the chain outgrows cache. If HC-128 is\n");
-        printf("   below those, D5 trades the fill's anti-GPU half for its\n");
-        printf("   pro-GPU half.)\n");
+    /* The result. Ratios within one machine pairing, which F63 section 3
+     * establishes is the only form that transfers. */
+    printf("\n  GPU / CPU by reseed mix, and how much disadvantage the reseeds buy\n");
+    printf("    %-10s %14s %14s %12s %10s\n", "nextper", "cpu rounds/s", "gpu rounds/s", "GPU is", "vs shipped");
+    for (int s = 0; s < NS; s++) {
+        if (cpu_r[s] <= 0.0 || gpu_r[s] <= 0.0) continue;
+        const double ratio = cpu_r[s] / gpu_r[s];
+        const double base  = (cpu_r[0] > 0.0 && gpu_r[0] > 0.0) ? (cpu_r[0] / gpu_r[0]) : 0.0;
+        printf("    %-10u %14.3e %14.3e %10.2fx %9.3fx%s\n", sweep[s], cpu_r[s], gpu_r[s],
+               ratio, base > 0.0 ? ratio / base : 0.0,
+               sweep[s] == NEXT_PER_SHIPPED ? "   (shipped)" : "");
+    }
+    if (cpu_r[0] > 0.0 && gpu_r[0] > 0.0 && cpu_r[NS-1] > 0.0 && gpu_r[NS-1] > 0.0) {
+        const double a = cpu_r[0] / gpu_r[0], b = cpu_r[NS-1] / gpu_r[NS-1];
+        const double drift = (a > b ? a / b : b / a) - 1.0;
+        printf("\n  drift control, the shipped arm first against last: %.1f%%%s\n",
+               drift * 100.0,
+               drift > 0.04 ? "   <-- VOID: nothing smaller than this is a signal" : "");
     }
     printf("\n  sink %x\n", sink);
     return 0;

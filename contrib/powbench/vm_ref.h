@@ -402,7 +402,7 @@ static void vm_fp_stage(uint64_t *pad, uint64_t nblocks,
 static uint64_t vm_v5(uint64_t *pad, uint64_t qw, const uint8_t *params,
                       uint64_t *salt, uint64_t salt_qw,
                       const __m128i *rk, uint64_t gid, int fp_mode,
-                      uint32_t fp_rounds)
+                      uint32_t fp_rounds, int no_sweep)
 {
     // Per-nonce salt, derived exactly as the kernel does so the checksum gate
     // can compare them. Real v5 gets this from the chain; content does not
@@ -459,6 +459,9 @@ static uint64_t vm_v5(uint64_t *pad, uint64_t qw, const uint8_t *params,
     for (uint32_t k = 1; k < xx; k++) {
         for (uint32_t l = 0; l < yy; l++) {
             V5_STEP();
+            /* D1 deleted this block from consensus, dbd4fd7. no_sweep is a
+             * constant at every call site. */
+            if (!no_sweep) {
             salt_acc = vm_mix64(salt_acc ^ a0, (uint32_t)(k * 31u + l));
             uint32_t off1 = ((uint32_t)(salt_acc & 63)) + 1u;
             uint32_t off2 = ((((uint32_t)(salt_acc >> 8)) * off1) % 125u) + 4u;
@@ -466,6 +469,7 @@ static uint64_t vm_v5(uint64_t *pad, uint64_t qw, const uint8_t *params,
             for (uint32_t jj = off1; jj < nbytes; jj += off2) {
                 p8[jj] ^= s8[sx & salt_mask8];
                 sx++;
+            }
             }
         }
     }

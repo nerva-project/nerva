@@ -47,7 +47,14 @@ struct Variant { const char *name; int gen; size_t pad_kb; int grp; };
 // removal makes dead; pass "all" as the fourth argument to run it anyway.
 static const Variant ALL_VARIANTS[] = {
     { "v5 1MB",    5,  1024, 0 },   // control: same GPU work as v8 1MB, separate path
-    { "v8 1MB",    8,  1024, 0 },   // baseline the FP rows are divided by
+    { "v8 pre-D1", 8,  1024, 0 },   // baseline the FP rows are divided by
+    { "v8 D1",    12,  1024, 0 },   // D1 alone: sweeps gone, fill still at
+                                    // odds 13, so this isolates D1.
+    { "v8 D1+D3", 11,  1024, 0 },   // v8 AS SHIPPED: D1 removed the salt_pad
+                                    // sweeps and the four extra hashes
+                                    // (dbd4fd7) and D3 took the fill to full
+                                    // history (5d1e889). Every GPU number
+                                    // this project published predates both.
     { "v8+fp rne", 9,  1024, 0 },   // FP stage, rounding fixed at nearest-even
     { "v8+fp",    10,  1024, 0 },   // FP stage as specified, mode from data
     { "v5 1MB end",5,  1024, 0 },   // the control again, AFTER the FP rows
@@ -58,6 +65,8 @@ static const Variant ALL_VARIANTS[] = {
                                     // starved and reads far too well; check the
                                     // nonce count against the cap before
                                     // believing either of these.
+    { "v8 D1+D3 2MB",11, 2048, 1 }, // the pad curve on the SHIPPED algorithm.
+    { "v8 D1+D3 4MB",11, 4096, 1 }, // F63 measured it on the pre-D1 one.
     { "v5 4MB",    5,  4096, 1 },
     { "v5 8MB",    5,  8192, 1 },
     { "v6 1MB",    6,  1024, 1 },
@@ -69,6 +78,11 @@ static const int MAXV = (int)(sizeof(ALL_VARIANTS) / sizeof(ALL_VARIANTS[0]));
 static Variant VARIANTS[MAXV];
 static int NV = 0;
 static bool g_all = false;          // argv[4] == "all": restore the grp 1 rows
+// "nofill" drops the per-nonce chain fill from the CPU arm. The GPU arm never
+// pays it, so by default the v8 rows are a whole-nonce economic ratio under
+// the modelling assumption that a rig is fed by its host. With nofill BOTH
+// arms are core-only and the ratio is B3: the hash core alone, GPU to CPU.
+static bool g_nofill = false;
 
 static double g_gpu[MAXV], g_cpu[MAXV], g_ms1[MAXV], g_spread[MAXV], g_cspread[MAXV];
 static size_t g_nonces[MAXV], g_bufs[MAXV];
@@ -139,7 +153,9 @@ static unsigned v7_iters(size_t bytes)   { return (unsigned)(bytes / (8 * CN_V7_
 // Same pad, same salt residency, same kernel arguments as v5.
 static inline bool v5_like(int gen) { return gen == 5 || gen >= 8; }
 // -1 no stage, 0 stage at fixed nearest-even, 1 the algorithm as specified
-static inline int fp_mode_of(int gen) { return gen < 9 ? -1 : (gen == 9 ? 0 : 1); }
+static inline int fp_mode_of(int gen) { return (gen < 9 || gen >= 11) ? -1 : (gen == 9 ? 0 : 1); }
+// gen 11 is v8 as shipped: no salt_pad sweep, no extra hashes. D1, dbd4fd7.
+static inline int no_sweep_of(int gen) { return gen >= 11 ? 1 : 0; }
 
 // per-nonce memory beyond the main pad
 static size_t side_bytes(int gen) {
@@ -233,13 +249,14 @@ static uint64_t cpu_one(const Variant &v, uint64_t gid, const HostData &h,
     // (26k H/s here against 6.38k measured on the same 7950X). The OUTPUT is
     // discarded because the checksum gate needs both sides to hash identical
     // salts; only the COST is being modelled.
-    chain_fill(fill_buf, v.gen, gid);
+    if (!g_nofill) chain_fill(fill_buf, v.gen, gid);
     g_fill_sink ^= fill_buf[0];
 
     const uint64_t qw = (uint64_t)v.pad_kb * 1024 / 8;
     if (v5_like(v.gen))
         return vm_v5(pad, qw, &h.params[gid * 4], salt_priv, CN_SALT_MEMORY / 8, g_rk, gid,
-                     fp_mode_of(v.gen), (uint32_t)CN_V8_FP_ROUNDS * (uint32_t)g_fp_mult);
+                     fp_mode_of(v.gen), (uint32_t)CN_V8_FP_ROUNDS * (uint32_t)g_fp_mult,
+                     no_sweep_of(v.gen));
     if (v.gen == 6)
         return vm_v6(pad, qw, &h.progs[gid * CN_PROGRAM_SIZE], h.salt.data(), v6_iters(), g_rk, gid);
     return vm_v7(pad, qw, &h.progs[gid * CN_PROGRAM_SIZE], &h.segs[gid * CN_V7_SEGMENTS],
@@ -289,6 +306,8 @@ int main(int argc, char **argv) {
     if (argc > 3) { double L = atof(argv[3]); if (L >= 1.0 && L <= 600.0) g_launch_cap = L; }
     for (int i = 4; i < argc; i++) {
         if (strcmp(argv[i], "all") == 0) g_all = true;
+        else if (strcmp(argv[i], "nofill") == 0) g_nofill = true;
+        else if (strcmp(argv[i], "serialfill") == 0) g_fill_runahead = false;
         else if (strncmp(argv[i], "fpx", 3) == 0) {
             const int mlt = atoi(argv[i] + 3);
             if (mlt >= 1 && mlt <= 100) g_fp_mult = mlt;
@@ -302,6 +321,10 @@ int main(int argc, char **argv) {
     }
     build_keys();
     chain_cache_init();
+    if (!chain_fill_self_check()) {
+        printf("FILL PORT MISMATCH: run-ahead != serial. Refusing to time it.\n");
+        return 1;
+    }
 
     CL cl; bool have_gpu = (g_vram_frac > 0.0) && cl_load(cl);
     cl_context ctx = NULL; cl_command_queue q = NULL; cl_program prog = NULL;
@@ -470,7 +493,8 @@ int main(int argc, char **argv) {
                               : v.gen == 6 ? "cna_v6"
                               : v.gen == 7 ? "cna_v7"
                               : v.gen == 8 ? "cna_v8"
-                              : v.gen == 9 ? "cna_v8_fp_rne" : "cna_v8_fp";
+                              : v.gen == 9 ? "cna_v8_fp_rne"
+                              : v.gen >= 11 ? "cna_v8_d1" : "cna_v8_fp";
             cl_kernel k = cl.CreateKernel(prog, kname, &err);
             // A device without cl_khr_fp64 builds the rest of the program fine and
             // simply has no FP kernels, so the row is skipped rather than the run

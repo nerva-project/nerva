@@ -28,6 +28,44 @@ proof of work**. Only C-5, a testnet fork round, is still owed, and one round
 covers both changes.
 
 
+## 2026-10-07, later the same day: F76 and F77 suspend the governing lever
+
+**Read this before anything below that reasons about GPUs.** Three measurements
+were opened after D1 and D3 shipped. Two have run and both corrected published
+numbers rather than merely adding to them.
+
+1. **HC-128's GPU gate is 6.04x, not 12.1x.** F76. The work-item grid jumped
+   1,024 to 8,192 and the peak is at 4,096. Every old grid point reproduces, so
+   it is a resolution failure. The ceiling argument in "The ceiling on tuning"
+   below is void: a whole nonce measures **18.8x**, well above the 12x it names
+   as an upper bound, and above the 9x it composes.
+
+2. **The reseeds are confirmed as the GPU mechanism and closed as a lever.**
+   F76. Pure key setup is 7.51x and keystream-dominated is 3.40x, so F64 was
+   right. Doubling the reseed rate costs 1.75x on the fill to buy +10%.
+
+3. **B3 ran. The core is 64.9x and the fill's cipher is 6.04x.** F77. So
+   **"raise the fill's share of a nonce, never the core's", stated below as the
+   one lever that improves goal 1 without trading against it, is wrong on the
+   live threat.** It rested on F38's rule that core work is specialisable, which
+   is an ASIC argument, and F65 voided every ASIC bound here. Measured: D3,
+   which raises the fill's share, costs **10.6%** of whole-nonce GPU resistance.
+
+   **The lever is suspended, not reversed.** The GPU AES kernel reads its
+   T-table from `__constant` memory, the worst available choice, so 64.9x is an
+   upper bound and the comparison against 6.04x is not like for like. A
+   competent GPU AES kernel is now the measurement that decides whether goal 1
+   rests on the core or on nothing, and it gates the pad question.
+
+4. **Every GPU figure in this document predates D1.** The harness modelled the
+   `salt_pad` sweeps until F77 fixed it, so F63's pad curve, which is the whole
+   evidence base for D6, describes an algorithm that no longer exists. D6 must
+   be re-measured before it is proposed again.
+
+Also measured: D1 is GPU-neutral on a whole nonce (+2%) while cutting
+verification 1.27x, and F70's "+8 to 10%" for D1 and D3 together is **-8.7%**,
+the sign having turned because F70 swept the core ratio over 3, 6 and 10.
+
 F64 and F65 answered the question this document called its sharpest open one,
 and the answer moves several things below. Nothing is deleted, so the reasoning
 stays auditable, but these four corrections apply throughout.
@@ -146,7 +184,15 @@ established" struck out. The line two paragraphs up, "against an ASIC it barely
 resists at all", was the right instinct and is now the measured position.
 
 So there is exactly one lever that improves goal 1 without trading against it:
-**raise the fill's share of a nonce, never the core's.** F38 also states the
+**raise the fill's share of a nonce, never the core's.**
+
+**SUSPENDED 2026-10-07, F77.** Measured, the core is 64.9x against a card and
+the fill's cipher 6.04x, and D3, which does exactly what this sentence
+recommends, cost **10.6%** of whole-nonce GPU resistance. The sentence rests on
+F38's rule about specialisable core work, which is an ASIC argument that F65
+voided. It is suspended rather than reversed because the GPU AES kernel behind
+the 64.9x uses constant-memory T-tables and so overstates the core. Do not act
+on this lever in either direction until a competent GPU AES kernel has run. F38 also states the
 price, which is sync speed, directly, because verification pays one fill per
 block.
 
@@ -532,6 +578,11 @@ F60 sections 6 to 8 have the measurements and the full list of objections.
 The measured component ratios are HC-128 **12.1x**, AES roughly **6x**, random
 gather **0.6x** (a GPU advantage), and loop divergence ~1.9x. A whole nonce
 lands near 9x.
+
+**VOID on every number, 2026-10-07: see the status block at the top.** HC-128 is
+6.04x (F76), the core is 64.9x (F77), and a nonce measures 18.8x. The structural
+point, that an average cannot exceed its largest term, survives and now says the
+opposite thing: the largest term is the core.
 
 **An average cannot exceed its largest term.** Rebalancing v8's existing parts
 is therefore bounded by HC-128's 12.1x, and v8 already sits at about three
