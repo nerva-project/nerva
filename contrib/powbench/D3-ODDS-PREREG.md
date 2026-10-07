@@ -321,8 +321,14 @@ works rather than as a forecast worth trusting.**
 would not apply did not: one parameter, no second consensus path. The window
 constant is renamed `_V13` and a static_assert ties the name to the value.
 
-**Still owed:** C-5's testnet round, and a runtime observation that the v14 path
-really passes 256. The second is not pedantry: a mis-wire would leave every node
+**Still owed: C-5's testnet round, and only that.** The runtime observation was
+taken the same day, F74: on a mainnet copy with HF14 moved locally, the daemon
+printed `odds 256 of 256, window unused` on the real v14 path, and the cost
+measured **1.155x** there against the 1.183x this file predicted. D3 is cheaper
+on the algorithm it ships with than on either proxy, because v14's 1 MB pad
+leaves more cache for the block cache than v13's 8 MB does.
+
+The reason that observation mattered: The second is not pedantry: a mis-wire would leave every node
 mis-wired identically, so they would agree with each other and a testnet round
 would pass with this change inert. The daemon now announces the odds once at
 INFO so the question can be answered by looking rather than by reasoning.

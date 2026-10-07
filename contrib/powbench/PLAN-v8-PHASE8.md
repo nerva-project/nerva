@@ -15,6 +15,19 @@ measurement that gates half of it. Nothing here should be built before its gate.
 
 ## Status as of 2026-10-07: read this before the body
 
+**D1 and D3 BOTH SHIPPED** (commits `dbd4fd7` and `5d1e889`, pushed). So the
+share table and every cost figure below describe **v8 as it was before those
+landed**, which is still the right baseline for reading the reasoning but is no
+longer what the code does. v8 is now v5's core at 1 MB with no `salt_pad` at
+all, over a fill that draws every pick from full history.
+
+Measured after shipping: the pair verify **12.8% faster** than shipping neither
+(F74), and HF14 as a whole syncs **3.98x faster than v13** end to end on a
+second machine at 4.4M height (F75), where **at least 75% of v13 sync time is
+proof of work**. Only C-5, a testnet fork round, is still owed, and one round
+covers both changes.
+
+
 F64 and F65 answered the question this document called its sharpest open one,
 and the answer moves several things below. Nothing is deleted, so the reasoning
 stays auditable, but these four corrections apply throughout.

@@ -4803,6 +4803,11 @@ which is worth thirty seconds to rule out.
 
 #### 3. What is NOT yet verified, stated plainly
 
+*ANSWERED the same day by F74: the daemon printed `odds 256 of 256, window
+unused` on the real v14 path, and the cost came in at 1.155x rather than the
+1.183x predicted below. The section is kept as written because it is the
+reasoning that made the observation worth taking.*
+
 **That the v14 call site passes 256 at runtime.** The constant is passed
 directly at one readable call site and the build type-checks it, but that is
 reading, not observing.
@@ -4834,6 +4839,146 @@ From measurements already taken, so these are predictions to check against:
 | fill, odds 13 to 256 | **1.1949x** in the daemon on real blocks, F68 |
 | same, harness | 1.183x, F67 |
 | whole nonce with D1 also in | 11% **faster** than shipping neither, F70 |
+
+### F74. D3 is observed live on the v14 path, and costs 1.155x there rather than the 1.183x predicted
+
+*2026-10-07. The runtime observation F73 said was owed. Mainnet copy with HF14
+moved locally to the chain tip, 11,337 v14 blocks mined at fixed difficulty on
+`nerva-t2`. The HF14 edit was never committed.*
+
+#### 1. The wiring proof, which no consensus test could have given
+
+    chain fill: full-history odds 256 of 256, window unused
+
+F73 recorded that a mis-wire would leave every node mis-wired identically, so
+they would agree with each other and a testnet round would pass with D3 inert.
+**The daemon now says which fill it is running**, and on the v14 path it says
+256. That is the whole purpose of the announce line.
+
+#### 2. The cost, measured where it actually applies
+
+`NERVA_SALT_ODDS_AB`, 2,048 interleaved pairs, height 4.43M, 237 MB block cache:
+
+| | cycles per fill |
+|---|---|
+| windowed, odds 13 | 4,805,636 |
+| full history, odds 256 | 5,551,393 |
+| **ratio** | **1.155x** |
+
+| where measured | ratio |
+|---|---|
+| harness, `t_v8_fill` (F67) | 1.183x |
+| daemon, **v13** path (F68) | 1.195x |
+| **daemon, v14 path (here)** | **1.155x** |
+
+**D3 is cheaper on the algorithm it ships with than on either proxy**, and the
+reason is structural rather than noise: v13 carries an 8 MB pad that crowds the
+cache, v14 carries 1 MB, so v14 has more cache left for the block cache and the
+extra full-history reads cost it less. F57 measured the same effect from the
+other side, with the fill 1.63x dearer under v13 than v14.
+
+**Every earlier number for D3 was therefore slightly pessimistic**, which is the
+preferable direction to be wrong in but worth stating plainly: the proxies were
+measuring a harder problem than the one we ship.
+
+#### 3. What it does to the pair
+
+| | nonce | vs baseline |
+|---|---|---|
+| F70, predicted at 1.183x | 1.1776 ms | 11.1% faster |
+| **measured at 1.155x** | **1.1555 ms** | **12.8% faster** |
+
+So D1 and D3 together verify **12.8% faster than shipping neither**, up from the
+11% F70 projected.
+
+#### 4. The real fill cost on the v14 path, for later reference
+
+`NERVA_SALT_AB` over 8,192 calls while mining: reference 8,966,970 cycles,
+run-ahead **5,843,175** cycles, so A1's run-ahead is worth **1.53x** on the v14
+fill. At 4.491 GHz the shipped fill is **1.301 ms** per nonce.
+
+#### 5. A trap that cost 2,400 blocks of silence, again
+
+The announce line printed immediately; the fill A/B printed nothing. **`MGINFO`
+is global and obeys `--log-level "global:INFO"`; `MCINFO("salt.fill", ...)`
+needs its category enabled as well.** This is F61 exactly, where instrumented
+code looked dead because its category was never set.
+
+The fix needs no restart, so a long run is not lost:
+
+    curl -X POST http://127.0.0.1:<rpc>/set_log_categories -d '{"categories":"*:INFO"}'
+
+That is a **plain endpoint, not a json_rpc method**; through `/json_rpc` it
+returns "Method not found".
+
+### F75. HF14 syncs 3.98x faster than v13, measured end to end on a second machine at 4.4M height
+
+*2026-10-07. Two machines on a LAN, mainnet copy, HF14 moved locally to the
+chain tip. The first end-to-end sync measurement this project has; every earlier
+sync figure was composed from a per-block delta.*
+
+#### 1. Method
+
+The 7950X mined 11,337 v14 blocks onto a copy of mainnet at 4,431,764 and then
+served as the **only** peer (`--out-peers 0`, so it could not reach real
+mainnet, whose far greater cumulative difficulty would have reorganised the
+mined blocks away mid-test). The i7-7700HQ took a copy of that chain, popped
+20,000 blocks and re-synced them, crossing the fork partway:
+
+| | blocks |
+|---|---|
+| v13, 8 MB pad with the VM, odds 13 | 7,936 |
+| v14, 1 MB pad, D1 and D3, odds 256 | 11,294 |
+
+**Both halves in one process**, so the comparison is within-run. Both with
+`--fixed-difficulty 1`, so neither pays the difficulty calculation. Both over
+blocks that are ~99.6% coinbase-only, measured: 42 transactions across the
+10,000 real v13 blocks in range, median block size 86 bytes. So transaction
+content cannot explain the difference.
+
+The crossing is confirmed in the log rather than inferred, by the announce line
+added in D3: `odds 13 of 256, windowed` at 17:32:14, then `odds 256 of 256,
+window unused` at 17:34:48.
+
+#### 2. The result
+
+| | per block | rate |
+|---|---|---|
+| v13 | **17.83 ms** | 56.1 blk/s |
+| v14 | **4.48 ms** | 223.1 blk/s |
+| | **3.98x faster** | |
+
+PC-side sampling of the peer's advertised height independently gave 3.36x; the
+laptop's own log is the better figure, since advertised height lags.
+
+#### 3. PoW is the dominant cost of syncing, which I had guessed wrong
+
+Mid-measurement I speculated that PoW looked like a small slice of the per-block
+cost and that "every sync number in F68 and F70 is noise against the real
+bottleneck". **That is wrong, and these two numbers bound it without needing any
+model.**
+
+Everything that is not PoW (network, transaction checks, database write,
+difficulty) is identical across the two halves: one machine, one run, one
+process, near-identical block contents. Call that shared overhead `O`. Since
+v14's PoW cannot be negative, `O <= 4.48 ms`. Therefore:
+
+**v13's PoW is at least 13.35 ms of its 17.83 ms per block, so at least 75% of
+v13 sync time is proof of work.**
+
+So sync cost *is* PoW cost, and the sync arithmetic in F68 and F70 was measuring
+the thing that matters rather than noise. The correction is recorded because the
+wrong version was stated out loud first.
+
+#### 4. What this is and is not
+
+**It is the whole v13 to v14 change**, not D1 and D3 alone: an 8 MB pad with a
+VM program becoming a 1 MB pad with no sweeps and full-history draws. D1 and D3
+are a part of it, worth 12.8% between them by F74.
+
+**It is the laptop**, which F58 puts at roughly 2.2x slower than the desktop, so
+the absolute milliseconds are that machine's. The 3.98x ratio is within-machine
+and is the figure that transfers.
 
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
