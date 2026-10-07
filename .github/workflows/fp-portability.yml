@@ -162,12 +162,21 @@ jobs:
           cat stage.txt
 
           # Compare the hashes, not the exit code. See the header.
+          #
+          # These are x86-64 reference values for v14 and v15 over two inputs.
+          # THEY MOVE WHENEVER v14 MOVES, so any deliberate change to the v8
+          # hash must update them in the same commit, or this job fails on every
+          # little-endian target while nothing is actually wrong. That happened
+          # once, at D1 (2026-10-07), which removed salt_pad_v8: the cross-ISA
+          # digests still agreed with each other exactly, only these pins were
+          # stale. Regenerate on x86-64 with build-fp-stage-test.sh, then
+          # T_FP_STAGE_QUICK=1 ./t_fp_stage.
           matched=1
           for want in \
-            16da28b8ec84c42cd776c908807ac204daf763503b24c396e6b0d6c4b015eba2 \
-            bb62ce919b5a9335a31ad178640ccfdc1a4d5b70a2df10c6873298088510e898 \
-            6998ffa9234b99676b92b2fc358c8dfa19cd6afa248b2c02be1030157e7c0332 \
-            86905c8d1e76df9de1bd6e8bac4c3a492eee23eec67c2b239b6423c71192bad0
+            5f1286d4ae4d0e26e2cd3bffae53138f844cba08d676dcb812dce3a70e724a6d \
+            6b7362599e1bd969504c2a42e451e1a61f97f3a3c17e95410d2a92f46627f343 \
+            3df693e88693dab657b7b122cbae3a6bc5126121ebb4a61bda9f16df4efd1326 \
+            1ddc02273aa1156fa049aed305e16405e2519ed537e9aa3bfc3d37fe37d25050
           do
             grep -q "$want" stage.txt || matched=0
           done
