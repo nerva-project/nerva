@@ -806,6 +806,219 @@ static void cna_core(__global ulong *b0, const ulong qw,
 // It is a separate kernel rather than an edit to cna_v8 so that one run gives
 // both and the delta is within-run, which F63 section 3 establishes is the only
 // form that transfers between machines.
+
+// ---------------------------------------------------------------------------
+// LOCAL-MEMORY AES. Generated from the three functions above by substituting
+// the table's address space; nothing else differs, which is the point.
+//
+// WHY. F77 published B3 at 64.9x as an upper bound because the AES table above
+// lives in __constant, where a warp's divergent lookups serialise. t_aes then
+// measured that placement alone: staging the same table into __local makes the
+// RTX 3050 **19.2x faster** at AES and brings it to **1.04x of a 7950X's
+// AES-NI at 30 threads**, which is parity. So the constant-memory table was
+// most of the 64.9x.
+//
+// This arm exists to turn that composition into a measurement of a whole v8
+// nonce. The constant-memory kernels above are untouched so the comparison is
+// within-run, and the checksum gate validates this arm against the same CPU
+// reference as every other.
+// ---------------------------------------------------------------------------
+static void aes_fill_pad_lds(__global uint *buf, uint iters,
+                         __local uint *te0, __constant uint *rk, ulong gid)
+{
+    uint s[32];
+    uint seed = (uint)gid * 2654435761u + 1u;
+    for (int i = 0; i < 32; i++) { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; s[i] = seed; }
+    for (uint it = 0; it < iters; it++) {
+        for (int b = 0; b < 8; b++) {
+            uint a0 = s[b*4+0], a1 = s[b*4+1], a2 = s[b*4+2], a3 = s[b*4+3];
+            for (int r = 0; r < 10; r++) {
+                uint t0 = te0[a0 & 0xff] ^ ROTL32(te0[(a1>>8)&0xff],8) ^ ROTL32(te0[(a2>>16)&0xff],16) ^ ROTL32(te0[(a3>>24)&0xff],24) ^ rk[r*4+0];
+                uint t1 = te0[a1 & 0xff] ^ ROTL32(te0[(a2>>8)&0xff],8) ^ ROTL32(te0[(a3>>16)&0xff],16) ^ ROTL32(te0[(a0>>24)&0xff],24) ^ rk[r*4+1];
+                uint t2 = te0[a2 & 0xff] ^ ROTL32(te0[(a3>>8)&0xff],8) ^ ROTL32(te0[(a0>>16)&0xff],16) ^ ROTL32(te0[(a1>>24)&0xff],24) ^ rk[r*4+2];
+                uint t3 = te0[a3 & 0xff] ^ ROTL32(te0[(a0>>8)&0xff],8) ^ ROTL32(te0[(a1>>16)&0xff],16) ^ ROTL32(te0[(a2>>24)&0xff],24) ^ rk[r*4+3];
+                a0=t0; a1=t1; a2=t2; a3=t3;
+            }
+            s[b*4+0]=a0; s[b*4+1]=a1; s[b*4+2]=a2; s[b*4+3]=a3;
+        }
+        __global uint *dst = buf + it * 32;
+        for (int i = 0; i < 32; i++) dst[i] = s[i];
+    }
+}
+
+static ulong aes_finalize_lds(__global const uint *buf, uint iters,
+                          __local uint *te0, __constant uint *rk, ulong gid)
+{
+    uint s[32];
+    uint seed = (uint)gid * 2654435761u + 99u;
+    for (int i = 0; i < 32; i++) { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; s[i] = seed; }
+    for (uint it = 0; it < iters; it++) {
+        __global const uint *src = buf + it * 32;
+        for (int b = 0; b < 8; b++) {
+            uint a0 = s[b*4+0] ^ src[b*4+0], a1 = s[b*4+1] ^ src[b*4+1];
+            uint a2 = s[b*4+2] ^ src[b*4+2], a3 = s[b*4+3] ^ src[b*4+3];
+            for (int r = 0; r < 10; r++) {
+                uint t0 = te0[a0 & 0xff] ^ ROTL32(te0[(a1>>8)&0xff],8) ^ ROTL32(te0[(a2>>16)&0xff],16) ^ ROTL32(te0[(a3>>24)&0xff],24) ^ rk[r*4+0];
+                uint t1 = te0[a1 & 0xff] ^ ROTL32(te0[(a2>>8)&0xff],8) ^ ROTL32(te0[(a3>>16)&0xff],16) ^ ROTL32(te0[(a0>>24)&0xff],24) ^ rk[r*4+1];
+                uint t2 = te0[a2 & 0xff] ^ ROTL32(te0[(a3>>8)&0xff],8) ^ ROTL32(te0[(a0>>16)&0xff],16) ^ ROTL32(te0[(a1>>24)&0xff],24) ^ rk[r*4+2];
+                uint t3 = te0[a3 & 0xff] ^ ROTL32(te0[(a0>>8)&0xff],8) ^ ROTL32(te0[(a1>>16)&0xff],16) ^ ROTL32(te0[(a2>>24)&0xff],24) ^ rk[r*4+3];
+                a0=t0; a1=t1; a2=t2; a3=t3;
+            }
+            s[b*4+0]=a0; s[b*4+1]=a1; s[b*4+2]=a2; s[b*4+3]=a3;
+        }
+    }
+    ulong acc = 0;
+    for (int i = 0; i < 32; i += 2) acc ^= (((ulong)s[i+1]) << 32) | s[i];
+    return acc;
+}
+
+static void cna_core_lds(__global ulong *b0, const ulong qw,
+                     __global const uchar *params, __global ulong *salts_all,
+                     const uint salt_qw,
+                     __local uint *te0, __constant uint *rk,
+                     __global ulong *out, __global ulong *b1, __global ulong *b2,
+                     __global ulong *b3, const uint per_buf,
+                     const int fp_mode, const uint fp_rounds, const int no_sweep)
+{
+    const size_t gid = get_global_id(0);
+    __global ulong *pad = PICK_BUF(gid, per_buf, qw, b0, b1, b2, b3);
+    // v5 re-reads its salt roughly 30 times per nonce, so unlike v6 it cannot
+    // stream it: the 256 KB stays resident for the whole hash. Modelled.
+    __global ulong *salt = salts_all + (size_t)gid * salt_qw;
+    // Derive the per-nonce salt from gid. Real v5 gets it from the chain, but
+    // the content does not affect timing and deriving it here means the CPU
+    // reference can produce the same bytes, which is what lets the checksum
+    // gate verify this kernel. About 200K ops against a hash of many millions.
+    {
+        ulong sx = (ulong)gid * 0x9e3779b97f4a7c15UL + 0xABCDEFUL;
+        for (uint i = 0; i < salt_qw; i++) { sx = mix64(sx, i + 1u); salt[i] = sx; }
+    }
+
+    const uint xx    = 4u + params[gid * 4 + 0];
+    const uint yy    = 4u + params[gid * 4 + 1];
+    const uint it_n  = params[gid * 4 + 2];
+    const uint d     = params[gid * 4 + 3];
+
+    aes_fill_pad_lds((__global uint *)pad, (uint)(qw * 8 / 128), te0, rk, gid);
+
+    // randomize_scratchpad_256k: one BYTE every four XORed with successive
+    // salt bytes, PAD/4 iterations. Not the same as v13's salt pass, which
+    // XORs a full 32-bit word every four bytes.
+    {
+        __global uchar *sp8 = (__global uchar *)pad;
+        __global const uchar *ss8 = (__global const uchar *)salt;
+        uint x = 0;
+        const uint nb = (uint)(qw * 8);
+        for (uint i = 0; i < nb; i += 4) {
+            sp8[i] ^= ss8[x++];
+            if (x >= CN_SALT_MEMORY) x = 0;
+        }
+    }
+
+    const ulong nblocks = qw / 2;            // 16-byte blocks
+    ulong a0 = pad[0], a1 = pad[1];
+    ulong b_0 = pad[2], b_1 = pad[3];
+    ulong salt_acc = 0;
+    // salt_pad walks the pad as BYTES with a byte stride (hp_state is uint8_t*
+    // in slow-hash.h), so the sweep is PAD/offset_2 iterations. Indexing
+    // 32-bit words did a quarter of the work.
+    const uint salt_mask8 = (salt_qw * 8) - 1;
+
+    for (uint k = 1; k < xx; k++) {
+        for (uint l = 0; l < yy; l++) {
+            // pre_aes + aesenc + post_aes_variant
+            ulong j = (a0 >> 4) % nblocks;
+            ulong c0 = pad[j*2], c1 = pad[j*2+1];
+            // one AES round on the 16-byte block, key = a
+            uint x0=(uint)c0, x1=(uint)(c0>>32), x2=(uint)c1, x3=(uint)(c1>>32);
+            uint k0=(uint)a0, k1=(uint)(a0>>32), k2=(uint)a1, k3=(uint)(a1>>32);
+            uint t0 = te0[x0 & 0xff] ^ ROTL32(te0[(x1>>8)&0xff],8) ^ ROTL32(te0[(x2>>16)&0xff],16) ^ ROTL32(te0[(x3>>24)&0xff],24) ^ k0;
+            uint t1 = te0[x1 & 0xff] ^ ROTL32(te0[(x2>>8)&0xff],8) ^ ROTL32(te0[(x3>>16)&0xff],16) ^ ROTL32(te0[(x0>>24)&0xff],24) ^ k1;
+            uint t2 = te0[x2 & 0xff] ^ ROTL32(te0[(x3>>8)&0xff],8) ^ ROTL32(te0[(x0>>16)&0xff],16) ^ ROTL32(te0[(x1>>24)&0xff],24) ^ k2;
+            uint t3 = te0[x3 & 0xff] ^ ROTL32(te0[(x0>>8)&0xff],8) ^ ROTL32(te0[(x1>>16)&0xff],16) ^ ROTL32(te0[(x2>>24)&0xff],24) ^ k3;
+            ulong n0 = ((ulong)t1 << 32) | t0, n1 = ((ulong)t3 << 32) | t2;
+            pad[j*2]   = b_0 ^ n0;
+            pad[j*2+1] = b_1 ^ n1;
+            ulong j2 = (n0 >> 4) % nblocks;
+            ulong p0 = pad[j2*2], p1 = pad[j2*2+1];
+            ulong hi = mul_hi(n0, p0), lo = n0 * p0;
+            a0 += hi; a1 += lo;
+            pad[j2*2] = a0; pad[j2*2+1] = a1;
+            a0 ^= p0; a1 ^= p1;
+            b_0 = n0; b_1 = n1;
+
+            // salt_pad: a strided sweep of the whole pad against the salt.
+            // The 200-byte extra_hash is replaced by a mix64 chain of the same
+            // call count; measured at well under 1% of a nonce.
+            //
+            // D1 DELETED ALL OF THIS from consensus on 2026-10-07, dbd4fd7.
+            // no_sweep is a literal at every call site, so the compiler drops
+            // this block from cna_v8_d1 and leaves cna_v8 exactly as it was.
+            if (!no_sweep) {
+            salt_acc = mix64(salt_acc ^ a0, (uint)(k * 31u + l));
+            uint off1 = ((uint)(salt_acc & 63)) + 1u;
+            uint off2 = (((uint)(salt_acc >> 8) * off1) % 125u) + 4u;
+            uint sx = 0;
+            __global uchar *p8 = (__global uchar *)pad;
+            __global const uchar *s8 = (__global const uchar *)salt;
+            const uint nbytes = (uint)(qw * 8);
+            for (uint jj = off1; jj < nbytes; jj += off2) {
+                p8[jj] ^= s8[sx & salt_mask8];
+                sx++;
+            }
+            }
+        }
+    }
+#ifdef CN_HAVE_FP64
+    // CN_FP_STAGE() in slow-hash-v8-impl.h sits here, between the xx/yy loop
+    // and the iters loop, and runs once per nonce.
+    if (fp_mode >= 0) cn_fp_stage_cl(pad, nblocks, &a0, &a1, fp_mode, fp_rounds);
+#else
+    (void)fp_mode; (void)fp_rounds;
+#endif
+
+    for (uint i = 0; i < it_n; i++) {
+        ulong j = (a0 >> 4) % nblocks;
+        ulong c0 = pad[j*2], c1 = pad[j*2+1];
+        uint x0=(uint)c0, x1=(uint)(c0>>32), x2=(uint)c1, x3=(uint)(c1>>32);
+        uint k0=(uint)a0, k1=(uint)(a0>>32), k2=(uint)a1, k3=(uint)(a1>>32);
+        uint t0 = te0[x0 & 0xff] ^ ROTL32(te0[(x1>>8)&0xff],8) ^ ROTL32(te0[(x2>>16)&0xff],16) ^ ROTL32(te0[(x3>>24)&0xff],24) ^ k0;
+        uint t1 = te0[x1 & 0xff] ^ ROTL32(te0[(x2>>8)&0xff],8) ^ ROTL32(te0[(x3>>16)&0xff],16) ^ ROTL32(te0[(x0>>24)&0xff],24) ^ k1;
+        uint t2 = te0[x2 & 0xff] ^ ROTL32(te0[(x3>>8)&0xff],8) ^ ROTL32(te0[(x0>>16)&0xff],16) ^ ROTL32(te0[(x1>>24)&0xff],24) ^ k2;
+        uint t3 = te0[x3 & 0xff] ^ ROTL32(te0[(x0>>8)&0xff],8) ^ ROTL32(te0[(x1>>16)&0xff],16) ^ ROTL32(te0[(x2>>24)&0xff],24) ^ k3;
+        ulong n0 = ((ulong)t1 << 32) | t0, n1 = ((ulong)t3 << 32) | t2;
+        pad[j*2]   = b_0 ^ n0;
+        pad[j*2+1] = b_1 ^ n1;
+        ulong j2 = (n0 >> 4) % nblocks;
+        ulong p0 = pad[j2*2], p1 = pad[j2*2+1];
+        ulong hi = mul_hi(n0, p0), lo = n0 * p0;
+        a0 += hi; a1 += lo;
+        pad[j2*2] = a0; pad[j2*2+1] = a1;
+        a0 ^= p0; a1 ^= p1;
+        b_0 = n0; b_1 = n1;
+    }
+    (void)d;
+    ulong acc = a0 ^ a1 ^ b_0 ^ b_1 ^ salt_acc;
+    acc ^= aes_finalize_lds((__global const uint *)pad, (uint)(qw * 8 / 128), te0, rk, gid);
+    out[gid] = acc ? acc : 1UL;
+}
+
+__kernel void cna_v8_d1_lds(__global ulong *b0, const ulong qw,
+                     __global const uchar *params, __global ulong *salts_all,
+                     const uint salt_qw,
+                     __constant uint *te0, __constant uint *rk,
+                     __global ulong *out, __global ulong *b1, __global ulong *b2,
+                     __global ulong *b3, const uint per_buf,
+                     const uint fp_rounds)
+{
+    __local uint T[256];
+    const size_t lid = get_local_id(0), lsz = get_local_size(0);
+    for (size_t i = lid; i < 256; i += lsz) T[i] = te0[i];
+    barrier(CLK_LOCAL_MEM_FENCE);
+    cna_core_lds(b0, qw, params, salts_all, salt_qw, T, rk, out, b1, b2, b3, per_buf,
+             -1, fp_rounds, 1);
+}
+
 __kernel void cna_v8_d1(__global ulong *b0, const ulong qw,
                      __global const uchar *params, __global ulong *salts_all,
                      const uint salt_qw,

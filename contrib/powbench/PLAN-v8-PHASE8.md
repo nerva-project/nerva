@@ -51,11 +51,18 @@ numbers rather than merely adding to them.
    is an ASIC argument, and F65 voided every ASIC bound here. Measured: D3,
    which raises the fill's share, costs **10.6%** of whole-nonce GPU resistance.
 
-   **The lever is suspended, not reversed.** The GPU AES kernel reads its
-   T-table from `__constant` memory, the worst available choice, so 64.9x is an
-   upper bound and the comparison against 6.04x is not like for like. A
-   competent GPU AES kernel is now the measurement that decides whether goal 1
-   rests on the core or on nothing, and it gates the pad question.
+   **That measurement ran the same day and the answer is F78: almost all of it
+   was our kernel.** With the table in `__local` the GPU does AES at **1.04x of
+   AES-NI**, the core is **~10.7x** not 64.9x, and a whole nonce is **3.04x**
+   not 18.8x. HC-128 with its state in `__local` is **2.92x** not 6.04x.
+
+   **So v8's GPU resistance is 3 to 5x, and every figure in this document is an
+   artifact of two bad kernels.** P3, "do not reduce the absolute AES work, it
+   is the only part a GPU is bad at", is void. The share lever is not suspended
+   any more: neither the core nor the fill is a strong gate, and no dial inside
+   v8 changes that by much. The pad is the one untested candidate left, on a
+   capacity argument rather than an AES-volume one, and F63's curve for it was
+   measured on pre-D1 v8 with the naive kernel.
 
 4. **Every GPU figure in this document predates D1.** The harness modelled the
    `salt_pad` sweeps until F77 fixed it, so F63's pad curve, which is the whole

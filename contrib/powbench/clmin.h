@@ -39,6 +39,8 @@ typedef cl_int   cl_bool;
 #define CL_MEM_HOST_NO_ACCESS            (1 << 9)
 #define CL_MEM_READ_ONLY                 (1 << 2)
 #define CL_DEVICE_HOST_UNIFIED_MEMORY    0x1035
+#define CL_DEVICE_LOCAL_MEM_SIZE         0x1023
+#define CL_DEVICE_MAX_WORK_GROUP_SIZE    0x1004
 #define CL_PROGRAM_BUILD_LOG             0x1183
 #define CL_TRUE                          1
 

@@ -210,6 +210,84 @@ static const char *K_SRC =
 "    for (i = 0; i < 64; i++) hc_sixteen(P, Q, counter, dummy, 0);\n"
 "}\n"
 "\n"
+"\n"
+/* The same two functions with the 4 KB state in __local instead of __global.
+ * t_aes found that moving v8s AES table from __constant to __local made a
+ * 3050 19.2x faster, which collapsed B3. The obvious next question is whether
+ * HC-128's 6.04x is the same kind of artifact: its P and Q live in __global
+ * here and nobody had tried staging them. 4 KB per instance caps a work-group
+ * at about 12 items on a 48 KB budget, so this trades occupancy for latency
+ * and the sweep below is over work-group size as well as count. */
+"static void hc_sixteen_l(__local uint *P, __local uint *Q, uint *counter, uint *ks, int emit)\n"
+"{\n"
+"    const uint cc = *counter & 0x1ff;\n"
+"    uint j;\n"
+"    if (*counter < 512) {\n"
+"        for (j = 0; j < 16; j++) {\n"
+"            const uint i0 = (cc + j) & 0x1ff;\n"
+"            const uint t0 = ROTR32(P[(cc + j + 1) & 0x1ff], 23);\n"
+"            const uint t1 = ROTR32(P[(cc + j - 3) & 0x1ff], 10);\n"
+"            const uint t2 = ROTR32(P[(cc + j - 10) & 0x1ff], 8);\n"
+"            P[i0] += t2 + (t0 ^ t1);\n"
+"            const uint x = P[(cc + j - 12) & 0x1ff];\n"
+"            const uint t3 = Q[x & 0xff] + Q[256 + ((x >> 16) & 0xff)];\n"
+"            if (emit) ks[j] = t3 ^ P[i0];\n"
+"            else      P[i0] = t3 ^ P[i0];\n"
+"        }\n"
+"    } else {\n"
+"        for (j = 0; j < 16; j++) {\n"
+"            const uint i0 = (cc + j) & 0x1ff;\n"
+"            const uint t0 = ROTL32(Q[(cc + j + 1) & 0x1ff], 23);\n"
+"            const uint t1 = ROTL32(Q[(cc + j - 3) & 0x1ff], 10);\n"
+"            const uint t2 = ROTL32(Q[(cc + j - 10) & 0x1ff], 8);\n"
+"            Q[i0] += t2 + (t0 ^ t1);\n"
+"            const uint x = Q[(cc + j - 12) & 0x1ff];\n"
+"            const uint t3 = P[x & 0xff] + P[256 + ((x >> 16) & 0xff)];\n"
+"            if (emit) ks[j] = t3 ^ Q[i0];\n"
+"            else      Q[i0] = t3 ^ Q[i0];\n"
+"        }\n"
+"    }\n"
+"    *counter = (*counter + 16) & 0x3ff;\n"
+"}\n"
+"\n"
+"static void hc_init_l(__local uint *P, __local uint *Q, uint *counter,\n"
+"                    const uint k0, const uint k1, const uint k2, const uint k3,\n"
+"                    const uint v0, const uint v1, const uint v2, const uint v3)\n"
+"{\n"
+"    uint i;\n"
+"    P[0] = k0; P[1] = k1; P[2] = k2; P[3] = k3;\n"
+"    P[4] = k0; P[5] = k1; P[6] = k2; P[7] = k3;\n"
+"    P[8] = v0; P[9] = v1; P[10] = v2; P[11] = v3;\n"
+"    P[12] = v0; P[13] = v1; P[14] = v2; P[15] = v3;\n"
+"    for (i = 16; i < 272; i++) P[i] = FF(P[i-2], P[i-7], P[i-15], P[i-16]) + i;\n"
+"    for (i = 0; i < 16; i++)   P[i] = P[i + 256];\n"
+"    for (i = 16; i < 512; i++) P[i] = FF(P[i-2], P[i-7], P[i-15], P[i-16]) + 256 + i;\n"
+"    for (i = 0; i < 16; i++)   Q[i] = P[512 - 16 + i];\n"
+"    for (i = 16; i < 32; i++)  Q[i] = FF(Q[i-2], Q[i-7], Q[i-15], Q[i-16]) + 256 + 512 + (i - 16);\n"
+"    for (i = 0; i < 16; i++)   Q[i] = Q[i + 16];\n"
+"    for (i = 16; i < 512; i++) Q[i] = FF(Q[i-2], Q[i-7], Q[i-15], Q[i-16]) + 768 + i;\n"
+"    *counter = 0;\n"
+"    uint dummy[16];\n"
+"    for (i = 0; i < 64; i++) hc_sixteen_l(P, Q, counter, dummy, 0);\n"
+"}\n"
+"\n"
+"__kernel void hcbench_lds(__local uint *scratch, const uint rounds, const uint nextper,\n"
+"                          __global uint *out)\n"
+"{\n"
+"    const size_t gid = get_global_id(0);\n"
+"    const size_t lid = get_local_id(0);\n"
+"    __local uint *P = scratch + lid * 1024;\n"
+"    __local uint *Q = P + 512;\n"
+"    uint ks[16];\n"
+"    uint counter = 0, acc = 0, r, n;\n"
+"    for (r = 0; r < rounds; r++) {\n"
+"        hc_init_l(P, Q, &counter, (uint)gid ^ r, 0x11223344u, 0x55667788u, 0x99aabbccu,\n"
+"                0x01020304u, 0x05060708u, 0x090a0b0cu, 0x0d0e0f10u);\n"
+"        acc ^= P[0];\n"
+"        for (n = 0; n < nextper; n++) { hc_sixteen_l(P, Q, &counter, ks, 1); acc ^= ks[0]; }\n"
+"    }\n"
+"    out[gid] = acc;\n"
+"}\n"
 "__kernel void hcbench(__global uint *scratch, const uint rounds, const uint nextper,\n"
 "                      __global uint *out)\n"
 "{\n"
@@ -247,6 +325,7 @@ int main(int argc, char **argv)
      * bracketed by a repeat of one arm cannot tell a trend from drift. */
     const uint32_t sweep[] = { NEXT_PER_SHIPPED, 0, 10, 160, 640, NEXT_PER_SHIPPED };
     const int NS = (int)(sizeof(sweep)/sizeof(sweep[0]));
+    double gpu_lds_shipped = 0.0;
     double cpu_r[NS], gpu_r[NS];
     size_t gpu_peak_at[NS];
     for (int s = 0; s < NS; s++) { cpu_r[s] = 0.0; gpu_r[s] = 0.0; gpu_peak_at[s] = 0; }
@@ -402,6 +481,105 @@ int main(int argc, char **argv)
                    ? "   <-- VOID: peak at the end of the range" : "");
         fflush(stdout);
       }
+        /* ---- the same cipher with P and Q in __local ----
+         *
+         * t_aes showed that v8's AES table in __constant cost a 3050 19.2x, and
+         * that collapsed B3. HC-128's 4 KB state has always lived in __global
+         * here and has never been staged, so the same question is open against
+         * the number this project now leans on. The constraint is real: at
+         * 4 KB per instance a 48 KB work-group holds about 12 items, so this
+         * buys latency with occupancy and the sweep has to cover both. */
+        cl_ulong lmem = 0; size_t maxwg = 0;
+        cl.GetDeviceInfo(dev, CL_DEVICE_LOCAL_MEM_SIZE, sizeof(lmem), &lmem, NULL);
+        cl.GetDeviceInfo(dev, CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(maxwg), &maxwg, NULL);
+        const size_t wg_cap = (size_t)(lmem / 4096);
+        printf("\n    local mem %llu KB, so %zu instances per work-group\n",
+               (unsigned long long)(lmem / 1024), wg_cap);
+
+        cl_kernel kl = cl.CreateKernel(prog, "hcbench_lds", &err);
+        if (!kl || err != CL_SUCCESS || wg_cap < 1) {
+            printf("    hcbench_lds unavailable\n");
+        } else {
+            /* Correctness first, as hcbench does. */
+            bool lok = false;
+            {
+                const size_t one = 1;
+                cl_mem vo = cl.CreateBuffer(ctx, CL_MEM_READ_WRITE, 4, NULL, &err);
+                cl_uint vr = 2, vn = NEXT_PER_SHIPPED;
+                cl.SetKernelArg(kl, 0, 4096, NULL);
+                cl.SetKernelArg(kl, 1, sizeof(vr), &vr);
+                cl.SetKernelArg(kl, 2, sizeof(vn), &vn);
+                cl.SetKernelArg(kl, 3, sizeof(vo), &vo);
+                cl.EnqueueNDRangeKernel(q, kl, 1, NULL, &one, &one, 0, NULL, NULL);
+                cl.Finish(q);
+                uint32_t ga = 0;
+                cl.EnqueueReadBuffer(q, vo, 1, 0, 4, &ga, 0, NULL, NULL);
+                uint32_t ca = 0;
+                for (uint32_t r = 0; r < vr; r++) {
+                    HC128_State st;
+                    uint32_t kw[4] = { 0u ^ r, 0x11223344u, 0x55667788u, 0x99aabbccu };
+                    uint32_t vw[4] = { 0x01020304u, 0x05060708u, 0x090a0b0cu, 0x0d0e0f10u };
+                    HC128_Init(&st, (unsigned char *)kw, (unsigned char *)vw);
+                    ca ^= st.P[0];
+                    for (uint32_t n = 0; n < vn; n++) { HC128_NextKeys(&st); ca ^= st.keystream[0]; }
+                }
+                lok = (ga == ca);
+                printf("    hcbench_lds against src/crypto/hc128.c: %s\n", lok ? "MATCH" : "MISMATCH");
+                cl.ReleaseMemObject(vo);
+            }
+            if (lok) {
+                const uint32_t mixes[] = { NEXT_PER_SHIPPED, 0 };
+                for (int m = 0; m < 2; m++) {
+                    double best = 0.0; size_t best_wg = 0, best_items = 0;
+                    for (size_t wg = 1; wg <= wg_cap && wg <= maxwg; wg *= 2) {
+                        const size_t groups[] = { 64, 256, 1024, 4096, 16384, 65536, 262144 };
+                        for (int gi = 0; gi < 7; gi++) {
+                            const size_t gsz = wg * groups[gi];
+                            cl_mem dout = cl.CreateBuffer(ctx, CL_MEM_READ_WRITE, gsz * 4, NULL, &err);
+                            if (err != CL_SUCCESS) { continue; }
+                            cl_uint np = mixes[m];
+                            cl.SetKernelArg(kl, 0, wg * 4096, NULL);
+                            cl.SetKernelArg(kl, 2, sizeof(np), &np);
+                            cl.SetKernelArg(kl, 3, sizeof(dout), &dout);
+                            cl_uint rounds = 2; double el = 0.0;
+                            const double budget = (seconds < 0.5) ? seconds : 0.5;
+                            bool failed = false;
+                            for (int pass = 0; pass < 2; pass++) {
+                                cl.SetKernelArg(kl, 1, sizeof(rounds), &rounds);
+                                cl.Finish(q);
+                                const double t0 = now_s();
+                                if (cl.EnqueueNDRangeKernel(q, kl, 1, NULL, &gsz, &wg, 0, NULL, NULL) != CL_SUCCESS)
+                                    { failed = true; break; }
+                                cl.Finish(q);
+                                el = now_s() - t0;
+                                if (pass == 0) {
+                                    if (el < 1e-4) el = 1e-4;
+                                    double nr = (double)rounds * (budget / el);
+                                    if (nr < 1) nr = 1;
+                                    if (nr > 1e5) nr = 1e5;
+                                    rounds = (cl_uint)nr;
+                                }
+                            }
+                            if (!failed) {
+                                const double rps = (double)gsz * (double)rounds / el;
+                                if (rps > best) { best = rps; best_wg = wg; best_items = gsz; }
+                                if (g_verbose)
+                                    printf("    lds  np=%-4u wg=%-3zu %-8zu %14.3e\n", mixes[m], wg, gsz, rps);
+                            }
+                            cl.ReleaseMemObject(dout);
+                        }
+                    }
+                    /* gpu_r[0] is the shipped mix on the __global kernel, gpu_r[1] is
+                     * nextper 0, matching sweep[] above. */
+                    const double ref = (m == 0) ? gpu_r[0] : gpu_r[1];
+                    printf("    lds  nextper %-4u peak %14.3e  wg %zu, %zu items   vs __global %.2fx\n",
+                           mixes[m], best, best_wg, best_items, ref > 0.0 ? best / ref : 0.0);
+                    if (m == 0) gpu_lds_shipped = best;
+                }
+            }
+            cl.ReleaseKernel(kl);
+        }
+
         gpu_best = gpu_r[0];
     }
 
@@ -424,6 +602,9 @@ int main(int argc, char **argv)
                drift * 100.0,
                drift > 0.04 ? "   <-- VOID: nothing smaller than this is a signal" : "");
     }
+    if (gpu_lds_shipped > 0.0 && cpu_r[0] > 0.0)
+        printf("\n  shipped mix, state in __local: GPU is %.2fx worse (against %.2fx in __global)\n",
+               cpu_r[0] / gpu_lds_shipped, cpu_r[0] / gpu_r[0]);
     printf("\n  sink %x\n", sink);
     return 0;
 }

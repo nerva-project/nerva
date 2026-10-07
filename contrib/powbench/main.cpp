@@ -55,6 +55,11 @@ static const Variant ALL_VARIANTS[] = {
                                     // (dbd4fd7) and D3 took the fill to full
                                     // history (5d1e889). Every GPU number
                                     // this project published predates both.
+    { "v8 LDS-AES",13, 1024, 0 },   // the SAME algorithm as v8 D1+D3, with the
+                                    // GPU AES table staged into __local. t_aes
+                                    // measured that placement alone at 19.2x,
+                                    // bringing a 3050 to 1.04x of AES-NI, so
+                                    // this is how much of F77 was the kernel.
     { "v8+fp rne", 9,  1024, 0 },   // FP stage, rounding fixed at nearest-even
     { "v8+fp",    10,  1024, 0 },   // FP stage as specified, mode from data
     { "v5 1MB end",5,  1024, 0 },   // the control again, AFTER the FP rows
@@ -494,6 +499,7 @@ int main(int argc, char **argv) {
                               : v.gen == 7 ? "cna_v7"
                               : v.gen == 8 ? "cna_v8"
                               : v.gen == 9 ? "cna_v8_fp_rne"
+                              : v.gen == 13 ? "cna_v8_d1_lds"
                               : v.gen >= 11 ? "cna_v8_d1" : "cna_v8_fp";
             cl_kernel k = cl.CreateKernel(prog, kname, &err);
             // A device without cl_khr_fp64 builds the rest of the program fine and

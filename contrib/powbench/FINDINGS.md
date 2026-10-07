@@ -4991,6 +4991,11 @@ and is the figure that transfers.
 
 ### F76. HC-128's GPU gate is 6.0x, not 12.1x, because the work-item grid skipped the peak; and the reseeds are confirmed as the mechanism but priced out as a lever
 
+**Superseded in part by F78, same day.** 6.04x is the figure with HC-128's
+state in `__global`. Staged into `__local` the gate is **2.92x**, and the
+reseeds are worth 1.13x rather than the 1.36x below. The correction to 12.1x
+and the mechanism finding both stand; the level does not.
+
 *2026-10-07, the first of the three measurements opened after D1 and D3 shipped.
 `t_hc128` extended to sweep the reseed mix and to resolve the work-item curve.
 Transcripts in `results/hc128-reseed-sweep-2026-10-07.txt` (fine grid, the one
@@ -5125,6 +5130,13 @@ closer to 6x, and therefore whether there is any headroom left in rebalancing at
 all. That is the next entry.
 
 ### F77. B3 measured: the hash core is 65x against a card and the fill's cipher is 6x, so the share lever in PLAN-v8-PHASE8 points the wrong way
+
+**Superseded on its headline by F78, same day.** The 64.9x was almost entirely
+the constant-memory AES table this entry's section 5 warns about: with the
+table in `__local` the core is **~10.7x** and a whole nonce **3.04x** rather
+than 18.8x. Sections 1 and 4, the two harness defects and the run-ahead
+coupling, are unaffected. Section 6's suspension of the share lever is
+resolved by F78, and not in the direction this entry leaned toward.
 
 *2026-10-07, the second of the three measurements opened after D1 and D3
 shipped. It needed two defects in the GPU harness fixed first, and those are
@@ -5277,6 +5289,127 @@ It is **suspended**: neither direction is established, and the measurement that
 settles it is a competent GPU AES kernel. That single number decides whether
 goal 1 rests on the core or on nothing, and it now gates the pad question, which
 was item 3 on the list this work came from.
+
+### F78. Almost all of v8's measured GPU resistance was our kernel. With the tables and state placed competently it is 3 to 5x, not 19x and not 9x, and the AES contributes nothing at all
+
+*2026-10-07, the third measurement, and the one that decides the others.
+`t_aes.cpp` is new; `t_hc128` and `vm_kernels.cl.h` gained local-memory arms
+generated from the existing code by address-space substitution rather than
+retyped. Transcripts in `results/aes-table-placement-2026-10-07.txt`,
+`results/hc128-lds-2026-10-07.txt` and `results/lds-whole-nonce-2026-10-07.txt`.*
+
+F77 published B3 at 64.9x and flagged it as an upper bound because the GPU AES
+read its T-table from `__constant`, where a warp's divergent lookups serialise.
+That caveat was right and far too gentle.
+
+#### 1. The AES is not a gate. It is parity.
+
+Three implementations of the identical computation, each checked bit for bit
+against `_mm_aesenc_si128` before timing. Two runs agreeing to 1%.
+
+| table placement | AES rounds/s | CPU better by |
+|---|---|---|
+| `__constant`, what F77 measured | 4.71e9 | **20.0x** |
+| staged into `__local` | 9.04e10 | **1.04x** |
+| four pre-rotated tables in `__local` | 8.99e10 | 1.05x |
+
+**Moving the table to shared memory makes the RTX 3050 19.2x faster and brings
+it level with a 7950X at 30 threads.** The four-table arm is within 0.5% of the
+one-table arm, so the rotates were free: the kernel was bound entirely on
+constant-cache serialisation, not on arithmetic.
+
+**This voids P3.** PLAN-v8-PHASE8 says *"Do not reduce the absolute AES work. It
+is the only part a GPU is bad at."* A GPU is not bad at AES. It was bad at our
+AES.
+
+**And it voids F59 as a GPU proxy.** F59's 4.9x to 8.0x is what a *CPU* pays for
+losing AES-NI. A CPU without AES-NI has sixteen lanes and no shared memory; a
+card has thousands and 48 KB per work-group. The two situations have almost
+nothing in common, and that proxy underwrites D1's "doubles the asymmetry", the
+pad-fill-is-the-gate argument, and D6.
+
+#### 2. The whole nonce falls from 19x to 3x on that one change
+
+`cna_v8_d1_lds` is `cna_core` with the table's address space substituted and
+nothing else, run as an extra row beside the untouched constant-memory rows, so
+the delta is within-run. The checksum gate passed on it, so it computes the same
+hash. 4% load, control drift 1.963%.
+
+| whole nonce | GPU H/s | CPU H/s | CPU better by |
+|---|---|---|---|
+| v8 D1+D3, constant tables | 811.4 | 15,528 | **19.1x** |
+| **v8 D1+D3, the same thing in `__local`** | **4,986.7** | 15,150 | **3.04x** |
+
+The GPU gets **6.15x** faster. The CPU column is the same code and moves 2.4%,
+which is noise.
+
+B3 itself follows, since the GPU column is demonstrably unaffected by the
+`nofill` flag: **the core with a competent AES is about 10.7x, not 64.9x.**
+
+#### 3. HC-128 moves too, by much less, and the structural argument survives
+
+The obvious next question, since F76's 6.04x was measured with `P` and `Q` in
+`__global` and nobody had staged them. `hcbench_lds` is the same two functions
+with the state in `__local`, checked against `src/crypto/hc128.c` before timing.
+
+| HC-128, shipped reseed mix | CPU better by |
+|---|---|
+| state in `__global`, F76 | 5.96x to 5.99x |
+| **state in `__local`** | **2.92x** |
+
+2.04x to the GPU, reproduced across two runs, and the top of the item sweep is
+flat rather than climbing, so it has converged.
+
+**The 4 KB state is a real constraint in a way the 1 KB table never was.** The
+peak sits at a work-group of **4**, not the 12 that 48 KB allows, because larger
+groups exhaust shared memory per SM and cut the number of resident groups. So
+the card buys latency with occupancy, which is exactly F62's original instinct,
+and it still only gets half the gap back. That is the one prediction in this
+area that has survived.
+
+**But the reseed story shrinks with it.** In `__global` the reseeds were worth
+1.36x of the gate (8.13x at pure key setup against 5.99x shipped). In `__local`
+they are worth **1.13x** (3.30x against 2.92x). F76's mechanism holds in
+direction and is a third of the size against a competent implementation.
+
+#### 4. Where that leaves goal 1
+
+All on the 7950X and RTX 3050 pairing, which is the only form that transfers:
+
+| | as this project measured it | competently implemented |
+|---|---|---|
+| AES | 20.0x | **1.04x** |
+| HC-128 | 5.99x | **2.92x** |
+| whole nonce, host-fed fill | 19.1x | **3.04x** |
+| whole nonce, card does everything | ~21x | **~4.7x**, composed |
+
+**v8's GPU resistance is 3 to 5x.** The published figure was 9x, F77 measured
+18.8x with a bad kernel, and neither survives.
+
+**These are still upper bounds.** Both local-memory arms are a first attempt by
+someone who is not a GPU specialist. Bitslicing removes AES tables entirely, and
+nothing here restructures HC-128. A competent attacker does at least this well
+and probably better.
+
+#### 5. What it changes
+
+- **P3 is void** and the AES is not worth defending as a gate.
+- **D6, growing the pad, is reopened on a different mechanism and its evidence
+  is gone.** F63's 1.46x and 1.96x were measured on pre-D1 v8 with the naive AES
+  kernel. Pad size no longer matters because it scales AES volume, which is
+  free; it matters, if at all, because each nonce needs its own megabyte and a
+  card's L2 is 2 MB. That is a capacity-and-latency argument, it is untested,
+  and it is plausibly where the core's remaining ~10x lives.
+- **The reseeds are worth 1.13x, not 1.36x**, so F76's "defend them" stands and
+  its weight is smaller.
+- **Every GPU figure this project has ever published is an artifact of the same
+  two kernels**, and the correct reading of the whole GPU line of work is that
+  it measured our own implementation three times and the algorithm once.
+
+**The honest summary for goal 1: v8 as it stands is only a few times harder on a
+card than on a CPU, and no dial inside it changes that by much.** Moving
+meaningfully past it is a design question, which is what F63 section 5 said when
+it thought the ceiling was 12x. The ceiling is about 3x.
 
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 

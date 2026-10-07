@@ -1,0 +1,23 @@
+﻿AES: CPU AES-NI against three GPU table placements.
+Rates are AES ROUNDS/s (8 blocks x 10 rounds per iteration).
+
+  CPU
+    threads          rounds/s
+    1               7.976e+09
+    30              9.678e+10
+
+  GPU
+    NVIDIA GeForce RTX 3050, 20 CUs
+    aes_const  against AES-NI: MATCH
+    aes_const  peak      4.813e+09  at 131072 items   <-- VOID: peak at the end of the range
+    aes_lds    against AES-NI: MATCH
+    aes_lds    peak      9.279e+10  at 32768 items
+    aes_lds4   against AES-NI: MATCH
+    aes_lds4   peak      9.263e+10  at 65536 items
+
+  arm              rounds/s   CPU better     vs const
+    aes_const       4.813e+09      20.11x       1.00x
+    aes_lds         9.279e+10       1.04x      19.28x
+    aes_lds4        9.263e+10       1.04x      19.25x
+
+  sink 994b5c8d

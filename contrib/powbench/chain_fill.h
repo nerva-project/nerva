@@ -238,7 +238,7 @@ static void chain_fill(unsigned char *salt, int gen, uint64_t gid)
     HC128_State rng;
     HC128_Init(&rng, seed, seed + 16);
     HC128_NextKeys(&rng);
-    g_fill_odds = (gen == 11) ? 256u : CNA_V6_FULL_HISTORY_ODDS;  /* 12 = D1 alone */
+    g_fill_odds = (gen == 11 || gen == 13) ? 256u : CNA_V6_FULL_HISTORY_ODDS;  /* 12 = D1 alone */
     if (gen == 5) chain_fill_v5(salt, &rng);
     else if (g_fill_runahead) chain_fill_v6_run(salt, &rng);
     else          chain_fill_v6(salt, &rng);
