@@ -322,13 +322,37 @@ salt size, and the real fill is a random-access gather against a 236 MB block
 cache whose behaviour under a doubled working set is not linear and has not been
 measured.
 
-### D3. Raise the full-history draw odds. Closed by F60, it cannot work.
+### D3. Raise the full-history draw odds. REOPENED 2026-10-07, closed on the wrong metric.
 
 **Measured 2026-10-06 and it has nowhere to go.** Forcing *every* draw to full
 history, `odds = 256`, moves the fill from 1.06x the HC-128 floor to 1.29x. So
 the whole of this lever, used to its absolute maximum, reaches about a quarter
 of the fill, and the shipped 13 of 256 already collects a sixth of that. The
 ceiling is too low to pay for the v14-only fill it would need. See F60.
+
+**Reopened. The paragraph above measures our cost and never measured the
+attacker's, which is the quantity the lever exists to move.** Pre-registration
+in [D3-ODDS-PREREG.md](D3-ODDS-PREREG.md). Three corrections:
+
+- **The fork cost is wrong.** D3 does not need a v14-only fill. `odds` is
+  already a parameter of `cna_v6_data_shadow` in db_lmdb.cpp, written for F61,
+  so the change is one argument threaded through one function. The permanent
+  consensus-surface cost applies to D2, not here.
+- **The sync cost is near zero.** PoW is skipped below `ASSUME_VALID_HEIGHT`, so
+  only ~180,000 blocks are verified on a sync, which is about **29 seconds**
+  even at the maximum odds. The real cost is a permanent 1.12x on every honest
+  nonce and an unmeasured fairness cost.
+- **The case is anti-FPGA, not anti-ASIC.** The 5.3 MB window **fits in an
+  FPGA's block RAM**, so at 13 of 256 an FPGA serves 94.9% of its reads on-chip.
+  Raising the odds takes that away. The 17.6x against DRAM-class ASICs is a
+  bonus against a threat that is not live at Nerva's size, and is worth nothing
+  against a chip that holds 240 MB in SRAM, which D7 shows is buyable.
+
+**The cost that was missed and now gates it:** more full-history reads grow the
+memory share of the fill from 5.7% to 22.2%, and memory is the half a GPU is
+*better* at. Arithmetic puts the fill's GPU resistance at **11.49x to 9.55x, a
+17% regression**. So the two near-term threats pull opposite ways, which is why
+C-7 exists and why the gather ratio at window size gets measured first.
 
 `CNA_V6_FULL_HISTORY_ODDS` is 13 of 256, about 5%, with the other 95% drawn from
 the last `CNA_V6_WINDOW_BLOCKS` = 100,000 so they stay cache-resident. F38 names
@@ -357,6 +381,44 @@ treated as overturning it. **A claim that v8 is less GPU-resistant than live v13
 was made from absolute GPU:CPU figures and is withdrawn as unestablished**, that
 column being a property of the CPU and GPU in a given box rather than of the
 algorithm.
+
+### D7. Grow the block cache past 240 MB. CONSIDERED AND DECLINED 2026-10-07.
+
+Raised because F65 made the database the only thing binding an ASIC, and
+answered in the same sitting. Recorded because the reasoning is the useful part
+and because it will be proposed again.
+
+`block_cache_data` is 56 bytes, so 4.5M blocks is about **240 MB**. The lever is
+the best asymmetry in this design on paper: an honest node holds that in **DRAM**,
+which is cheap and abundant, while an ASIC that wants speed needs it in **SRAM**,
+the most expensive resource on a die, roughly a thousand-fold difference per
+byte.
+
+**Why it does not work at the sizes available.**
+
+| cache | SRAM die area at ~0.04 um^2/bit | for an attacker |
+|---|---|---|
+| **240 MB, today** | **40 to 80 mm^2** | comfortably feasible, a GPU die is 300 to 600 mm^2 |
+| 500 MB | 85 to 170 mm^2 | feasible, expensive |
+| 1 GB | 170 to 340 mm^2 | dominates a large die |
+| 2 GB | 340 to 680 mm^2 | at or past reticle limit for SRAM alone |
+
+So the threshold is **1 to 2 GB**, which is 4x to 8x the RAM every honest node
+pays, on a coin whose whole positioning is modest hardware. And it does not
+arrive on its own: at 56 bytes per block and ~525,600 blocks a year the cache
+grows about **29 MB a year**, reaching 500 MB around 2035.
+
+**The decisive objection is the trade, not the cost.** F62 measured that bigger
+tables favour bandwidth-rich devices, GPU against CPU on random gather going
+**1.64x at 224 MB to 2.73x at 3.5 GB**, because the CPU loses its cache and a
+card has little to lose. So growing the table defends against the SRAM-resident
+ASIC while **weakening us against every GPU and every HBM-equipped device**.
+
+**At Nerva's size an ASIC programme is not a live threat and a GPU is.** Paying
+a certain loss against the near threat to buy protection from a far one is the
+wrong trade now. Revisit only if the chain grows enough that the cache
+approaches the threshold on its own, or if a specialised-hardware threat
+actually appears.
 
 ### D4. Reconsider the pad once the fill changes. Not now.
 
