@@ -10,7 +10,10 @@
 # software against software, which would pass and mean nothing. The binary
 # refuses to run on a CPU without AES-NI for the same reason.
 #
-# contrib/powbench/v8ns-{hw,sw}.c are the D1 candidate: the same core with
+# The D1 candidate TUs (v8ns-{hw,sw}.c) were deleted on 2026-10-07 when D1 was
+# adopted into the real translation units, which is what their own header said
+# to do. What remains compares the shipped hash's two AES arms.
+# Historical note, since the rest of this comment describes them:
 # CN_V8_NO_SWEEP and renamed symbols, so it links beside the shipped v8.
 #
 # -fno-strict-aliasing and -ffp-contract=off match CMakeLists.txt for these
@@ -40,7 +43,6 @@ gcc -O2 -maes -march=x86-64 -fno-strict-aliasing -ffp-contract=off \
     -DSLOW_HASH_HW_AES_BUILT=1 \
     $BOOSTINC -I src -I src/crypto -I contrib/epee/include \
     contrib/powbench/t_v8_grid.c \
-    contrib/powbench/v8ns-hw.c contrib/powbench/v8ns-sw.c \
     src/crypto/slow-hash.c src/crypto/slow-hash-hw.c src/crypto/slow-hash-sw.c \
     src/crypto/slow-hash-v8-hw.c src/crypto/slow-hash-v8-sw.c \
     src/crypto/slow-hash-v8fp-hw.c src/crypto/slow-hash-v8fp-sw.c \

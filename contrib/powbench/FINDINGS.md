@@ -4692,6 +4692,77 @@ more bandwidth per unit of hashrate. A 1 Gbps link feeds 0.57 of a thread either
 way, so the remote-feeder attack was never the live one. **The live one is the
 thin client, and it is untouched by both.**
 
+### F72. D1 is in. The sweeps and the four extra hashes are gone from the consensus code
+
+*2026-10-07. The port, not a measurement. Verified against F58's candidate
+digest rather than by inspection.*
+
+#### 1. What changed
+
+`salt_pad_v8` and the blake/groestl/jh/skein calls are removed from
+`slow-hash-v8-impl.h`. With them went:
+
+- **`slow-hash-v8-defer.h`**, 290 lines, deleted. It existed to make the sweeps
+  cheap and there was nothing left to defer. It also owned `pre_aes_v8`,
+  `post_aes_variant_v8` and `aes_sw_variant_v8`, which read the pad through
+  `CN_V8_COMP` because the pad held `logical ^ comp`. With comp identically
+  zero those reduce term for term to the plain v11 steps, so the v8 core now
+  uses `pre_aes()`, `post_aes_variant()` and `aes_sw_variant()` directly over a
+  1 MB pad.
+- **`r2`**, whose only consumer was the sweep. The two AES arms differed at
+  exactly that pointer, `&c` in hardware and `&b` in software, and F58 flagged
+  it as a divergence that would surface only on machines without AES-NI and
+  only in the field. **It is no longer reachable.**
+- **`contrib/powbench/v8ns-{hw,sw}.c`**, the D1 candidate TUs, deleted. Their
+  own header said to delete them when D1 was decided and make the change in the
+  real translation units, which is what happened.
+
+#### 2. How it was verified, in the order the checks were run
+
+**The grid digest is the proof.** `t_v8_grid` over all 1600 consensus draws now
+reports the shipped hash at **`09d34831c25f506c`** on both AES arms. That is
+byte for byte the digest F58 recorded for the no-sweep candidate before any of
+this was ported. The production code and the candidate are the same function.
+
+**The vector generator proved the live algorithms are untouched.** Regenerating
+all four tables gives **v10, v11 and v13 byte-identical** and only v14 moved.
+That is a stronger statement than diffing the sources, because it is a property
+of what the code computes rather than of how it reads.
+
+**`t_kat` passes both gates** with the new vectors, on hardware AES dispatch.
+The daemon builds and starts without refusing, which it would do if either gate
+failed.
+
+**`t_v8_sweep` confirms the speedup reached production:** the shipped core went
+from **0.5510 to 0.2657 ms** per nonce, and all three of that harness's arms now
+agree within 0.3% because they compile the same code.
+
+#### 3. What the harnesses lost, stated so nobody looks for it later
+
+`t_v8_grid`'s checks 2, 3 and the second half of 6 are gone. They compared the
+candidate against the shipped hash, and those are now one function, so the
+comparison could only ever be a function against itself. **A tautological PASS
+is worse than no check**, which is F15's lesson in a different costume. What
+carries the guarantee forward is the digest: if it ever moves off
+`09d34831c25f506c`, something changed the hash.
+
+Check 6's surviving half is now a property of the shipped algorithm: **v8
+depends only on `(xx-1)*yy + iters`.** The daemon still draws three numbers, and
+the comment at the draw site now says why: collapsing them would change how much
+HC-128 keystream the draw consumes, which would change the salt seed and every
+hash after it. The three draws are load-bearing for keystream accounting, not
+for the hash.
+
+#### 4. What this does not do
+
+**It does not decide D3.** The odds change is separate and still owed its
+testnet round. F70 measured the pair together and that result stands: 11% faster
+to verify than shipping neither, C-2 at 2.338x against a 2.50x threshold.
+
+**It does not regenerate v13's vectors**, and the generator proving that is the
+point. v8 has never validated a block, so changing what it computes is a
+question we are allowed to ask. v13 validates mainnet today and is untouched.
+
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
 `contrib/hf14checks/CMakeLists.txt` names the resized translation units

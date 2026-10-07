@@ -743,11 +743,13 @@ namespace cryptonote
 
       HC128_NextKeys(&rng_state);
       size_t rng_key_idx = 0;
-      // These two bound the sweep count, (xx-1)*yy, which the deferral in
-      // slow-hash-v8-defer.h reconstructs at O(sweeps * patches) per pad read.
-      // Widening either range makes the deferral slower superlinearly while
-      // keeping it bit-identical, so nothing would fail; re-measure it against
-      // the eager form before changing these.
+      // These three reach the hash only through (xx-1)*yy + iters, a single
+      // step count in [12, 119]. D1 removed the sweeps, and the sweep was the
+      // only thing that read xx and yy separately, so draws with the same total
+      // now give the same hash. Proved over all 1600 in-domain draws by
+      // t_v8_grid check 6. They are kept as three because collapsing them to
+      // one draw would change how much HC-128 keystream this consumes, and so
+      // would change the salt seed and every hash after it.
       // xx: [4, 8]
       draw->xx = (uint16_t)((uint32_t)4U + HC128_U32(&rng_state, &rng_key_idx, 5U));
       // yy: [4, 8]

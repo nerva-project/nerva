@@ -17,10 +17,11 @@
  * WHAT IT CHECKS, in order of what a failure would mean:
  *
  *   1. v8 shipped:   hw == sw over all 5 x 5 x 64 = 1600 consensus draws.
- *   2. v8 no-sweep:  the same 1600, for the D1 candidate.
- *   3. v8 != no-sweep on every case, so a pass in 2 cannot come from the
- *      variant having been compiled without CN_V8_NO_SWEEP by accident.
- *   4. the chain entry points, both variants, where the arms must also agree
+ *      (2 and 3 compared this against the D1 candidate. D1 was adopted on
+ *      2026-10-07, so they became a function against itself and were removed.
+ *      The digest at the end carries that forward: it must stay at
+ *      09d34831c25f506c, the candidate's value over these same draws.)
+ *   4. the chain entry points, where the arms must also agree
  *      on the 32-byte seed handed to the salt callback, since that is consensus
  *      input to HC-128 and comparing only the final hash covers it indirectly.
  *   5. a handful of out-of-domain (xx, yy), including xx = 1 and yy = 1 where
@@ -46,13 +47,9 @@
  * The ns pair is built from contrib/powbench/v8ns-hw.c and v8ns-sw.c. */
 extern void cn_slow_hash_v14_hw(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 extern void cn_slow_hash_v14_sw(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
-extern void cn_slow_hash_v14ns_hw(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
-extern void cn_slow_hash_v14ns_sw(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 
 extern void cn_slow_hash_v14_chain_hw(cn_hash_context_t *, const void *, size_t, char *, uint8_t, cn_v8_salt_fn, void *);
 extern void cn_slow_hash_v14_chain_sw(cn_hash_context_t *, const void *, size_t, char *, uint8_t, cn_v8_salt_fn, void *);
-extern void cn_slow_hash_v14ns_chain_hw(cn_hash_context_t *, const void *, size_t, char *, uint8_t, cn_v8_salt_fn, void *);
-extern void cn_slow_hash_v14ns_chain_sw(cn_hash_context_t *, const void *, size_t, char *, uint8_t, cn_v8_salt_fn, void *);
 
 /* slow-hash.c calls this; the real one is in a C++ TU that is not linked here.
  * Same answer, so the build behaves as the daemon's does. */
@@ -223,9 +220,6 @@ int main(void)
 
                 bad_v8 += run_pair(ctx, &g, cn_slow_hash_v14_hw, cn_slow_hash_v14_sw,
                                    &d_v8_hw, &d_v8_sw, h_v8);
-                bad_ns += run_pair(ctx, &g, cn_slow_hash_v14ns_hw, cn_slow_hash_v14ns_sw,
-                                   &d_ns_hw, &d_ns_sw, h_ns);
-                if (memcmp(h_v8, h_ns, HASH_SIZE) == 0) same++;
                 n++;
             }
 
@@ -233,13 +227,12 @@ int main(void)
     if (bad_v8) printf("  (%u mismatches)", bad_v8);
     printf("\n");
 
-    printf("2. v8 no-sweep, hw == sw over %u cases: %s", n, bad_ns ? "FAIL" : "PASS");
-    if (bad_ns) printf("  (%u mismatches)", bad_ns);
-    printf("\n");
-
-    printf("3. no-sweep differs from shipped on every case: %s", same ? "FAIL" : "PASS");
-    if (same) printf("  (%u identical, so the variant may not be built with CN_V8_NO_SWEEP)", same);
-    printf("\n");
+    /* Checks 2 and 3 are gone. They compared the D1 candidate against the
+     * shipped hash, and D1 was adopted on 2026-10-07, so those became the
+     * same function and the comparison could only ever be a function against
+     * itself. The digest at the end carries the guarantee forward instead: it
+     * must stay at 09d34831c25f506c, the value the candidate produced over
+     * these same 1600 draws before the port. */
 
     /* 4. the chain entry, where the seed must agree as well as the hash */
     for (i = 0; i < 32; i++)
@@ -247,9 +240,9 @@ int main(void)
         g.xx = 0; g.yy = 0; g.iters = 0;
         g.seed = 0x5eed0000ULL + (uint64_t)i;
         bad_chain += run_chain_pair(ctx, &g, cn_slow_hash_v14_chain_hw, cn_slow_hash_v14_chain_sw, &seed_bad);
-        bad_chain += run_chain_pair(ctx, &g, cn_slow_hash_v14ns_chain_hw, cn_slow_hash_v14ns_chain_sw, &seed_bad);
+        bad_chain += run_chain_pair(ctx, &g, cn_slow_hash_v14_chain_hw, cn_slow_hash_v14_chain_sw, &seed_bad);
     }
-    printf("4. chain entry, both variants, 64 pairs:  %s", bad_chain ? "FAIL" : "PASS");
+    printf("4. chain entry, 64 pairs:                 %s", bad_chain ? "FAIL" : "PASS");
     if (bad_chain) printf("  (%u hash mismatches)", bad_chain);
     printf("\n   fill seed handed to the callback agrees: %s\n", seed_bad ? "FAIL" : "PASS");
 
@@ -266,7 +259,7 @@ int main(void)
                 g.seed = 0xed6e0000ULL + (uint64_t)(e * 4 + it);
                 bad_edge += run_pair(ctx, &g, cn_slow_hash_v14_hw, cn_slow_hash_v14_sw,
                                      &throw_hw, &throw_sw, h_v8);
-                bad_edge += run_pair(ctx, &g, cn_slow_hash_v14ns_hw, cn_slow_hash_v14ns_sw,
+                bad_edge += run_pair(ctx, &g, cn_slow_hash_v14_hw, cn_slow_hash_v14_sw,
                                      &throw_hw, &throw_sw, h_ns);
                 ne += 2;
             }
@@ -276,13 +269,14 @@ int main(void)
         bad_v8 += bad_edge;
     }
 
-    /* 6. after D1 the three loops have the same body, so only their total
-     * length can matter. If that is true, every (xx, yy, iters) with the same
-     * (xx - 1) * yy + iters must give the no-sweep hash the same answer, and
-     * must give the shipped hash different ones, since the sweeps read xx, yy
-     * and iters individually. Checked rather than read off the source, because
-     * it is the claim that decides whether the daemon should keep drawing
-     * three numbers after D1. */
+    /* 6. D1 left the three loops with the same body, so only their total
+     * length can matter: every (xx, yy, iters) sharing (xx - 1) * yy + iters
+     * must now give the same hash. Before D1 the sweeps read xx, yy and iters
+     * individually and this did NOT hold, which is why this check used to have
+     * a second half asserting they stayed separate. Checked rather than read
+     * off the source, because it decides whether the daemon still needs to
+     * draw three numbers. It does, but only to keep the HC-128 keystream
+     * consumption the same, not because the hash reads them apart. */
     {
         /* each row is {xx, yy, iters}; rows within a group total the same */
         static const uint16_t eq[][3] = {
@@ -307,7 +301,7 @@ int main(void)
                  * random_values must be identical or the comparison is empty */
                 g.seed = grp ? 0xe900beefULL : 0xe900cafeULL;
                 g.xx = rows[e][0]; g.yy = rows[e][1]; g.iters = rows[e][2];
-                run_pair(ctx, &g, cn_slow_hash_v14ns_hw, cn_slow_hash_v14ns_sw, &t1, &t2, cur_ns);
+                run_pair(ctx, &g, cn_slow_hash_v14_hw, cn_slow_hash_v14_sw, &t1, &t2, cur_ns);
                 run_pair(ctx, &g, cn_slow_hash_v14_hw, cn_slow_hash_v14_sw, &t1, &t2, cur_v8);
                 if (e == 0)
                 {
@@ -322,19 +316,17 @@ int main(void)
             }
         }
 
-        printf("6. no-sweep depends only on (xx-1)*yy+iters:  %s", bad_eq ? "FAIL" : "PASS");
+        printf("6. v8 depends only on (xx-1)*yy+iters:  %s", bad_eq ? "FAIL" : "PASS");
         if (bad_eq) printf("  (%u rows disagreed within a group)", bad_eq);
-        printf("\n   shipped v8 still separates those draws:    %s\n", split_ok ? "PASS" : "FAIL");
+        printf("\n");
+        (void)split_ok;   /* v8 no longer separates these: that WAS the sweeps */
         bad_ns += bad_eq;
-        if (!split_ok) bad_v8++;
     }
 
     printf("\ndigests over the %u in-domain cases, to compare across machines:\n", n);
     printf("  v8 shipped   hw %016llx  sw %016llx\n",
            (unsigned long long)d_v8_hw, (unsigned long long)d_v8_sw);
-    printf("  v8 no-sweep  hw %016llx  sw %016llx\n",
-           (unsigned long long)d_ns_hw, (unsigned long long)d_ns_sw);
 
     cn_hash_context_free(ctx);
-    return (bad_v8 || bad_ns || same || bad_chain || seed_bad) ? 1 : 0;
+    return (bad_v8 || bad_ns || bad_chain || seed_bad) ? 1 : 0;
 }
