@@ -4386,6 +4386,148 @@ beyond anything C-3 would allow, so **reseed count can be defended but not
 cheaply increased.** That closes Option 3 as a lever while leaving F64's finding
 that it must not be *decreased* intact.
 
+### F68. C-4 measured: the odds cost 0.17 ms a block, which is free at the fork and crosses its threshold about 16 months later
+
+*2026-10-07, in the daemon on real blocks, closing the last measurable criterion
+in [D3-ODDS-PREREG.md](D3-ODDS-PREREG.md). Log in
+`contrib/powbench/results/c4-odds-sync-2026-10-07.txt`.*
+
+#### 1. Method, which reuses an instrument rather than building one
+
+`NERVA_SALT_ODDS_AB` already A/Bs odds 256 against 13 as **two shadow fills
+inside one call**, alternating order per call, both discarded while the real
+fill runs untouched. That avoids F57's void run, where four separate daemon
+processes drifted 25% apart on a 5 GB database.
+
+The chain copy sat at the tip, so 2,500 blocks were popped via `pop_blocks` and
+re-synced from peers, which F61 established does re-verify PoW in full with
+`precomputed=0`. Run with `--log-level "global:INFO"`, without which the report
+is invisible, which is the trap that cost hours in F61.
+
+The node returned to the tip with **zero invalid, rejected or reorg messages**,
+so the blocks really were re-verified and the copy is still usable.
+
+#### 2. The result, over 2,048 interleaved pairs
+
+| | TSC ticks per fill |
+|---|---|
+| windowed, odds 13 | 6,505,613 |
+| full history, odds 256 | 7,773,423 |
+| **ratio** | **1.1949x** |
+
+**The harness said 1.183x on the same machine (F67), so the daemon and the bench
+agree to 1%.** Two different instruments, one synthetic cache and one real LMDB
+chain, which is the kind of agreement that makes a number believable.
+
+| | ms per block |
+|---|---|
+| extra, v13 conditions as measured | 0.282 |
+| extra, projected under v14 | **0.173** |
+
+The projection divides by F57's measured 1.63x, since the same fill costs that
+much more under v13's 8 MB pad than under v14's 1 MB one. This run was
+necessarily under v13, because HF14 is not live.
+
+#### 3. C-4 passes, and the interesting part is when it stops passing
+
+The odds change is v14-only, so it costs nothing for any block below HF14.
+
+| | blocks verified | extra sync |
+|---|---|---|
+| at HF14 launch | 0 | **0 s** |
+| 1 year after | 525,600 | 91 s |
+| **1.32 years after** | **693,642** | **120 s, the threshold** |
+| 2 years after | 1,051,200 | 182 s |
+
+**C-4 passes, and P4 was right: the arithmetic predicted 29 s against today's
+111,762 blocks above assume-valid and the measurement gives 31.6 s, an error of
+9%.** That is the one prediction in this pre-registration drawn from arithmetic
+rather than intuition, and it is the only one of the four that held.
+
+**The threshold is crossed about 16 months after the fork if
+`ASSUME_VALID_HEIGHT` is never bumped.**
+
+*Corrected on review, same day: that framing is misleading, and the growth is
+bounded in practice.* The verified range is `tip - ASSUME_VALID_HEIGHT`, a
+**subtraction, not an accumulation**, so bumping the height **resets it to near
+zero**. The only constraint is that a hardcoded checkpoint must sit at or above
+the new value, which [checkpoints.cpp:221](../../src/checkpoints/checkpoints.cpp#L221)
+enforces by refusing to start otherwise.
+
+And checkpoints are already added on a cadence: the last eight sit at
+3,700,000 through 4,300,000, **every 100,000 blocks, which is 69 days**, plus
+one at 4,320,000 for HF13 activation. If assume-valid keeps tracking them, the
+verified range stays near one interval and **D3's sync cost never exceeds about
+17 to 26 seconds**:
+
+| verified range | D3's extra sync |
+|---|---|
+| 100,000 blocks, one checkpoint interval | **17.3 s** |
+| 111,762, today's tip minus assume-valid | 19.3 s |
+| 150,000, a lax interval | 25.9 s |
+
+So the 2-year figure above describes a project that stopped maintaining its
+checkpoints, not this one, which has bumped them eight times in the visible
+history. **The honest framing is the one that does not depend on cadence at
+all: D3 does not change which blocks get verified, only how long each takes.**
+It adds 0.173 ms to a v14 nonce of about 1.325 ms, so it makes PoW verification
+**13% slower**, or about 17% if D1 lands too and the nonce it is a fraction of
+gets cheaper.
+
+### F69. The fill's cost depends on how close the chain height is to a power of two, so D3 gets cheaper for the next seven years rather than dearer
+
+*2026-10-07, measured while checking an assumption in F68 that turned out to be
+backwards. `t_v8_fill` at three heights,
+`contrib/powbench/results/fill-future-heights-2026-10-07.txt`.*
+
+F68 presented D3's 0.173 ms per block as fixed. The obvious objection is that it
+should **grow** with the chain, since the extra reads go into a block cache that
+gets bigger. Measured, it shrinks:
+
+| height | cache | accept rate | odds 256 minus shipped |
+|---|---|---|---|
+| 4,500,000 | 240 MB | 53.6% | **0.1326 ms** |
+| 6,078,000 | 325 MB | 72.5% | 0.0944 ms |
+| 7,128,000 | 381 MB | 85.0% | 0.0748 ms |
+
+**It is not a memory effect.** `HC128_U32` at
+[hc128.h:61](../../src/crypto/hc128.h#L61) draws by masking to the next power of
+two and **redrawing on overflow**, so its cost is set by the acceptance rate,
+and a rejected draw consumes keystream and pulls `HC128_NextKeys` forward.
+Acceptance is `height / 2^ceil(log2(height))`.
+
+Delta multiplied by acceptance is 0.071, 0.068 and 0.064 across the three rows,
+near enough constant, so the increment is about **0.067 / acceptance** ms and
+the model is confirmed rather than fitted.
+
+Only **full-history** picks use `height` as their range; window picks use a
+constant 100,000, whose acceptance is a fixed 76.3%. That is why only the
+odds-256 arm moves with height, and it is what made the effect visible at all.
+
+#### What it means
+
+**A sawtooth, bounded at roughly where we already are.** Acceptance falls to 50%
+just above a power of two and climbs to 100% just below, so the increment ranges
+about 0.067 to 0.134 ms. **Today sits at 53.6%, which is near the worst point**,
+and the chain does not cross the next power of two, 8,388,608, until about **7.4
+years** after HF14.
+
+So the honest answer to "does this get worse as the chain grows" is **no, it
+gets better for seven years, then resets to about today's value.** The intuition
+that a bigger database must cost more is wrong here, because the fill's marginal
+cost is dominated by the cipher rather than by memory, which is F60 and F65
+arriving a third time.
+
+**This is a property of the live algorithm, not of D3.** v13's fill pays the
+same sawtooth today, on every block, and nobody had noticed. D3 only multiplies
+how many picks are exposed to it, from 832 to 16,384.
+
+*Not pursued:* a draw that did not reject, for example Lemire's multiply-shift,
+would remove the sawtooth and make the fill slightly cheaper for everyone. It
+is a consensus change to shared v13 code and so is not free, and it would
+**reduce** the attacker's work as well as ours, so it is not obviously wanted.
+Recorded so the next person who finds this knows it was seen and left alone.
+
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
 `contrib/hf14checks/CMakeLists.txt` names the resized translation units

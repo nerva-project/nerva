@@ -282,15 +282,21 @@ excluded before it is measured, while anything clearly worse is.
 | C-1 gain | >= 5x | 9.2x | **17.3x** |
 | C-2 fairness | <= 2.50x | 2.188x | **2.247x** |
 | C-3 honest cost | <= 1.25x | 1.075x | **1.136x** |
-| C-4 sync | < 2 min | *owed* | *owed* |
+| C-4 sync | < 2 min | better than 256 | **0 s at launch, F68** |
 | C-5 testnet | pass | *owed* | *owed* |
 | C-6 SRAM | position stated | yes | yes |
 | C-7 GPU | >= -20% | better than 256 | **-17%** |
 
-**Both 128 and 256 pass every criterion that has been measured.** C-4 and C-5
-remain owed and neither is expected to bind: C-4 is arithmetic at about 29
-seconds because PoW is skipped below `ASSUME_VALID_HEIGHT`, and C-5 is a
-process gate rather than a threshold.
+**Both 128 and 256 pass every criterion that has been measured.** Only C-5
+remains owed, and it is a process gate rather than a threshold.
+
+**C-4 measured 2026-10-07, F68**, in the daemon on 2,500 re-verified real
+blocks: 1.1949x against the harness's 1.183x, agreeing to 1%. Since the change
+is v14-only it costs **nothing at the fork**, and **0.173 ms per block**
+thereafter. One caveat is recorded there rather than hidden here: the count of
+PoW-verified blocks grows forever at one a minute, so this threshold is crossed
+about **16 months** after the fork unless `ASSUME_VALID_HEIGHT` is bumped. That
+is an operational dependency, not a defect, and routine releases satisfy it.
 
 **What the pre-registration was actually worth**, recorded as the pad decision
 recorded it, because the honest answer is uncomfortable.
