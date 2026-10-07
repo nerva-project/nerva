@@ -68,12 +68,27 @@
 struct blk_ent { uint8_t hash[32]; uint64_t timestamp, diff_lo, coins; };
 #pragma pack(pop)
 
-enum { ARM_SHIPPED = 0, ARM_WINDOW, ARM_HOT, ARM_ALL, NARMS };
+/* The first four are the original arms. The last three are D3-ODDS-PREREG's
+ * intermediate candidates, added 2026-10-07 so the cost curve's shape is
+ * visible and not just its endpoints.
+ *
+ * ARM_HOT draws with the shipped odds and then throws the index away, so it
+ * remains the HC-128 floor while consuming exactly the keystream every other
+ * arm does. Keeping ARM_SHIPPED at 0 means the 13/256 control is in every
+ * table by construction, which the pre-registration requires. */
+enum { ARM_SHIPPED = 0, ARM_WINDOW, ARM_HOT, ARM_ALL,
+       ARM_O32, ARM_O64, ARM_O128, NARMS };
 static const char *const g_arm[NARMS] = {
     "shipped, 13/256 ",
     "window only     ",
     "one hot entry   ",
-    "all full history"
+    "all full history",
+    "odds 32/256     ",
+    "odds 64/256     ",
+    "odds 128/256    "
+};
+static const uint32_t g_odds[NARMS] = {
+    CNA_V6_FULL_HISTORY_ODDS, 0u, CNA_V6_FULL_HISTORY_ODDS, 256u, 32u, 64u, 128u
 };
 
 static std::vector<blk_ent> g_cache;
@@ -115,9 +130,7 @@ static void fill_serial(unsigned char *out, HC128_State *rng, uint32_t height, i
     const blk_ent *C = g_cache.data();
     const uint32_t wsz   = height > CNA_V6_WINDOW_BLOCKS ? CNA_V6_WINDOW_BLOCKS : height;
     const uint32_t wbase = height - wsz;
-    const uint32_t odds  = (arm == ARM_WINDOW) ? 0u
-                         : (arm == ARM_ALL)    ? 256u
-                         : CNA_V6_FULL_HISTORY_ODDS;
+    const uint32_t odds  = g_odds[arm];
     size_t ki = 0;
     unsigned char msg[64];
     unsigned char *optr = out;
@@ -170,9 +183,7 @@ static void fill(unsigned char *out, HC128_State *rng, uint32_t height, int arm,
     const uint32_t wsz   = height > CNA_V6_WINDOW_BLOCKS ? CNA_V6_WINDOW_BLOCKS : height;
     const uint32_t wbase = height - wsz;
     /* the only thing that differs between arms */
-    const uint32_t odds  = (arm == ARM_WINDOW) ? 0u
-                         : (arm == ARM_ALL)    ? 256u
-                         : CNA_V6_FULL_HISTORY_ODDS;
+    const uint32_t odds  = g_odds[arm];
     size_t ki = 0;
     unsigned char msg[64];
     unsigned char *optr = out;
@@ -261,14 +272,14 @@ int main(int argc, char **argv)
     uint32_t height = (argc > 1) ? (uint32_t)strtoul(argv[1], NULL, 10) : 4500000u;
     double seconds  = (argc > 2) ? atof(argv[2]) : 6.0;
     std::vector<unsigned char> salt(SALT_BYTES);
-    uint64_t cyc[NARMS] = {0, 0, 0, 0}, n[NARMS] = {0, 0, 0, 0};
+    uint64_t cyc[NARMS] = {0}, n[NARMS] = {0};
     double ms[NARMS], hz;
     uint64_t gid = 0;
     int a;
 
     if (height < CNA_V6_WINDOW_BLOCKS + 1) height = CNA_V6_WINDOW_BLOCKS + 1;
     printf("v8 chain fill: is it memory bound or HC-128 bound?\n");
-    printf("height %u, cache %.0f MB, window %.1f MB, %.0f s/arm\n",
+    printf("height %u, cache %.0f MB, window %.1f MB, %.0f s total\n",
            height, (double)height * sizeof(blk_ent) / 1048576.0,
            (double)CNA_V6_WINDOW_BLOCKS * sizeof(blk_ent) / 1048576.0, seconds);
     fflush(stdout);
@@ -283,7 +294,8 @@ int main(int argc, char **argv)
         const double deadline = now_s() + seconds;
         while (now_s() < deadline)
         {
-            static const int ord[2 * NARMS] = {0, 1, 2, 3, 3, 2, 1, 0};
+            static const int ord[2 * NARMS] =
+                {0,1,2,3,4,5,6, 6,5,4,3,2,1,0};
             unsigned char seed[32];
             uint64_t x = gid++ * 0x9e3779b97f4a7c15ULL + 0xFEEDULL;
             int i;

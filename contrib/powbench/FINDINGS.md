@@ -3765,6 +3765,17 @@ that the number is real.
 is not an error: a 7950X holds roughly a third of a 224 MB table in its 96 MB of
 cache. It is a true property of the chain today and it is why the sweep matters.
 
+*Corrected 2026-10-07, F66.* **The work-item sweep behind this table was too
+short and these GPU figures are floors.** At 224 MB the peak sat at 4,096 items,
+the lowest tested, so the curve was still rising below the range; the sentence
+above about it being "flat across every work-item count" is true at 3.5 GB and
+false here. Extending the sweep to 256 items puts **224 MB at 1.98x rather than
+1.64x**. The composed whole-fill figure in section 3 moves only from 10.5x to
+10.4x, because gather is small beside HC-128, so every conclusion below stands.
+F66 also measures the sizes this table never reached: at **window size a card is
+5.65x to 6.91x better**, which is the regime 94.9% of the fill's reads are
+actually in.
+
 #### 2. HC-128: the GPU loses, badly
 
 | | CPU (30 threads) | GPU (8,192 items) | GPU / CPU |
@@ -4194,6 +4205,186 @@ the 1.313x verification speedup, which is goal 4 and is measured and solid.
 database that grows**, which is F38's original claim, now the only one standing.
 The reseeds remain load-bearing against GPUs for F64's amortisation reason, but
 that is a different machine and a different argument.
+
+### F66. The window is a GPU gift too, F62's gather figures were truncated, and P5 was wrong without moving the criterion it was written for
+
+*2026-10-07, the first measurement under [D3-ODDS-PREREG.md](D3-ODDS-PREREG.md),
+run after that file was committed and signed at 82306c4. Raw output in
+`D:\Claude\gather\`.*
+
+The prereg's P5 predicted a GPU would be relatively **worse** at window-sized
+reads, because 5.3 MB is L3-resident on every CPU in the table and does not fit
+an RTX 3050's 2 MB L2. **It is the opposite, and by a wide margin.**
+
+#### 1. The gather curve, which had only ever been sampled at its far end
+
+`t_gather` with `g_log2_entries` swept, 7950X at 30 threads against an RTX 3050.
+
+| table | GPU / CPU |
+|---|---|
+| **3.5 MB, window-sized** | **5.65x to 6.91x** |
+| 7 MB | 4.61x |
+| 14 MB | 3.98x |
+| 28 MB | 1.05x |
+| 56 MB | 1.77x |
+| **224 MB, mainnet today** | **1.98x** |
+
+**A card is roughly three times more dominant at window size than at full-chain
+size.** The window was introduced to keep 95% of reads cache-resident for a
+syncing node. It does that, and it hands the same residency to every attacker:
+block RAM on an FPGA, and the regime where a GPU is strongest.
+
+The 3.5 MB row is quoted as a range because the CPU side moved 17% between two
+runs there, being cache-resident and sensitive to machine state. The 224 MB row
+moved 1.2% and is the trustworthy one.
+
+#### 2. F62's gather numbers were taken at a truncated sweep
+
+Caught by the prereg's own void list, which was written before any of this ran:
+*"a peak that sits at the end of the swept range means the range was too short."*
+
+Three of six sizes peaked at **4,096 work items, the lowest value tested**,
+including 224 MB, which is F62's headline. F62 states that curve is "flat across
+every work-item count, which is the signature of a bandwidth-bound
+measurement." **At 224 MB it is not flat, it decreases monotonically**, so the
+peak lay below the swept range and the figure was a floor rather than a
+measurement.
+
+Re-running with the sweep extended to 256 items, all peaks interior:
+
+| | F62 | corrected |
+|---|---|---|
+| gather at 224 MB | 1.64x | **1.98x** |
+
+So **F62 understated the GPU by 21% on this axis.** Its composed whole-fill
+figure barely moves, 10.5x to 10.4x, because gather is a small term beside
+HC-128, so the conclusion stands and the input was wrong. `t_gather`'s item
+array now starts at 256.
+
+This is F63's launch-cap trap wearing different clothes, in the same harness
+family, three weeks after that lesson was written down. The difference is that
+this time a pre-registered void condition caught it instead of a reviewer.
+
+#### 3. P5 was wrong by a factor of 8 and C-7 did not move
+
+| | prereg arithmetic | with measured ratios |
+|---|---|---|
+| assumed window ratio | 1.5x against the GPU | **0.177x**, i.e. 5.65x for it |
+| fill GPU resistance, odds 13 to 256 | 11.49x to 9.55x | 11.43x to 9.52x |
+| **C-7 regression** | **-17%** | **-17%** |
+
+**An input was wrong in direction and by eightfold, and the criterion built on
+it did not shift by a point.** The reason is worth keeping: on the GPU side the
+whole memory term is 10.8 us against 8,504 us of HC-128, so what a card does
+with the reads is noise. The regression is not about the GPU being good at
+memory. **It is that raising the odds slows the honest CPU's fill by 1.21x while
+slowing the GPU's by 1.011x.**
+
+That reframes C-7. The cost is not "we hand a card the part it is better at",
+it is "we pay 21% and the attacker pays nothing". Same number, different reason,
+and the different reason is the one that generalises to the other candidates.
+
+#### 4. Where D3 stands after one measurement
+
+**C-7 passes at the maximum candidate, with 3 points of margin against a 20%
+threshold.** That is tighter than it looks, since the composition carries the
+modelling caveat recorded in the prereg, and intermediate candidates will cost
+less. Nothing else is settled: C-2's fairness cost is the next and larger
+question and needs the laptop.
+
+### F67. Raising the full-history odds costs almost nothing in fairness, and three of the five pre-registered predictions were wrong
+
+*2026-10-07, the second and decisive measurement under
+[D3-ODDS-PREREG.md](D3-ODDS-PREREG.md), committed and signed at 82306c4 before
+any of this ran. `t_v8_fill` extended from four arms to seven, same static
+binary on both machines. Raw output in `D:\Claude\fill\` and
+`D:\Claude\NervaResults\laptop_fill_0*.PNG`.*
+
+#### 1. The measurement
+
+Seven arms interleaved A-B-C-D-E-F-G-G-F-E-D-C-B-A in one process, 40 s,
+height 4,500,000, 240 MB cache, 5.3 MB window. Two runs per machine. The 7950X
+pair agree to **0.27%** and the i7-7700HQ pair to **1.52%**, both inside the
+pre-registered 4% void threshold.
+
+| odds | fill, 7950X | fill, 7700HQ | fill spread | nonce spread (C-2) | honest cost (C-3) | gain (C-1) |
+|---|---|---|---|---|---|---|
+| **13, shipped** | 0.7050 | 1.2993 | 1.843x | 2.171x | 1.000x | 1.0x |
+| 32 | 0.7251 | 1.3507 | 1.863x | 2.177x | 1.018x | 2.4x |
+| 64 | 0.7527 | 1.4220 | 1.889x | 2.185x | 1.043x | 4.7x |
+| **128** | 0.7940 | 1.5163 | 1.910x | **2.188x** | **1.075x** | **9.2x** |
+| **256** | 0.8339 | 1.6899 | 2.027x | **2.247x** | **1.136x** | **17.3x** |
+
+Thresholds: C-1 at least 5x, C-2 at most 2.50x, C-3 at most 1.25x.
+
+**Odds 128 and 256 pass every measurable criterion.** C-7 passes too, at the
+-17% computed in F66 against a -20% threshold. 32 and 64 fail only C-1, by
+being too small to be worth the change.
+
+#### 2. Three of five predictions were refuted, and the decision is still clear
+
+This is the entry's main value, because it is what the pre-registration was for.
+
+**P1, confirmed.** The laptop does rise faster: 1.301x against the desktop's
+1.183x across the full odds range.
+
+**P2, refuted and not narrowly.** The prediction was that the fill spread would
+widen into 2.6x to 3.5x. It goes from **1.84x to 2.03x**, a widening of 9.9%,
+and the whole-nonce spread moves only **2.17x to 2.25x**. The fairness cost that
+this entire measurement was built to find is **3.6%**, and the threshold set for
+it had 15% of room. **The thing predicted to decide the outcome turned out not
+to matter.**
+
+**P3, refuted, and the direction is inverted.** The prediction was a concave
+curve, most of the cost arriving early, so a middle candidate would win. The
+marginal cost per extra full-history read **falls** from 16.5 ns at the bottom
+of the range to 4.9 ns at the top. The cost is convex, gain-over-cost rises
+monotonically, and **the maximum is the most efficient point available**, not a
+compromise.
+
+**P5 was already refuted in F66**, by a factor of eight and in the wrong
+direction, without moving the criterion built on it.
+
+So the pre-registration's predictive record is 1 of 4 on the measured ones. Its
+**criteria** held perfectly, which is the argument for separating the two: had
+the thresholds been chosen after seeing that the fairness cost was 3.6%, no one
+could tell whether 2.50x was reasoning or rationalisation.
+
+#### 3. Why the fairness cost is so small, and it is F65's point again
+
+Because the fill is **94% HC-128 on both machines**: 93.9% and 94.1% on the
+laptop here, against F60's 94% on the desktop, measured independently. The odds
+only move the other 6%, so even tripling the memory term moves a nonce by a
+tenth.
+
+The same fact that makes v8 weak against an ASIC, the cipher dominating the
+fill, is what makes raising the odds nearly free for honest CPUs. **One property
+pays for the other**, which is the first time in this project that two
+conclusions have pointed the same way.
+
+*A caveat on the desktop numbers.* The 7950X's memory term is at its noise
+floor: `window only` came in **below** the `one hot entry` floor in both runs,
+which is physically impossible and puts the noise near 1% against a 1.5% signal.
+F60 measured 5.7% on the same machine. The laptop resolves it cleanly at 6.1%,
+which is why that machine carries this result and the desktop is the control.
+
+#### 4. A reseed sweep that arrived free, and it is Option 3's answer
+
+The harness prints it alongside. Laptop, ms per fill:
+
+| reseed every | reseeds | ms | vs shipped |
+|---|---|---|---|
+| **16 msgs, shipped** | **257** | 1.3066 | 1.00x |
+| 32 | 128 | 0.8592 | 0.66x |
+| 64 | 64 | 0.6676 | 0.51x |
+| 4096 | 1 | 0.4598 | **0.35x** |
+
+**The reseeds are 65% of the fill.** F64 made reseed frequency the mechanism of
+the GPU gate rather than a tuning dial; this prices the dial. Halving the
+interval to reseed every 8 messages would roughly double the fill, which is far
+beyond anything C-3 would allow, so **reseed count can be defended but not
+cheaply increased.** That closes Option 3 as a lever while leaving F64's finding
+that it must not be *decreased* intact.
 
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 

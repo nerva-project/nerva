@@ -294,7 +294,7 @@ int main(int argc, char **argv)
          * measurement is a rate, so a shorter launch costs precision, not
          * validity. */
         const double gpu_seconds = (seconds < 0.5) ? seconds : 0.5;
-        const size_t items[] = { 4096, 32768, 131072, 524288, 2097152 };
+        const size_t items[] = { 256, 1024, 4096, 32768, 131072, 524288, 2097152 };
         for (size_t it = 0; it < sizeof(items)/sizeof(items[0]); it++) {
             const size_t gsz = items[it];
             cl_mem dout = cl.CreateBuffer(ctx, CL_MEM_READ_WRITE, gsz * 8, NULL, &err);

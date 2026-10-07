@@ -275,4 +275,47 @@ excluded before it is measured, while anything clearly worse is.
 
 ## The decision record
 
-*Empty until the measurement runs.*
+**Measured 2026-10-07. Full write-up in FINDINGS.md F66 and F67.**
+
+| criterion | threshold | odds 128 | odds 256 |
+|---|---|---|---|
+| C-1 gain | >= 5x | 9.2x | **17.3x** |
+| C-2 fairness | <= 2.50x | 2.188x | **2.247x** |
+| C-3 honest cost | <= 1.25x | 1.075x | **1.136x** |
+| C-4 sync | < 2 min | *owed* | *owed* |
+| C-5 testnet | pass | *owed* | *owed* |
+| C-6 SRAM | position stated | yes | yes |
+| C-7 GPU | >= -20% | better than 256 | **-17%** |
+
+**Both 128 and 256 pass every criterion that has been measured.** C-4 and C-5
+remain owed and neither is expected to bind: C-4 is arithmetic at about 29
+seconds because PoW is skipped below `ASSUME_VALID_HEIGHT`, and C-5 is a
+process gate rather than a threshold.
+
+**What the pre-registration was actually worth**, recorded as the pad decision
+recorded it, because the honest answer is uncomfortable.
+
+Its **predictions were mostly wrong**: 1 of 4 measured ones survived. P2, named
+in this file as "the prediction most likely to be wrong and the one that decides
+the outcome", was wrong by a factor of four and the quantity it concerned turned
+out not to decide anything. P3's direction was inverted. P5 was wrong by eight.
+
+Its **criteria were worth everything**. The fairness cost came in at 3.6%
+against a threshold with 15% of room. Had C-2 been written after seeing that,
+nobody could tell whether 2.50x was judgement or rationalisation. The same
+applies to the void list, which disqualified three of six rows in the first
+measurement including a number F62 had already published.
+
+**The lesson for the next one: pre-register the criteria and the void
+conditions, and treat the predictions as a way of finding out how the system
+works rather than as a forecast worth trusting.**
+
+**Decision: adopt 256 of 256 at HF14**, subject to C-4 and C-5. It is the most
+efficient point on the curve rather than a compromise, because the cost is
+convex, and it retires `CNA_V6_WINDOW_BLOCKS` entirely, which removes the
+structure F66 showed is a gift to every attacker class at once. The conservative
+alternative is 128, which keeps the window and gives up 1.9x of C-1.
+
+**Not adopted on its own merits alone:** D3 still only buys what F66 and F67
+measure, and the ASIC row of its threat table is void per C-6. The case is the
+FPGA one.
