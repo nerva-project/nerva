@@ -87,6 +87,8 @@ loops. So the post-fill state depends on the salt's *content*.
 
 A screener cannot fast-forward the keystream to learn the parameters. It has to
 produce the salt, which needs the block cache, which needs a full node.
+*Corrected 2026-10-07, F71: it needs the block cache, which is 237 MB of
+derived data and NOT a full node. The screening conclusion is unaffected.*
 
 *Consequence:* v5's 4.7x cost variance is safe because of this feedback, not
 because of luck. Any v8 change that widens `xx`/`yy` or moves parameter
@@ -1421,8 +1423,9 @@ that it has to accelerate the fill, which is 256 KB per nonce assembled from
 scattered reads across a multi-gigabyte database. At any ASIC-scale rate that is
 a random-access storage bandwidth problem, which is a server rather than a chip,
 and the economics stop being ASIC economics. It is the same mechanism as the
-pool resistance: you cannot mine without being a full node, and the requirement
-scales linearly with hashrate.
+pool resistance: you cannot mine without holding the block cache, and the
+requirement scales linearly with hashrate. *Corrected 2026-10-07, F71: that is
+237 MB of derived data, not a full node, so a thin client is possible.*
 
 **Note which way v15 moves it: 1.6x to 1.8x, in the attacker's favour**, because
 it adds work to the half they can specialise and leaves the half they cannot
@@ -4527,6 +4530,167 @@ would remove the sawtooth and make the fill slightly cheaper for everyone. It
 is a consensus change to shared v13 code and so is not free, and it would
 **reduce** the attacker's work as well as ours, so it is not obviously wanted.
 Recorded so the next person who finds this knows it was seen and left alone.
+
+### F70. D1 and D3 together are 11% faster to verify than shipping neither, and better on every goal except fairness
+
+*2026-10-07. Every D3 criterion in F67 was measured on an algorithm that still
+has the sweeps, so none of them had been checked in combination with D1. This
+closes that.*
+
+#### 1. Method, and a correction to F67's split
+
+The core was re-measured today with `t_v8_sweep`: **0.5510 ms as it stands,
+0.2515 ms with the sweeps gone**, against F58's 0.5418 and 0.2463. The ratio
+agrees to 0.5%, so F58's cross-machine anchors still hold and the composition
+below rests on current numbers.
+
+Anchors are F58's rebased pair, both machines in one session: nonce 1.325 and
+2.877 ms, core 0.535 and 1.257, core after D1 0.243 and 0.646. The two
+multipliers are measured fresh: the fill at odds 256 over odds 13 is
+**1.1828x** on the 7950X and **1.3006x** on the i7-7700HQ.
+
+*Correction to F67.* That entry derived the core by subtracting `t_v8_fill`'s
+fill from the daemon's nonce, giving 0.620 ms, where `t_v8_sweep` measures the
+core directly at 0.535. The two harnesses disagree about where the boundary
+sits, and the direct measurement is the better one. **F67's C-2 for D3 alone
+should read 2.289x rather than 2.247x.** Both pass; the conclusion does not
+move; the method here is the one to reuse.
+
+#### 2. The combination
+
+| | nonce, 7950X | nonce, 7700HQ | C-2 spread | C-3 vs baseline |
+|---|---|---|---|---|
+| baseline | 1.325 | 2.877 | 2.171x | 1.000x |
+| D1 only | 1.033 | 2.266 | 2.194x | 0.780x |
+| D3 only | 1.469 | 3.364 | 2.289x | 1.109x |
+| **D1 + D3** | **1.177** | **2.753** | **2.338x** | **0.889x** |
+
+**C-2 passes at 2.338x against a 2.50x threshold**, with 6.5% of margin. The two
+candidates are close to additive on the spread, which was the assumption worth
+checking and it held.
+
+**C-3 is not a cost at all for the pair.** The threshold was 1.25x and the
+combination comes in at **0.889x: 11% faster to verify than shipping neither.**
+D1 pays for D3 with change left over, on both machines.
+
+**C-7 is unaffected by D1**, because the pre-registration defines it on the
+fill's GPU ratio and D1 does not touch the fill. It stands at -17%.
+
+#### 3. Whole-nonce GPU resistance, and why B3 is not needed to decide this
+
+The whole-nonce figure needs the core's GPU ratio, which has never been measured
+and is B3. So it is swept rather than assumed. F59 found D1 roughly doubles the
+AES asymmetry, so the D1 arms use `2r`.
+
+| core ratio `r` | baseline | D1 | D3 | **D1 + D3** | pair vs baseline |
+|---|---|---|---|---|---|
+| 3 | 8.03x | 10.15x | 7.15x | **8.79x** | **+9.6%** |
+| 6 | 9.24x | 11.56x | 8.24x | **10.03x** | **+8.6%** |
+| 10 | 10.85x | 13.45x | 9.69x | **11.68x** | **+7.7%** |
+
+**The sign does not flip anywhere in the plausible range**, so the pair improves
+whole-nonce GPU resistance by 8 to 10% whatever B3 turns out to say. That is the
+answer to whether B3 gates this decision: **it does not.**
+
+The shape is worth seeing: **D1 improves GPU resistance, D3 degrades it, and the
+pair nets positive.** Neither candidate reads well alone on this axis and
+together they do.
+
+#### 4. The scorecard
+
+| goal | D1 + D3 against baseline |
+|---|---|
+| 1, GPU | **+8 to 10%** |
+| 1, FPGA | **94.9% of reads servable on-chip falls to 0%** |
+| 1, ASIC | D1 neutral per F65, D3 **+17.6x** against DRAM-class attackers |
+| 2, CPU parity | **worse: 2.171x to 2.338x**, the only regression |
+| 3, pool | untested for either; argued safe, since both leave the chain-binding intact |
+| 4, sync | **11% faster** |
+
+**One regression against four improvements**, and the regression is 7.7% on a
+quantity with 15% of pre-registered room. Goal 3 is the honest gap and it is an
+argument rather than a measurement.
+
+### F71. Goal 3's barrier is 237 MB, not a full node, and the number comes from a struct definition rather than a security argument
+
+*2026-10-07, from the code and arithmetic rather than a bench. It corrects a
+premise this file states in two places and that the project's roadmap was built
+on.*
+
+#### 1. The claim, and why it is wrong
+
+This file says at two points that a miner "cannot mine without being a full
+node", and the pool-resistance roadmap builds Nerva's main differentiator on it:
+that every pool participant must run a full node, so there is no thin-client
+onboarding, every worker validates, and every worker can defect or spot a
+censoring template.
+
+**The error is assuming that needing chain data per hash means needing a node.**
+
+The fill reads only `block_cache_data`
+([db_lmdb.h:75](../../src/blockchain_db/lmdb/db_lmdb.h#L75)): a 32-byte hash and
+three uint64, **56 bytes per block and nothing else.** `body()` makes four
+random picks and takes one field from each. Transactions, signatures, outputs,
+key images and every index are untouched, and they are most of the 5 GB.
+
+| | size |
+|---|---|
+| full database | ~5 GB |
+| what a miner actually needs | **237 MB** at 4.43M blocks |
+| compressed, since only the hash is incompressible and the other 24 B delta-code | **135 to 170 MB** |
+| staying current | 56 B/block, 79 KB/day |
+
+**So a thin client is possible.** A pool builds the array from its own node,
+ships it once, and the worker needs no database and no validation.
+
+#### 2. What that costs, stated plainly
+
+Every property the differentiator rests on fails for such a worker. It **cannot
+validate**, having no transactions; **cannot see a censoring template**, for the
+same reason; **cannot defect or solo instantly**, which needs a real node; and
+**cannot verify the blob it was handed**, because `block_cache_data` carries
+`hash` but no `prev_hash`, so the array has no chain linkage and the worker
+trusts the pool completely.
+
+That is the thin-client aggregator model the roadmap was written to say Nerva
+forbids.
+
+#### 3. What survives, so this is a correction rather than a collapse
+
+The barrier is real and Monero has none: RandomX needs a block blob and a seed
+hash that rotates every 2048 blocks, so a Monero thin miner carries **~0 bytes**
+of chain. **237 MB resident and current rules out browser miners, phone miners
+and casual aggregators, and makes pool software substantially harder to write.**
+
+It is a genuine differentiator. It is a **soft** one, and it should not be
+described as a full-node requirement anywhere, including in anything public.
+
+#### 4. The lever, and why it is still the wrong one
+
+**The barrier size is set by a struct definition, not by a security argument.**
+56 bytes per block was a choice, and it alone decides whether a pool ships
+237 MB or 5 GB. Having the fill read from LMDB instead of a summary would raise
+it to the full database and grow it with the chain.
+
+**Do not do it.** That is the slow random-access sync the 95/5 window exists to
+avoid, and D7 plus F62 both established today that bigger working sets favour
+bandwidth-rich attackers: GPU over CPU on random gather goes 1.64x at 224 MB to
+2.73x at 3.5 GB. The roadmap already said not to fight pools by cranking
+chain-dependence because it taxes honest users more than an operator; this is
+the third independent confirmation.
+
+**The tool that actually addresses it is non-outsourceable PoW**, which does not
+depend on data size at all. That is a research track for a later fork, not an
+HF14 item.
+
+#### 5. What it does not affect
+
+**Nothing in D1 or D3.** Neither changes `block_cache_data`, the fetch ordering,
+or the data a miner must hold. D1 and D3 together *improve* the feeder bound by
+13%, from 188.7 to 212.4 MB/s per mining thread, because faster nonces demand
+more bandwidth per unit of hashrate. A 1 Gbps link feeds 0.57 of a thread either
+way, so the remote-feeder attack was never the live one. **The live one is the
+thin client, and it is untouched by both.**
 
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
