@@ -42,6 +42,15 @@ static uint32_t g_fill_odds = CNA_V6_FULL_HISTORY_ODDS;
 /* RESEED-PREREG.md: reseed after every g_fill_reseed_k-th sixteen-count block
  * instead of every one. 1 is consensus. gen 14 uses 16. */
 static int g_fill_reseed_k = 1;
+/* DRAW-PREREG.md: false is HC128_U32 with its selector, as consensus; true is
+ * candidate B, one keystream word per pick through a multiply-high and no
+ * selector at odds 256. gen 15 sets it. */
+static bool g_fill_draw_b = false;
+static inline uint32_t fill_word(HC128_State *rng, size_t *ki)
+{
+    if (*ki > 15) { HC128_NextKeys(rng); *ki = 0; }
+    return rng->keystream[(*ki)++];
+}
 #define SALT_BYTES          262144
 
 static std::vector<blk_cache_ent> g_blk_cache;
@@ -120,7 +129,9 @@ static void chain_fill_v6(unsigned char *out, HC128_State *rng)
     unsigned char msg[64];
     unsigned char *optr = out;
     uint64_t count = 0;
-    #define PICK() ( (HC128_U32(rng, &ki, 256) < g_fill_odds) \
+    #define PICK() ( (g_fill_draw_b && g_fill_odds >= 256)                     \
+                     ? (uint32_t)(((uint64_t)fill_word(rng, &ki) * height) >> 32) \
+                     : (HC128_U32(rng, &ki, 256) < g_fill_odds)               \
                      ? HC128_U32(rng, &ki, height)                          \
                      : (wbase + HC128_U32(rng, &ki, wsz)) )
     while (count < 4096) {
@@ -173,7 +184,10 @@ static void chain_fill_v6_run(unsigned char *out, HC128_State *rng)
         HC128_NextKeys(rng);
         for (size_t k = 0; k < 16; k++) {
             for (size_t j = 0; j < 4; j++) {
-                idx[k][j] = (HC128_U32(rng, &ki, 256) < g_fill_odds)
+                if (g_fill_draw_b && g_fill_odds >= 256)
+                    idx[k][j] = ((uint64_t)fill_word(rng, &ki) * height) >> 32;
+                else
+                    idx[k][j] = (HC128_U32(rng, &ki, 256) < g_fill_odds)
                               ? HC128_U32(rng, &ki, height)
                               : (wbase + HC128_U32(rng, &ki, wsz));
 #if defined(__GNUC__)
@@ -219,10 +233,12 @@ static bool chain_fill_self_check(void)
 {
     unsigned char a[SALT_BYTES], b[SALT_BYTES], seed[32];
     for (int i = 0; i < 32; i++) seed[i] = (unsigned char)(i * 7 + 3);
-    /* pass 2 is RESEED-PREREG's k = 16, so the reseed row is gated too */
-    for (int pass = 0; pass < 3; pass++) {
+    /* pass 2 is RESEED-PREREG's k = 16 and pass 3 DRAW-PREREG's B, so both
+     * rows are gated too */
+    for (int pass = 0; pass < 4; pass++) {
         g_fill_odds = pass ? 256u : CNA_V6_FULL_HISTORY_ODDS;
-        g_fill_reseed_k = (pass == 2) ? 16 : 1;
+        g_fill_reseed_k = (pass >= 2) ? 16 : 1;
+        g_fill_draw_b = (pass == 3);
         HC128_State r1, r2;
         HC128_Init(&r1, seed, seed + 16); HC128_NextKeys(&r1);
         HC128_Init(&r2, seed, seed + 16); HC128_NextKeys(&r2);
@@ -232,6 +248,7 @@ static bool chain_fill_self_check(void)
     }
     g_fill_odds = CNA_V6_FULL_HISTORY_ODDS;
     g_fill_reseed_k = 1;
+    g_fill_draw_b = false;
     return true;
 }
 
@@ -248,8 +265,9 @@ static void chain_fill(unsigned char *salt, int gen, uint64_t gid)
     HC128_State rng;
     HC128_Init(&rng, seed, seed + 16);
     HC128_NextKeys(&rng);
-    g_fill_odds = (gen == 11 || gen == 13 || gen == 14) ? 256u : CNA_V6_FULL_HISTORY_ODDS;  /* 12 = D1 alone */
-    g_fill_reseed_k = (gen == 14) ? 16 : 1;
+    g_fill_odds = (gen == 11 || gen == 13 || gen == 14 || gen == 15) ? 256u : CNA_V6_FULL_HISTORY_ODDS;  /* 12 = D1 alone */
+    g_fill_reseed_k = (gen == 14 || gen == 15) ? 16 : 1;
+    g_fill_draw_b = (gen == 15);
     if (gen == 5) chain_fill_v5(salt, &rng);
     else if (g_fill_runahead) chain_fill_v6_run(salt, &rng);
     else          chain_fill_v6(salt, &rng);

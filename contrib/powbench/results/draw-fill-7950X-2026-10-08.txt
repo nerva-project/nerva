@@ -1,0 +1,22 @@
+v8 chain fill: is it memory bound or HC-128 bound?
+height 4500000, cache 240 MB, window 5.3 MB, 30 s total
+draw candidates at k = 16, odds 256, interleaved, 30 s
+
+                            ms/fill       vs S
+  S, shipped                 0.3488     1.000x
+  A, mulhi                   0.2639     0.757x
+  B, mulhi no selector       0.2453     0.703x
+
+  DRAW height=4500000 S=0.3488 A=0.2639 B=0.2453
+  34724 fills per arm
+v8 chain fill: is it memory bound or HC-128 bound?
+height 4500000, cache 240 MB, window 5.3 MB, 30 s total
+draw candidates at k = 16, odds 256, interleaved, 30 s
+
+                            ms/fill       vs S
+  S, shipped                 0.3500     1.000x
+  A, mulhi                   0.2648     0.757x
+  B, mulhi no selector       0.2466     0.705x
+
+  DRAW height=4500000 S=0.3500 A=0.2648 B=0.2466
+  34582 fills per arm

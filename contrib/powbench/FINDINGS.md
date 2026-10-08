@@ -5876,7 +5876,11 @@ against the i7-7700HQ and narrows 3.4% against the 5600X. The decision is the
 user's, under the pre-registration's stated latitude, and goes in its decision
 record.
 
-*Accepted 2026-10-08; see RESEED-PREREG.md's decision record and F85.*
+*Accepted 2026-10-08; see RESEED-PREREG.md's decision record and F85. F86
+later measured C-3 directly with the whole fill on the card: 5.53x to 6.74x,
++22%, against this entry's composed +25%. F86 also found section 1's fill table
+was taken with warm-cache repeats; cold, k = 16 is about 0.45x of k = 1 rather
+than 0.414x. The criteria came from `nerva-gpubench`, which was cold.*
 
 ### F85. v14 reseeds every 16th block, and the chain fill is pinned by a startup known-answer test for the first time
 
@@ -5937,7 +5941,99 @@ rebuilt. The testnet round owed for D1, D3 and the seed fold now covers this
 too. v13 is untouched by construction (at an interval of 1 the condition is
 always true) and by test (the v13 vector and the resync above).
 
-### F15. `hf14checks` inverts its own results if a TU misses its flags
+### F86. The rejection loop is a GPU gate: a rejection-free draw speeds a card's fill 2.38x and a CPU's 1.05x, so it is rejected; the whole fill measured on a card for the first time
+
+*2026-10-08, against [DRAW-PREREG.md](DRAW-PREREG.md), committed before the run.
+7950X and RTX 3050, miner stopped, load under 1%. Transcripts:
+`results/draw-fill-7950X-2026-10-08.txt`,
+`results/draw-fillgpu-7950X-3050-2026-10-08.txt`,
+`results/reseed-fillgpu-k1-7950X-3050-2026-10-08.txt`.*
+
+#### 1. The new harness
+
+`t_fill_gpu` runs the whole v14 fill per work-item on the card: every pick,
+the gather from a 4.5M-entry cache in VRAM, the encryption, both reseed kinds,
+256 KB of salt stored to global memory, HC-128's state in `__local`. Before
+timing it requires the card's salt and final keystream to equal a CPU serial
+reference **bit for bit** for both draws and every interval tested, and the
+timed CPU loop to equal that reference too. All gates passed. Every composed
+"card does everything" figure before this (F78, F84) was arithmetic over parts;
+this is the first measured one.
+
+#### 2. C-3 fails by a wide margin
+
+Fill only, 32 CPU threads against the card, k = 16:
+
+| | CPU fills/s | GPU fills/s | CPU better by |
+|---|---|---|---|
+| S, shipped | 36,919 | 12,861 | **2.87x** |
+| B, no rejection, no selector | 38,625 | 30,595 | **1.26x** |
+
+**The card gains 2.38x from B and the CPU 1.05x.** The prediction named the
+mechanism, warp divergence in the rejection loop, and undersized it badly: a
+warp runs every lane until the slowest accepts, so a loop that costs a CPU a
+misprediction costs a card most of a warp. Single-threaded the CPU does gain
+1.33x (0.383 to 0.288 ms), but at 32 threads the CPU fill is bound by random
+reads and keeps only 1.05x of it.
+
+**B is rejected under C-3, a kill criterion; C-1, C-2 and C-4 were not run**,
+since no result there could rescue it. A shares B's index draw and so B's
+problem.
+
+#### 3. What it says about the shipped design
+
+**`HC128_U32`'s rejection loop is one of v8's GPU gates.** It was written as a
+uniform-sampling detail and costs a CPU about 0.1 ms a fill; it costs a card
+more than half of its fill time. That is a lever in the other direction, worth
+its own pre-registration: more divergent, data-dependent branching per pick
+would cost a card more than a CPU, which is RandomX's principle in miniature.
+
+**The reseed change is confirmed by measurement, not just composition.** At
+k = 1 the same harness gives the CPU 3.47x on the fill alone (22,394 against
+6,460 fills/s). So on the fill alone k = 16 helped the card more (1.99x) than
+the CPU (1.65x), and C-3 in F84 holds only because the core is in the nonce.
+Whole nonce, with the card running both halves (fill rate from here, core at
+4,931 H/s from `nerva-gpubench`), against `nerva-gpubench`'s CPU:
+
+| | CPU H/s, 32 threads | GPU H/s | CPU better by |
+|---|---|---|---|
+| k = 1 | 15,467 | 2,797 | 5.53x |
+| **k = 16** | **24,013** | **3,564** | **6.74x, +22%** |
+
+F84 composed +25%. The direction and size hold.
+
+#### 4. Two harness defects found on the way
+
+- **`t_v8_fill` reused one seed for every arm of a group**, so each arm's
+  second run reread the same 16,384 blocks from warm cache. Fixed: every timed
+  fill now has its own seed. The effect is modest, about +10% on a fill:
+  k = 16 reads 0.382 ms rather than 0.369, k = 1 0.850 rather than 0.891 in the
+  same session, and F84's 0.414x is about 0.45x cold. F84's criteria came from
+  `nerva-gpubench`, whose 5,888 distinct seeds were cold all along, so no
+  verdict moves.
+- **`t_fill_gpu`'s first CPU arm was a lambda** capturing the fill's state by
+  reference and called from two loops. It ran 0.66 ms where the same algorithm
+  as plain loops runs 0.38, and C-3's first transcript read 2.08x and 0.92x.
+  Rewritten as plain loops before the run above; the C-3 verdict was the same
+  either way.
+
+#### 5. The daemon has the same defect
+
+`cna_v6_data_run_ahead` in `db_lmdb.cpp`, which consensus runs, is built the
+same way: a `run_block` lambda capturing by reference, called from two loops,
+storing the salt through a `char` pointer. Copied verbatim into a harness
+(`-O2`, 4.5M synthetic cache, odds 256):
+
+| | daemon's loop | plain loop |
+|---|---|---|
+| k = 1 | 1.13 ms | 0.85 ms |
+| k = 16 | 0.67 ms | 0.38 ms |
+
+**About 1.75x on v14's fill, available without touching consensus.** The
+output is unchanged by construction and both loops are pinned by the startup
+known-answer test (F85). Not yet measured in the daemon itself or at v13's
+parameters; the next step.
+ `hf14checks` inverts its own results if a TU misses its flags
 
 `contrib/hf14checks/CMakeLists.txt` names the resized translation units
 explicitly in `set_source_files_properties` with

@@ -55,6 +55,7 @@
  *
  *   t_v8_fill [height] [seconds]
  *   t_v8_fill [height] [seconds] reseed    RESEED-PREREG.md step 1 only
+ *   t_v8_fill [height] [seconds] draw      DRAW-PREREG.md step 1 only
  *
  * Build: sh contrib/powbench/build-v8-fill.sh
  */
@@ -188,8 +189,20 @@ static void fill_serial(unsigned char *out, HC128_State *rng, uint32_t height, i
  * for 256 KB of salt. Transcribed from BlockchainLMDB::get_cna_v6_data
  * including the run-ahead over a sixteen-count block and the mid-point reseed
  * at count 2048. */
+/* One raw keystream word, the way HC128_U32 fetches one but with no mask and
+ * no redraw. DRAW-PREREG.md's candidates A and B take the index from it. */
+static inline uint32_t hc_word(HC128_State *rng, size_t *ki)
+{
+    if (*ki > 15) { HC128_NextKeys(rng); *ki = 0; }
+    return rng->keystream[(*ki)++];
+}
+
+/* DRAW-PREREG.md: 0 = S, shipped; 1 = A, multiply-high index after the
+ * selector; 2 = B, A with the selector dropped at odds 256. */
+enum { DRAW_S = 0, DRAW_A = 1, DRAW_B = 2 };
+
 static void fill(unsigned char *out, HC128_State *rng, uint32_t height, int arm,
-                 int reseed_blocks)
+                 int reseed_blocks, int draw = DRAW_S)
 {
     const blk_ent *C = g_cache.data();
     const uint32_t wsz   = height > CNA_V6_WINDOW_BLOCKS ? CNA_V6_WINDOW_BLOCKS : height;
@@ -210,9 +223,17 @@ static void fill(unsigned char *out, HC128_State *rng, uint32_t height, int arm,
      * exactly what ARM_SHIPPED costs in compute and is a floor for that arm,
      * and only that arm. */
     #define PICK() ({                                                        \
-        uint64_t i_ = (HC128_U32(rng, &ki, 256) < odds)                      \
-                    ? (uint64_t)HC128_U32(rng, &ki, height)                  \
-                    : (uint64_t)(wbase + HC128_U32(rng, &ki, wsz));          \
+        uint64_t i_;                                                         \
+        if (draw == DRAW_S)                                                  \
+            i_ = (HC128_U32(rng, &ki, 256) < odds)                           \
+               ? (uint64_t)HC128_U32(rng, &ki, height)                       \
+               : (uint64_t)(wbase + HC128_U32(rng, &ki, wsz));               \
+        else if (draw == DRAW_B && odds >= 256)                              \
+            i_ = ((uint64_t)hc_word(rng, &ki) * height) >> 32;               \
+        else                                                                 \
+            i_ = (HC128_U32(rng, &ki, 256) < odds)                           \
+               ? ((uint64_t)hc_word(rng, &ki) * height) >> 32                \
+               : wbase + (((uint64_t)hc_word(rng, &ki) * wsz) >> 32);        \
         (arm == ARM_HOT) ? (uint64_t)0 : i_; })
 
     while (count < 4096)
@@ -307,6 +328,57 @@ int main(int argc, char **argv)
      * as the main loop, k = 1 first and last, one seed per group, so drift
      * lands on every arm alike. The run-ahead stays at one sixteen-count block
      * whatever k is, which is the form the daemon change would take. */
+    /* ---- DRAW-PREREG.md step 1 ----
+     *
+     * The three draw candidates at the shipped v14 settings, k = 16 and odds
+     * 256, interleaved S A B B A S with one seed per group. */
+    if (argc > 3 && strcmp(argv[3], "draw") == 0)
+    {
+        static const char *const nm[3] = {"S, shipped", "A, mulhi", "B, mulhi no selector"};
+        uint64_t rc[3] = {0}, rn[3] = {0};
+        const double deadline = now_s() + seconds;
+        int i;
+
+        printf("draw candidates at k = 16, odds 256, interleaved, %.0f s\n", seconds);
+        while (now_s() < deadline)
+        {
+            unsigned char seed[32];
+            uint64_t x = gid++ * 0x9e3779b97f4a7c15ULL + 0xD4A3ULL;
+            for (i = 0; i < 4; i++) {
+                x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+                memcpy(seed + i * 8, &x, 8);
+            }
+            for (i = 0; i < 6; i++)
+            {
+                const int d = (i < 3) ? i : (5 - i);
+                HC128_State rng;
+                uint64_t t0, t1;
+                { unsigned char s2_[32]; memcpy(s2_, seed, 32); s2_[31] ^= (unsigned char)(i + 1); HC128_Init(&rng, s2_, s2_ + 16); }  /* unique per fill: a repeated seed rereads warm cache */
+                HC128_NextKeys(&rng);
+                t0 = __rdtsc();
+                fill(salt.data(), &rng, height, ARM_ALL, 16, d);
+                t1 = __rdtsc();
+                rc[d] += t1 - t0;
+                rn[d]++;
+            }
+        }
+        {
+            const double base = (double)rc[0] / (double)rn[0] / hz * 1000.0;
+            printf("\n  %-22s %10s %10s\n", "", "ms/fill", "vs S");
+            for (i = 0; i < 3; i++)
+            {
+                const double m = (double)rc[i] / (double)rn[i] / hz * 1000.0;
+                printf("  %-22s %10.4f %9.3fx\n", nm[i], m, m / base);
+            }
+            printf("\n  DRAW height=%u S=%.4f A=%.4f B=%.4f\n", height,
+                   (double)rc[0] / (double)rn[0] / hz * 1000.0,
+                   (double)rc[1] / (double)rn[1] / hz * 1000.0,
+                   (double)rc[2] / (double)rn[2] / hz * 1000.0);
+            printf("  %llu fills per arm\n", (unsigned long long)rn[0]);
+        }
+        return 0;
+    }
+
     if (argc > 3 && strcmp(argv[3], "reseed") == 0)
     {
         static const int ks_[] = {1, 4, 8, 16, 256};
@@ -329,7 +401,7 @@ int main(int argc, char **argv)
                 const int r = (i < NK) ? i : (2 * NK - 1 - i);
                 HC128_State rng;
                 uint64_t t0, t1;
-                HC128_Init(&rng, seed, seed + 16);
+                { unsigned char s2_[32]; memcpy(s2_, seed, 32); s2_[31] ^= (unsigned char)(i + 1); HC128_Init(&rng, s2_, s2_ + 16); }  /* unique per fill: a repeated seed rereads warm cache */
                 HC128_NextKeys(&rng);
                 t0 = __rdtsc();
                 fill(salt.data(), &rng, height, ARM_ALL, ks_[r]);
@@ -374,7 +446,7 @@ int main(int argc, char **argv)
             {
                 HC128_State rng;
                 uint64_t t0, t1;
-                HC128_Init(&rng, seed, seed + 16);
+                { unsigned char s2_[32]; memcpy(s2_, seed, 32); s2_[31] ^= (unsigned char)(i + 1); HC128_Init(&rng, s2_, s2_ + 16); }  /* unique per fill: a repeated seed rereads warm cache */
                 HC128_NextKeys(&rng);
                 t0 = __rdtsc();
                 fill(salt.data(), &rng, height, ord[i], 1);

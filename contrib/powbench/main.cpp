@@ -65,6 +65,9 @@ static const Variant ALL_VARIANTS[] = {
                                     // a nonce instead of 257. The GPU runs the
                                     // identical kernel; only the host's fill,
                                     // charged to the CPU column, changes.
+    { "v8 k16 B",  15, 1024, 0 },   // DRAW-PREREG: the k16 row with candidate
+                                    // B's draw. Same GPU kernel; only the
+                                    // host's fill changes.
     { "v8+fp rne", 9,  1024, 0 },   // FP stage, rounding fixed at nearest-even
     { "v8+fp",    10,  1024, 0 },   // FP stage as specified, mode from data
     { "v5 1MB end",5,  1024, 0 },   // the control again, AFTER the FP rows
@@ -504,7 +507,7 @@ int main(int argc, char **argv) {
                               : v.gen == 7 ? "cna_v7"
                               : v.gen == 8 ? "cna_v8"
                               : v.gen == 9 ? "cna_v8_fp_rne"
-                              : (v.gen == 13 || v.gen == 14) ? "cna_v8_d1_lds"
+                              : (v.gen == 13 || v.gen == 14 || v.gen == 15) ? "cna_v8_d1_lds"
                               : v.gen >= 11 ? "cna_v8_d1" : "cna_v8_fp";
             cl_kernel k = cl.CreateKernel(prog, kname, &err);
             // A device without cl_khr_fp64 builds the rest of the program fine and
@@ -930,10 +933,19 @@ int main(int argc, char **argv) {
     // single-thread time. Both rows run the same GPU kernel, so their GPU
     // columns differ only by drift, which the control line above sizes.
     {
-        int i13 = -1, i14 = -1;
+        int i13 = -1, i14 = -1, i15 = -1;
         for (int i = 0; i < NV; i++) {
             if (VARIANTS[i].gen == 13) i13 = i;
             if (VARIANTS[i].gen == 14) i14 = i;
+            if (VARIANTS[i].gen == 15) i15 = i;
+        }
+        if (i14 >= 0 && i15 >= 0 && g_cpu[i14] > 0.0 && g_cpu[i15] > 0.0) {
+            printf("DRAW B/S  CPU all-thread %.3fx (C-2 needs 1.05x)  1T ms %.4f -> %.4f (%.3fx)\n",
+                   g_cpu[i15] / g_cpu[i14], g_ms1[i14], g_ms1[i15],
+                   g_ms1[i15] > 0.0 ? g_ms1[i14] / g_ms1[i15] : 0.0);
+            if (g_gpu[i14] > 0.0 && g_gpu[i15] > 0.0 && g_verified[i14] == 1 && g_verified[i15] == 1)
+                printf("DRAW host-fed CPU better by %.3fx -> %.3fx (C-1: must not fall)\n",
+                       g_cpu[i14] / g_gpu[i14], g_cpu[i15] / g_gpu[i15]);
         }
         if (i13 >= 0 && i14 >= 0 && g_cpu[i13] > 0.0 && g_cpu[i14] > 0.0) {
             printf("RESEED k16/k1  CPU all-thread %.3fx (C-2 needs 1.30x)  1T ms %.4f -> %.4f (%.3fx)\n",
