@@ -6417,19 +6417,38 @@ can make an invalid block look valid.
   `random_values` bound set to v13's 8 MB, v13's odds and reseed interval
   passed, the keystream step before the draws dropped, the stable height off
   by one, the cache invalidation removed). The test fails on all eleven and
-  passes on the original. The 8 MB bound at first crashed the test, writing
+  passes on the original; two more were added in a third pass, below. The 8 MB bound at first crashed the test, writing
   past the pad exactly as it would in the daemon; the fake now keeps its
   indices in range so that case fails cleanly.
 
   **The reviewer's second pass found the sampling too thin.** The divisor range
   off by one moves only about 1.35% of hashes, so the first version's 69 cases
   missed it about 39% of the time, and a node with that bug would reject about
-  one valid block in 74. The aggregate went from 64 cases to 1,024, where it
-  escapes about once in a million runs; it is now caught, by the aggregate
-  alone. The cache-invalidation check came from the same pass. The whole test
-  runs in under two seconds. The reviewer also noted that nothing ran
-  hf14checks automatically; CI's Linux job now builds and runs `t_v8_chain` and
-  `t_v14_longhash` after the daemon build, which adds about 7 seconds.
+  one valid block in 74. The aggregate went from 64 cases to 1,024. The test
+  is deterministic, so this set either catches the mutation or never does: a
+  random set of 1,024 cases would miss it about once in a million, and this one
+  catches it. The cache-invalidation check came from the same pass. The
+  reviewer also noted that nothing ran hf14checks automatically; CI's Linux job
+  now builds and runs `t_v8_chain` and `t_v14_longhash` after the daemon build,
+  which adds about 7 seconds.
+
+  **A third pass found the corners unsampled.** Logging the draws of all 1,029
+  cases showed every xx and yy value, but `iters` never at 51, 59, 60 or 63,
+  and 21 of the 108 step counts never reached, almost all at the top (99 to
+  119). A regression confined to high `iters` values, such as clamping it at
+  62, changes about one hash in 4,096 and would pass, while a node with it
+  would reject a valid block every few days. Four corner cases are now pinned,
+  found by searching blob seeds at heights where the `iters` formula can reach
+  them rather than left to sampling: (8, 8, 63), the 119-step maximum;
+  (4, 4, 63); (8, 8, 0); and (4, 4, 0), the 12-step minimum. Each also checks
+  that it still produces those draws, by replaying them from the generator
+  state the fake records. Clamping `iters` at 62 and clamping xx at 7 were
+  added to the mutations: both are caught, the first only by the two
+  `iters = 63` corners, as the review predicted. Thirteen mutations in all,
+  each caught. CI also runs the test a second time with
+  `NERVA_FORCE_SOFTWARE_AES=1`, so the software-AES arm that NO_AES builds and
+  ARM without crypto extensions use is checked end to end too (about 6 more
+  seconds).
 
 **Pre-existing, not this PR:** the `random_values` cache keyed on height alone,
 reachable on testnet and stagenet; handled by PR #163. The v14 path refetches on

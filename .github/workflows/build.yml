@@ -101,6 +101,9 @@ jobs:
                     cmake --build hf14checks-build --target t_v8_chain t_v14_longhash -j${{env.MAKE_JOB_COUNT}}
                     ./hf14checks-build/t_v8_chain
                     ./hf14checks-build/t_v14_longhash
+                    # again on the software-AES arm, which NO_AES builds and
+                    # ARM without crypto extensions run
+                    NERVA_FORCE_SOFTWARE_AES=1 ./hf14checks-build/t_v14_longhash
 
     build-windows:
         runs-on: windows-latest

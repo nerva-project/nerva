@@ -42,6 +42,7 @@
 //
 //   t_v14_longhash           check against the pinned vectors
 //   t_v14_longhash --print   print the vectors (only when v14 changes on purpose)
+//   t_v14_longhash --search  find blob seeds for the corner cases in EDGES
 #include "check.h"
 
 #include <cstdint>
@@ -73,6 +74,7 @@ namespace
     uint64_t v2_height = 0, v6_height = 0;
     uint32_t v2_bound = 0, v6_odds = 0, v6_reseed = 0;
     int v2_calls = 0, v6_calls = 0;
+    HC128_State after_fill;   // the generator as the fill hands it back
 
     void get_cna_v2_data(crypto::cn_random_values_t *rv, uint64_t height, uint32_t bound) override
     {
@@ -107,12 +109,30 @@ namespace
           std::memcpy(out + k * 64 + j * 4, &w, 4);
         }
       }
+      after_fill = *rng;
     }
 
     void get_cna_v3_data(char *, uint64_t, uint32_t) override { throw std::logic_error("v3 not used by v14"); }
     void get_cna_v4_data(char *, uint64_t, uint32_t) override { throw std::logic_error("v4 not used by v14"); }
     void get_cna_v5_data(char *, HC128_State *, uint64_t) override { throw std::logic_error("v5 not used by v14"); }
   };
+
+  // The three per-nonce draws v14_fetch_salt takes from the state the fill
+  // leaves behind. Only used to find and label the edge cases below; the
+  // pinned hashes are what check the real code.
+  struct Draws { unsigned xx, yy, iters; };
+  Draws replay_draws(const FakeChainDB &db, uint64_t height)
+  {
+    HC128_State st = db.after_fill;
+    HC128_NextKeys(&st);
+    size_t k = 0;
+    Draws d;
+    d.xx = 4 + HC128_U32(&st, &k, 5);
+    d.yy = 4 + HC128_U32(&st, &k, 5);
+    const uint32_t divisor = 1 + HC128_U32(&st, &k, 64);
+    d.iters = (unsigned)((height + 1) % divisor);
+    return d;
+  }
 
   struct Case { uint64_t height; uint8_t blob_seed; unsigned char want[32]; };
 
@@ -126,6 +146,19 @@ namespace
     { 4500123, 5, {0x6c,0x01,0xe7,0x10,0x37,0x31,0xd1,0xb9,0x86,0x6b,0x5c,0xd8,0x6b,0x52,0x37,0x02,0x88,0x2d,0xf9,0xbf,0xd2,0x2c,0x46,0x28,0x5d,0x96,0x28,0x4f,0x4b,0x5e,0xc0,0x39} },
   };
 
+  // The corners of the draw domain, found with --search rather than left to
+  // sampling: random cases rarely reach the top of iters or the largest step
+  // count. (8, 8, 63) is the most steps consensus can draw, 119; (4, 4, 0) the
+  // fewest, 12. Each case also checks it still produces the draws it was found
+  // for, so a change to the fake cannot silently move it off its corner.
+  struct Edge { uint64_t height; uint64_t blob_seed; unsigned xx, yy, iters; unsigned char want[32]; };
+  Edge EDGES[] = {
+    { 1280062, 11348, 8, 8, 63, {0x09,0x39,0xa9,0xf3,0x80,0x2f,0x56,0x38,0x77,0xc3,0xff,0x3c,0x09,0xec,0x63,0xa9,0x94,0xfd,0x47,0xb2,0xab,0xd9,0x3e,0x1c,0xeb,0xd8,0x94,0x0e,0x3f,0x2f,0xe8,0x0e} },
+    { 3000062, 11483, 4, 4, 63, {0x9a,0xf8,0x63,0x79,0x74,0x68,0x31,0xd0,0x2e,0x6a,0x38,0x09,0xf1,0x3b,0x26,0xdd,0x52,0x39,0x23,0x13,0x33,0x2e,0xff,0x86,0x57,0xc8,0xfb,0x48,0x2b,0x83,0x9f,0x96} },
+    { 1280063, 10222, 8, 8, 0, {0x93,0x9e,0x6a,0xd9,0x2d,0x69,0xac,0x10,0xb3,0x93,0x4b,0x4c,0x78,0xae,0x24,0x16,0x52,0x52,0xeb,0xdf,0xef,0x87,0xe0,0x7e,0x26,0xa8,0x69,0x72,0x65,0x76,0x2f,0xdd} },
+    { 3000063, 10331, 4, 4, 0, {0x55,0xa1,0x8a,0x94,0x0a,0x8e,0xb8,0x59,0x6f,0x63,0x65,0x0a,0x36,0xca,0x89,0x2d,0xd2,0xf2,0x3f,0xd1,0xa3,0x63,0x4e,0x0e,0x92,0xff,0x43,0xa7,0x7d,0xc1,0xf4,0xa8} },
+  };
+
   void make_blob(uint64_t seed, std::string &blob)
   {
     // the size of a real hashing blob, so the tweak at offset 35 is in bounds
@@ -135,6 +168,38 @@ namespace
   }
 
   bool g_print = false;
+
+  // Search for blob seeds that land on each corner at heights chosen so the
+  // iters formula can reach it: (height + 1) % 64 == 63 needs height = 64k + 62
+  // and a divisor of 64; iters == 0 at height = 64k + 63 needs a divisor of 64.
+  void search_edges(crypto::cn_hash_context_t *ctx)
+  {
+    struct Target { uint64_t height; unsigned xx, yy, iters; };
+    static const Target targets[] = {
+      { 1280062, 8, 8, 63 },
+      { 3000062, 4, 4, 63 },
+      { 1280063, 8, 8, 0 },
+      { 3000063, 4, 4, 0 },
+    };
+    for (const Target &t : targets)
+    {
+      for (uint64_t seed = 10000; seed < 10000 + 200000; seed++)
+      {
+        FakeChainDB db;
+        std::string blob;
+        make_blob(seed, blob);
+        crypto::hash res;
+        if (!cryptonote::get_block_longhash(ctx, db, 14, blob, res, t.height)) continue;
+        const Draws d = replay_draws(db, t.height);
+        if (d.xx != t.xx || d.yy != t.yy || d.iters != t.iters) continue;
+        std::printf("    { %llu, %llu, %u, %u, %u, {", (unsigned long long)t.height,
+                    (unsigned long long)seed, d.xx, d.yy, d.iters);
+        for (int i = 0; i < 32; i++) std::printf("0x%02x%s", (unsigned char)res.data[i], i < 31 ? "," : "");
+        std::printf("} },\n");
+        break;
+      }
+    }
+  }
 
   void test_v14_end_to_end()
   {
@@ -173,10 +238,30 @@ namespace
         CHECK_TRUE(std::memcmp(res.data, c.want, 32) == 0);
     }
 
+    for (Edge &e : EDGES)
+    {
+      FakeChainDB db;
+      std::string blob;
+      make_blob(e.blob_seed, blob);
+      crypto::hash res;
+      CHECK_TRUE(cryptonote::get_block_longhash(ctx, db, 14, blob, res, e.height));
+      const Draws d = replay_draws(db, e.height);
+      CHECK_TRUE(d.xx == e.xx && d.yy == e.yy && d.iters == e.iters);
+      if (g_print)
+      {
+        std::printf("    { %llu, %llu, %u, %u, %u, {", (unsigned long long)e.height,
+                    (unsigned long long)e.blob_seed, e.xx, e.yy, e.iters);
+        for (int i = 0; i < 32; i++) std::printf("0x%02x%s", (unsigned char)res.data[i], i < 31 ? "," : "");
+        std::printf("} },\n");
+      }
+      else
+        CHECK_TRUE(std::memcmp(res.data, e.want, 32) == 0);
+    }
+
     // 1,024 more cases folded into one digest, so a change that moves only a
     // few draws cannot pass by landing on unaffected ones. A divisor range off
-    // by one moves about 1.35% of hashes; at this count it escapes about once
-    // in a million runs.
+    // by one moves about 1.35% of hashes: a random set of this size would miss
+    // that about once in a million, and this set catches it.
     {
       static const unsigned char want_all[32] = {0x2c,0x19,0x06,0xa3,0x52,0x35,0x38,0xc6,0x51,0x79,0x7f,0xb1,0x62,0xce,0x7d,0xfb,0xd8,0x2d,0x2d,0xe3,0x1e,0x88,0xca,0xf0,0xa0,0x11,0xb1,0xb3,0x13,0xaf,0x70,0xc7};
       std::string all;
@@ -222,6 +307,14 @@ namespace
 int main(int argc, char **argv)
 {
   g_print = argc > 1 && std::strcmp(argv[1], "--print") == 0;
+  if (argc > 1 && std::strcmp(argv[1], "--search") == 0)
+  {
+    crypto::cn_hash_context_t *ctx = crypto::cn_hash_context_create();
+    if (!ctx) return 1;
+    search_edges(ctx);
+    crypto::cn_hash_context_free(ctx);
+    return 0;
+  }
   std::printf("== v14 longhash, end to end over a fake chain ==\n");
   RUN(test_v14_end_to_end);
   return check_summary("t_v14_longhash");
