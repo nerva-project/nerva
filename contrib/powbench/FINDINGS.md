@@ -4712,6 +4712,9 @@ the third independent confirmation.
 depend on data size at all. That is a research track for a later fork, not an
 HF14 item.
 
+*F83 studied it: it cannot be added to v8, the weak form is defeated for free on
+Nerva, and it is not pursued now.*
+
 #### 5. What it does not affect
 
 **Nothing in D1 or D3.** Neither changes `block_cache_data`, the fetch ordering,
@@ -5663,6 +5666,38 @@ the fill, not the 17% to 29% F60 section 2 reports.
 The harness comment is corrected. A permanent per-odds floor arm is the clean
 fix and is not added here, since it changes the arm table the pre-registration's
 runs were taken with.
+
+### F83. Non-outsourceable PoW cannot be added to v8, its weak form is defeated for free on Nerva, and it is not pursued now
+
+*2026-10-07. A desk study, no measurement. Checked against Miller et al. 2015,
+read in full, Chepurnoy and Saxena 2020, Ergo's documentation, and Nerva's
+reward constants in the source. Full write-up, sources and our own analysis
+marked as such: [NONOUTSOURCEABLE-POW.md](NONOUTSOURCEABLE-POW.md).*
+
+F71 named non-outsourceable PoW as the real answer to thin-client pools. It was
+studied as a possible pivot, against the bar that a worker who steals a block
+cannot be identified by the pool.
+
+- **The weak form fails that bar by its own paper's account.** The pool
+  watermarks the nonce space, a stolen block names the worker, and the
+  punishment needs a held balance of one reward, **0.3 XNV**
+  (`FINAL_SUBSIDY_PER_MINUTE`), which any payout threshold already holds. Nerva
+  having no smart contracts does not help: a pool can hold the collateral
+  itself. Ergo shipped this form and removed it at block 417,792 in 2020.
+- **The strong form cannot wrap v8.** Its zero-knowledge proof must contain the
+  puzzle's whole verification, and v8's is a 1 MB AES fill, 16,384 pad reads and
+  a 237 MB chain fill. The paper's security theorem also needs the keyed work to
+  dominate, or the operator keeps the key and outsources the keyless part. Both
+  point to a new, circuit-friendly puzzle family, which works against goal 1.
+- **Even the strong form is one-shot.** A pool can still evict persistently
+  unlucky workers, and at 1,440 blocks a day a 1% worker can steal only about
+  10% unseen over 30 days (our model). The paper's fix is jackpot-tier rewards,
+  an emission change for Nerva. Its 2015 proof time, under 15 s, was justified
+  by Bitcoin's 10-minute blocks; at 60 s it is a quarter of the interval.
+
+**Decision: not pursued now.** Nerva has no known pools, so miners already
+solo-mine. The write-up ends with three kill criteria (proof latency, the
+scratch loop's GPU ratio, statistical detection) for a spike if it is revisited.
 
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
