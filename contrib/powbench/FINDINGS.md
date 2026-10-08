@@ -6228,7 +6228,8 @@ history, gets a different hash, and rejects a valid block.
 
 Whether that is a bug or a property is a project decision. It is older than
 this branch, v8 does not change it, and no finding before this one records it.
-Recorded here so the decision is taken knowingly. A fix would have to build the
+Recorded here so the decision is taken knowingly. **Decided in F91: kept, and
+made deliberate.** A fix would have to build the
 fill from the alternative chain's own history, which is a consensus-adjacent
 change to `handle_alternative_block`, not to the hash.
 
@@ -6246,6 +6247,74 @@ change to `handle_alternative_block`, not to the hash.
 Transactions at v14 (CLSAG, Bulletproofs+, ring size 16) are master's HF14
 round, not this branch's, and were not exercised. Real difficulty retargeting
 across the fork is still suppressed by `--fixed-difficulty`.
+
+### F91. The 256-block limit is now a deliberate rule: refused before hashing, no ban, and `pop_blocks` alone recovers
+
+*2026-10-08. Decision: keep F90's limit as a bound on reorganisation depth and
+make it explicit, rather than build fills from an alternative chain's own
+history. Tested on the local testnet with four nodes on the 7950X.*
+
+**The code is not on this branch.** It does not depend on v8, so it went to
+master on its own as [PR #164](https://github.com/nerva-project/nerva/pull/164)
+(branch `fix/alt-chain-depth-limit`) and reaches this branch through master.
+Sections 2 to 4 were measured with this branch's v8 build; the same three
+checks were repeated on a build of PR #164 from a fresh testnet chain, across
+v11 to v14, and passed. A review before that PR also stopped
+`switch_to_alternative_blockchain` from pushing disconnected blocks back past
+the limit, which would otherwise print the `pop_blocks` advice after a
+reorganisation that worked.
+
+#### 1. The change
+
+- **`get_longhash_alt_chain_depth_limit(major_version)`** in
+  `cryptonote_tx_utils.cpp` states how far past a split a block of each version
+  can be hashed from the main chain's history: 0 (no chain data, no limit)
+  below v7, 1 at v7, `CN_SEED_STABLE_DEPTH` = 256 from v8 on. It sits next to
+  the dispatch so the knowledge stays with the hashes.
+- **`handle_alternative_block` refuses a block at or past that depth before
+  hashing it.** It logs once per split, with the split height and the exact
+  `pop_blocks` count that would put this node back at the split, and sets a new
+  `m_alt_chain_too_deep` flag. Before, the block was hashed against the wrong
+  history, failed as "not enough proof of work", and banned the sender.
+- **The protocol handler drops the connection with a fail score of 0** for that
+  flag, through one `block_fail_score` helper used at all three drop sites. The
+  peer is usually honest and on the other branch, and a ban would outlive the
+  operator's fix (24 hours on mainnet). Reaching the check at all requires 255
+  alternative blocks with valid proof of work.
+- **`pop_blocks` now drops stored alternative chains.** Found by the recovery
+  test, section 3. This is not a hash change and needs no fork.
+
+#### 2. Deep split: refused cleanly on both sides
+
+Split at 1120; n1 with n4 mined chain A to 1451 (331 past), n2 with n3 mined B
+to 1527 (407 past). On reconnecting, each node stored the other's blocks
+through 1375 as alternatives and refused 1376 with the new message ("run
+pop_blocks 331" on n1, "407" on n2). No bans on either side, every RPC stayed
+reachable (F90's ban had closed the loopback RPC), and the error appeared once
+per node. The nodes stopped talking rather than flapping.
+
+#### 3. Recovery, and a pre-existing trap it exposed
+
+Popping n1 by 331 left its main chain ending at 1119 while it still held B's
+blocks from 1120 as an alternative chain, which normal operation never
+produces. `build_alt_chain` treats that as corruption ("main blockchain wrong
+height"), so every block n2 sent failed as an ordinary error, scoring 1 each,
+and after 11 n1 banned 127.0.0.1. Alternative chains were only dropped at
+startup, so `pop_blocks` needed a restart to work. This is inherited from
+Monero, not caused by the limit, but the limit's message sends operators
+straight into it. With `pop_blocks` dropping stored alternatives, the same pop
+resynced n1 onto B in about a second, no restart, hashes equal at 1120 and 1526,
+no bans.
+
+**An operator recovering should disconnect peers on the abandoned branch
+first.** After the pop, whichever branch the node extends first becomes its
+main chain again, and the other is past the limit once more.
+
+#### 4. Shallow split still reorganises
+
+Split at 1527, A 64 past and B 162 past. n1 logged `REORGANIZE on height: 1527`
+and `REORGANIZE SUCCESS`, n4 followed through n1, and all four nodes report 1688
+as `7c40da8b...`. The limit does not touch reorganisations within 256.
 
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
