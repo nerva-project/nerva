@@ -689,7 +689,7 @@ namespace cryptonote
     // v13 keeps the 95/5 window it shipped with. It validates mainnet, so this
     // value is not ours to change; D3 raised the odds for v14 only.
     db.get_cna_v6_data(context->salt, &rng_state, stable_height,
-                       (uint32_t)CNA_V6_FULL_HISTORY_ODDS);
+                       (uint32_t)CNA_V6_FULL_HISTORY_ODDS, (uint32_t)CNA_V6_RESEED_BLOCKS);
 
     // Build 32-byte program seed: blob_hash XOR first 32 bytes of chain salt.
     // This seed is unique per (height, nonce) and requires the blockchain DB,
@@ -742,9 +742,11 @@ namespace cryptonote
       // v6's chain fill, but with every pick drawn from the whole chain (D3).
       // v13 still sends ~95% of its reads to a 5.3 MB window of recent blocks;
       // v14 does not, because that window fits in an FPGA's block RAM, which is
-      // what made it worth giving up. FINDINGS F66, F67.
+      // what made it worth giving up. FINDINGS F66, F67. And it reseeds after
+      // every 16th block rather than every block, F84.
       c->db->get_cna_v6_data(salt_out, &rng_state, c->stable_height,
-                             (uint32_t)CNA_V6_FULL_HISTORY_ODDS_V14);
+                             (uint32_t)CNA_V6_FULL_HISTORY_ODDS_V14,
+                             (uint32_t)CNA_V6_RESEED_BLOCKS_V14);
 
       HC128_NextKeys(&rng_state);
       size_t rng_key_idx = 0;

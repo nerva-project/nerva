@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 // All rights reserved.
 //
@@ -1254,6 +1254,8 @@ BlockchainLMDB::BlockchainLMDB(bool batch_transactions): BlockchainDB()
   m_hardfork = nullptr;
 }
 
+static bool cna_v6_data_known_answer_test();  // defined with the chain fill below
+
 void BlockchainLMDB::open(const std::string& filename, const int db_flags, uint32_t db_readers)
 {
   int result;
@@ -1263,6 +1265,10 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags, uint3
 
   if (m_open)
     throw0(DB_OPEN_FAILURE("Attempted to open db, but it's already open"));
+
+  if (!cna_v6_data_known_answer_test())
+    throw0(DB_OPEN_FAILURE("Chain fill known-answer test failed: this build does not "
+                           "compute the network's proof of work. Refusing to open the database."));
 
   boost::filesystem::path direc(filename);
   if (boost::filesystem::exists(direc))
@@ -2757,7 +2763,8 @@ void BlockchainLMDB::get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t
 
 static void cna_v6_data_reference(const block_cache_data *cache, uint64_t height,
                                   uint64_t window_size, uint64_t window_base,
-                                  HC128_State *rng_state, char *out, uint32_t odds)
+                                  HC128_State *rng_state, char *out, uint32_t odds,
+                                  uint32_t reseed_blocks)
 {
   size_t rng_key_idx = 0;
   /* The selector draw happens whether or not its branch is taken, so odds
@@ -2798,11 +2805,12 @@ static void cna_v6_data_reference(const block_cache_data *cache, uint64_t height
     HC128_Init(rng_state, key, iv);
   };
 
+  /* A reseed after every reseed_blocks-th block: 1 for v13, 16 for v14. */
   while (count < 2048)
   {
     HC128_NextKeys(rng_state);
     for (size_t k = 0; k < 16; k++) body();
-    reseed();
+    if (((count / 16) % reseed_blocks) == 0) reseed();
   }
 
   std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
@@ -2816,8 +2824,198 @@ static void cna_v6_data_reference(const block_cache_data *cache, uint64_t height
   {
     HC128_NextKeys(rng_state);
     for (size_t k = 0; k < 16; k++) body();
-    reseed();
+    if (((count / 16) % reseed_blocks) == 0) reseed();
   }
+}
+
+/* The run-ahead form of the fill, which is what consensus runs. A free
+ * function over the cache so cna_v6_data_known_answer_test can drive it
+ * without a database; moved out of get_cna_v6_data unchanged apart from the
+ * reseed interval. */
+static void cna_v6_data_run_ahead(const block_cache_data *cache, uint64_t height,
+                                  uint64_t window_size, uint64_t window_base,
+                                  HC128_State *rng_state, char *out, uint32_t odds,
+                                  uint32_t reseed_blocks)
+{
+  size_t rng_key_idx = 0;
+
+  // A dedicated selector byte precedes each index pick; consecutive HC128
+  // outputs are cryptographically independent so selector and index are uncorrelated.
+  auto pick_index = [&]() -> uint64_t {
+    if (HC128_U32(rng_state, &rng_key_idx, 256) < odds)
+      return HC128_U32(rng_state, &rng_key_idx, height);
+    return window_base + HC128_U32(rng_state, &rng_key_idx, window_size);
+  };
+
+  unsigned char msg[64];
+  size_t msgpos;
+  unsigned char *optr = (unsigned char*)out;
+  uint64_t count = 0;
+
+  /* Run-ahead over a sixteen-count block.
+   *
+   * HC128_NextKeys advances the cipher independently of the message being
+   * encrypted, and the keystream HC128_U32 consumes is likewise
+   * data-independent, so every pick index and every encrypting keystream for a
+   * block can be produced before a single block-cache entry is read. The reads
+   * then carry no dependency on each other and issue together, instead of one
+   * at a time as they did when this loop interleaved them with the cipher.
+   * That interleaving also evicted P and Q from L1 on every message, which is
+   * why HC128_EncryptMessage used to cost several times what the same sixteen
+   * steps cost inside HC128_Init.
+   *
+   * Only the reseed depends on data that was fetched, because it keys
+   * HC128_Init from the output buffer. That is what sets the block as the
+   * limit of the run-ahead.
+   *
+   * Byte-for-byte identical to the loop it replaces; contrib/powbench has the
+   * harness that shows it, and NERVA_SALT_SELFCHECK below re-checks it here
+   * against real chain data. Measured 1.57x on the salt. Almost all of that is
+   * the restructuring: with prefetching removed entirely it is still 1.53x. */
+  uint64_t idx[16][4];
+  uint32_t ks[16][16];
+
+  auto run_block = [&]() {
+    HC128_NextKeys(rng_state);
+    for (size_t k = 0; k < 16; k++)
+    {
+      for (size_t j = 0; j < 4; j++)
+      {
+        idx[k][j] = pick_index();
+#if defined(__GNUC__)
+        __builtin_prefetch(&cache[idx[k][j]]);
+#endif
+      }
+      HC128_NextKeys(rng_state);
+      std::memcpy(ks[k], rng_state->keystream, sizeof(ks[k]));
+    }
+    for (size_t k = 0; k < 16; k++)
+    {
+      const block_cache_data *b0 = &cache[idx[k][0]];
+      const block_cache_data *b1 = &cache[idx[k][1]];
+      const block_cache_data *b2 = &cache[idx[k][2]];
+      const block_cache_data *b3 = &cache[idx[k][3]];
+      std::memcpy(msg, b0->hash.data, sizeof(crypto::hash));
+      msgpos = sizeof(crypto::hash);
+      std::memcpy(msg + msgpos, &(b1->timestamp), sizeof(uint64_t));
+      msgpos += sizeof(uint64_t);
+      std::memcpy(msg + msgpos, &(b2->diff_lo), sizeof(uint64_t));
+      msgpos += sizeof(uint64_t);
+      std::memcpy(msg + msgpos, &(b3->coins), sizeof(uint64_t));
+      msgpos += sizeof(uint64_t);
+      std::memcpy(msg + msgpos, &count, sizeof(uint64_t));
+
+      /* what HC128_EncryptMessage does for a 64-byte message, with the
+       * keystream taken from the run-ahead instead of generated here */
+      for (size_t j = 0; j < 16; j++)
+      {
+        uint32_t w;
+        std::memcpy(&w, msg + j * sizeof(uint32_t), sizeof(uint32_t));
+        w ^= ks[k][j];
+        std::memcpy(optr + j * sizeof(uint32_t), &w, sizeof(uint32_t));
+      }
+      optr += 16 * sizeof(uint32_t);
+      count++;
+    }
+
+    // Reseed, but don't reset the RNG key index, making the next used key
+    // effectively random at the start of each loop iteration (except the first)
+    if (((count / 16) % reseed_blocks) != 0)
+      return;
+    unsigned char *iv = optr - (8 * 16 * sizeof(uint32_t)) + HC128_U32(rng_state, &rng_key_idx, (8 * 16 * sizeof(uint32_t)) - 16);
+    unsigned char *key = optr - (16 * 16 * sizeof(uint32_t)) + HC128_U32(rng_state, &rng_key_idx, (8 * 16 * sizeof(uint32_t)) - 16);
+    HC128_Init(rng_state, key, iv);
+  };
+
+  while (count < 2048)
+    run_block();
+
+  std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
+  std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
+  std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
+  std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
+  HC128_EncryptMessage(rng_state, msg, optr, sizeof(msg));
+  HC128_Init(rng_state, optr, optr+16);
+
+  while (count < 4096)
+    run_block();
+}
+
+/* Known-answer test for the chain fill, run when a database is opened.
+ *
+ * Nothing else pins get_cna_v6_data's output: the hash vectors in slow-hash.c
+ * feed the salt in through a callback and never reach it. Both loops run here
+ * over a synthetic cache, at v13's parameters and at v14's, against digests
+ * generated by contrib/powbench/t_fill_kat.cpp, which shares no fill code with
+ * this file. The digest covers the 256 KB of salt and 64 bytes of keystream one
+ * NextKeys later, because v14 draws its per-nonce parameters from that state.
+ * About 7 MB and a few milliseconds, once per open. */
+static bool cna_v6_data_known_answer_test()
+{
+  static const uint64_t height = 120000;
+  static const unsigned char want_v13[32] = {
+    0x4a,0x47,0x93,0xe9,0x0c,0xf7,0x24,0x1b,0x93,0x8f,0xf4,0xcb,0xdb,0x6d,0xd3,0xf5,
+    0x04,0x49,0x45,0x25,0xa5,0x68,0x26,0x86,0xa0,0xcd,0xb8,0x2b,0x66,0x3f,0xdf,0x11};
+  static const unsigned char want_v14[32] = {
+    0xa6,0x50,0xa3,0x2c,0xd8,0xa2,0x4d,0x5b,0x90,0x07,0xaa,0xbf,0x40,0xaa,0x51,0xbe,
+    0xa9,0x7a,0x04,0x7f,0xc0,0xf4,0xa3,0x45,0x66,0x00,0xde,0x13,0xac,0x9f,0x73,0x94};
+  static const struct { const char *name; uint32_t odds, reseed; const unsigned char *want; } cases[] = {
+    { "v13", CNA_V6_FULL_HISTORY_ODDS,     CNA_V6_RESEED_BLOCKS,     want_v13 },
+    { "v14", CNA_V6_FULL_HISTORY_ODDS_V14, CNA_V6_RESEED_BLOCKS_V14, want_v14 },
+  };
+
+  /* Must match build_cache in t_fill_kat.cpp: splitmix64 from "Nerva", hash
+   * bytes little-endian, then timestamp, diff_lo and coins. */
+  std::vector<block_cache_data> cache(height);
+  uint64_t s = 0x4e65727661ULL;
+  auto splitmix = [&s]() -> uint64_t {
+    uint64_t z = (s += 0x9e3779b97f4a7c15ULL);
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+    return z ^ (z >> 31);
+  };
+  for (uint64_t i = 0; i < height; i++)
+  {
+    for (int w = 0; w < 4; w++)
+    {
+      const uint64_t z = splitmix();
+      for (int b = 0; b < 8; b++)
+        cache[i].hash.data[w * 8 + b] = (char)(uint8_t)(z >> (8 * b));
+    }
+    cache[i].timestamp = splitmix();
+    cache[i].diff_lo   = splitmix();
+    cache[i].coins     = splitmix();
+  }
+  const uint64_t window_size = (height > (uint64_t)CNA_V6_WINDOW_BLOCKS_V13) ? (uint64_t)CNA_V6_WINDOW_BLOCKS_V13 : height;
+  const uint64_t window_base = height - window_size;
+
+  std::vector<char> buf(CN_SALT_MEMORY + 64);
+  for (const auto &c : cases)
+  {
+    for (int arm = 0; arm < 2; arm++)
+    {
+      unsigned char seed[32];
+      for (int i = 0; i < 32; i++) seed[i] = (unsigned char)(i * 7 + 3);
+      HC128_State rng;
+      HC128_Init(&rng, seed, seed + 16);
+      HC128_NextKeys(&rng);
+      if (arm == 0)
+        cna_v6_data_reference(cache.data(), height, window_size, window_base, &rng, buf.data(), c.odds, c.reseed);
+      else
+        cna_v6_data_run_ahead(cache.data(), height, window_size, window_base, &rng, buf.data(), c.odds, c.reseed);
+      HC128_NextKeys(&rng);
+      std::memcpy(buf.data() + CN_SALT_MEMORY, rng.keystream, 64);
+      const crypto::hash h = crypto::cn_fast_hash(buf.data(), buf.size());
+      if (std::memcmp(h.data, c.want, 32) != 0)
+      {
+        MERROR("chain fill known-answer test failed: " << c.name << ", "
+               << (arm ? "run-ahead" : "reference") << " loop gave " << h);
+        return false;
+      }
+    }
+  }
+  MGINFO("chain fill known-answer test passed: v13 and v14, both loops");
+  return true;
 }
 
 /* The run-ahead fill with the full-history odds as a parameter. MEASUREMENT
@@ -2843,7 +3041,8 @@ static void cna_v6_data_reference(const block_cache_data *cache, uint64_t height
  * experiment. */
 static void cna_v6_data_shadow(const block_cache_data *cache, uint64_t height,
                                uint64_t window_size, uint64_t window_base,
-                               HC128_State *rng_state, char *out, uint32_t odds)
+                               HC128_State *rng_state, char *out, uint32_t odds,
+                               uint32_t reseed_blocks)
 {
   size_t rng_key_idx = 0;
   auto pick_index = [&]() -> uint64_t {
@@ -2897,6 +3096,8 @@ static void cna_v6_data_shadow(const block_cache_data *cache, uint64_t height,
       optr += 16 * sizeof(uint32_t);
       count++;
     }
+    if (((count / 16) % reseed_blocks) != 0)
+      return;
     unsigned char *iv = optr - (8 * 16 * sizeof(uint32_t)) + HC128_U32(rng_state, &rng_key_idx, (8 * 16 * sizeof(uint32_t)) - 16);
     unsigned char *key = optr - (16 * 16 * sizeof(uint32_t)) + HC128_U32(rng_state, &rng_key_idx, (8 * 16 * sizeof(uint32_t)) - 16);
     HC128_Init(rng_state, key, iv);
@@ -2957,9 +3158,15 @@ static std::atomic<uint64_t> g_odds_cycles[2] = {{0}, {0}};
 static std::atomic<uint64_t> g_odds_calls[2]  = {{0}, {0}};
 static std::atomic<uint64_t> g_odds_turn(0);
 
-void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t height, uint32_t odds)
+void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t height, uint32_t odds,
+                                     uint32_t reseed_blocks)
 {
   CHECK_AND_ASSERT_MES(height > 0, , "get_cna_v6_data called with height == 0");
+  /* Zero would divide by zero; a value not dividing 256 would skip the final
+   * reseed, so the draws v14 takes after the fill would no longer depend on
+   * the salt. Both are caller bugs, not data. */
+  if (reseed_blocks == 0 || 256 % reseed_blocks != 0)
+    throw0(DB_ERROR("get_cna_v6_data: reseed interval must divide 256"));
 
   static const bool ab_mode     = (getenv("NERVA_SALT_AB") != NULL);
   static const bool no_runahead = (getenv("NERVA_SALT_NO_RUNAHEAD") != NULL);
@@ -3011,6 +3218,10 @@ void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t
    * window held in block RAM, which is the property D3 bought. */
   static_assert(CNA_V6_FULL_HISTORY_ODDS_V14 == 256,
                 "v14 below 256 makes the window live again: see FINDINGS F66, F67");
+  static_assert(CNA_V6_RESEED_BLOCKS == 1,
+                "v13 reseeds after every block; it validates mainnet");
+  static_assert(CNA_V6_RESEED_BLOCKS_V14 >= 1 && 256 % CNA_V6_RESEED_BLOCKS_V14 == 0,
+                "the last block must still reseed: see CNA_V6_RESEED_BLOCKS_V14");
 
   /* Announce each distinct odds value once, so which fill a daemon is actually
    * running can be read off the log rather than inferred from the height. F61
@@ -3022,7 +3233,8 @@ void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t
     uint32_t prev = announced.load(std::memory_order_relaxed);
     if (prev != odds && announced.compare_exchange_strong(prev, odds, std::memory_order_relaxed))
       MGINFO("chain fill: full-history odds " << odds << " of 256"
-             << (odds >= 256 ? ", window unused" : ", windowed"));
+             << (odds >= 256 ? ", window unused" : ", windowed")
+             << ", reseed every " << reseed_blocks << " block(s)");
   }
   const uint64_t window_size = (height > (uint64_t)CNA_V6_WINDOW_BLOCKS_V13) ? (uint64_t)CNA_V6_WINDOW_BLOCKS_V13 : height;
   const uint64_t window_base = height - window_size;
@@ -3061,7 +3273,8 @@ void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t
         t0 = cn_fill_tsc();
         cna_v6_data_shadow(m_block_cache.data(), height, window_size, window_base,
                            rng_state, scratch.data(),
-                           full ? 256u : (uint32_t)CNA_V6_FULL_HISTORY_ODDS);
+                           full ? 256u : (uint32_t)CNA_V6_FULL_HISTORY_ODDS,
+                           reseed_blocks);
         t1 = cn_fill_tsc();
         g_odds_cycles[slot].fetch_add(t1 - t0, std::memory_order_relaxed);
         g_odds_calls[slot].fetch_add(1, std::memory_order_relaxed);
@@ -3087,16 +3300,6 @@ void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t
     }
   }
 
-  size_t rng_key_idx = 0;
-
-  // A dedicated selector byte precedes each index pick; consecutive HC128
-  // outputs are cryptographically independent so selector and index are uncorrelated.
-  auto pick_index = [&]() -> uint64_t {
-    if (HC128_U32(rng_state, &rng_key_idx, 256) < odds)
-      return HC128_U32(rng_state, &rng_key_idx, height);
-    return window_base + HC128_U32(rng_state, &rng_key_idx, window_size);
-  };
-
   // NERVA_SALT_NO_RUNAHEAD=1 routes to the pre-rewrite loop, so an A/B of the
   // two can be run from ONE binary. That matters: comparing two builds means
   // comparing two compilations, and this project has already had a measurement
@@ -3105,7 +3308,7 @@ void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t
   if (arm == 0)
   {
     cna_v6_data_reference(m_block_cache.data(), height, window_size, window_base,
-                          rng_state, out, odds);
+                          rng_state, out, odds, reseed_blocks);
     return;
   }
 
@@ -3119,101 +3322,13 @@ void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t
     rng_before = *rng_state;
     ref_out.resize(CN_SALT_MEMORY);
     cna_v6_data_reference(m_block_cache.data(), height, window_size, window_base,
-                          rng_state, ref_out.data(), odds);
+                          rng_state, ref_out.data(), odds, reseed_blocks);
     rng_after_ref = *rng_state;
     *rng_state = rng_before;
   }
 
-  unsigned char msg[64];
-  size_t msgpos;
-  unsigned char *optr = (unsigned char*)out;
-  uint64_t count = 0;
-
-  /* Run-ahead over a sixteen-count block.
-   *
-   * HC128_NextKeys advances the cipher independently of the message being
-   * encrypted, and the keystream HC128_U32 consumes is likewise
-   * data-independent, so every pick index and every encrypting keystream for a
-   * block can be produced before a single block-cache entry is read. The reads
-   * then carry no dependency on each other and issue together, instead of one
-   * at a time as they did when this loop interleaved them with the cipher.
-   * That interleaving also evicted P and Q from L1 on every message, which is
-   * why HC128_EncryptMessage used to cost several times what the same sixteen
-   * steps cost inside HC128_Init.
-   *
-   * Only the reseed depends on data that was fetched, because it keys
-   * HC128_Init from the output buffer. That is what sets the block as the
-   * limit of the run-ahead.
-   *
-   * Byte-for-byte identical to the loop it replaces; contrib/powbench has the
-   * harness that shows it, and NERVA_SALT_SELFCHECK below re-checks it here
-   * against real chain data. Measured 1.57x on the salt. Almost all of that is
-   * the restructuring: with prefetching removed entirely it is still 1.53x. */
-  uint64_t idx[16][4];
-  uint32_t ks[16][16];
-
-  auto run_block = [&]() {
-    HC128_NextKeys(rng_state);
-    for (size_t k = 0; k < 16; k++)
-    {
-      for (size_t j = 0; j < 4; j++)
-      {
-        idx[k][j] = pick_index();
-#if defined(__GNUC__)
-        __builtin_prefetch(&m_block_cache[idx[k][j]]);
-#endif
-      }
-      HC128_NextKeys(rng_state);
-      std::memcpy(ks[k], rng_state->keystream, sizeof(ks[k]));
-    }
-    for (size_t k = 0; k < 16; k++)
-    {
-      const block_cache_data *b0 = &m_block_cache[idx[k][0]];
-      const block_cache_data *b1 = &m_block_cache[idx[k][1]];
-      const block_cache_data *b2 = &m_block_cache[idx[k][2]];
-      const block_cache_data *b3 = &m_block_cache[idx[k][3]];
-      std::memcpy(msg, b0->hash.data, sizeof(crypto::hash));
-      msgpos = sizeof(crypto::hash);
-      std::memcpy(msg + msgpos, &(b1->timestamp), sizeof(uint64_t));
-      msgpos += sizeof(uint64_t);
-      std::memcpy(msg + msgpos, &(b2->diff_lo), sizeof(uint64_t));
-      msgpos += sizeof(uint64_t);
-      std::memcpy(msg + msgpos, &(b3->coins), sizeof(uint64_t));
-      msgpos += sizeof(uint64_t);
-      std::memcpy(msg + msgpos, &count, sizeof(uint64_t));
-
-      /* what HC128_EncryptMessage does for a 64-byte message, with the
-       * keystream taken from the run-ahead instead of generated here */
-      for (size_t j = 0; j < 16; j++)
-      {
-        uint32_t w;
-        std::memcpy(&w, msg + j * sizeof(uint32_t), sizeof(uint32_t));
-        w ^= ks[k][j];
-        std::memcpy(optr + j * sizeof(uint32_t), &w, sizeof(uint32_t));
-      }
-      optr += 16 * sizeof(uint32_t);
-      count++;
-    }
-
-    // Reseed, but don't reset the RNG key index, making the next used key
-    // effectively random at the start of each loop iteration (except the first)
-    unsigned char *iv = optr - (8 * 16 * sizeof(uint32_t)) + HC128_U32(rng_state, &rng_key_idx, (8 * 16 * sizeof(uint32_t)) - 16);
-    unsigned char *key = optr - (16 * 16 * sizeof(uint32_t)) + HC128_U32(rng_state, &rng_key_idx, (8 * 16 * sizeof(uint32_t)) - 16);
-    HC128_Init(rng_state, key, iv);
-  };
-
-  while (count < 2048)
-    run_block();
-
-  std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
-  std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
-  std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
-  std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
-  HC128_EncryptMessage(rng_state, msg, optr, sizeof(msg));
-  HC128_Init(rng_state, optr, optr+16);
-
-  while (count < 4096)
-    run_block();
+  cna_v6_data_run_ahead(m_block_cache.data(), height, window_size, window_base,
+                        rng_state, out, odds, reseed_blocks);
 
   if (do_check)
   {

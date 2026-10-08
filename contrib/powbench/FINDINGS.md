@@ -5876,6 +5876,67 @@ against the i7-7700HQ and narrows 3.4% against the 5600X. The decision is the
 user's, under the pre-registration's stated latitude, and goes in its decision
 record.
 
+*Accepted 2026-10-08; see RESEED-PREREG.md's decision record and F85.*
+
+### F85. v14 reseeds every 16th block, and the chain fill is pinned by a startup known-answer test for the first time
+
+*2026-10-08. A v14 consensus change, made because v8 has never validated a
+mainnet block. Verified as listed in section 3.*
+
+#### 1. The change
+
+`get_cna_v6_data` takes a reseed interval beside the odds D3 added, and reseeds
+only when `(count / 16) % reseed_blocks == 0`. v13 passes
+`CNA_V6_RESEED_BLOCKS` (1), v14 passes `CNA_V6_RESEED_BLOCKS_V14` (16), both in
+`hash-ops.h` and both pinned by `static_assert`. The midpoint reseed is
+unchanged, and because 16 divides 256 the last block still reseeds, so the
+draws v14 takes after the fill still depend on the salt. A value that does not
+divide 256 is refused at run time.
+
+The run-ahead loop moved out of the member function into a free function over
+the cache, so it can be tested without a database. A scripted diff of the moved
+block against the previous commit shows exactly two kinds of change: the cache
+pointer's name and the reseed condition.
+
+#### 2. The known-answer test
+
+Nothing pinned the fill's output before this: the slow-hash vectors feed their
+salt through a callback and never reach `get_cna_v6_data` (review of
+2026-10-07, open item 2). `cna_v6_data_known_answer_test` now runs whenever a
+database is opened. It builds a 120,000-entry synthetic cache, runs **both
+loops** at v13's parameters and at v14's, and compares a digest of the 256 KB
+salt plus the keystream one `NextKeys` later, which is the state v14 draws its
+parameters from. A failure refuses to open the database.
+
+The vectors come from `contrib/powbench/t_fill_kat.cpp`, which shares no fill
+code with the daemon: it is the serial form transcribed from `t_v8_fill.cpp`
+with the reseed interval written in independently.
+
+#### 3. How it was checked
+
+- **The daemon's two loops and the independent generator agree** at both
+  parameter sets, which is what the test passing means.
+- **It fails when it should.** One byte of the v14 vector flipped, rebuilt: the
+  daemon logged `chain fill known-answer test failed: v14, reference loop gave
+  <a650a32c...>`, refused to open the database and exited. The hash it printed
+  is the generator's value, so the failure was the vector and not the code.
+  Restored and rebuilt, it logs `chain fill known-answer test passed`.
+- `make release-static-win64` builds with no new warnings.
+- **v13 still validates mainnet.** A copy of the live mainnet database, 400
+  blocks popped, resynced to the tip from 4,432,756 to 4,433,167 with
+  `NERVA_SALT_SELFCHECK=1`: 411 real v13 blocks accepted with proof of work
+  checked (all above `ASSUME_VALID_HEIGHT`), 64 of 64 run-ahead against
+  reference self-checks passed, no errors. The log line `chain fill:
+  full-history odds 13 of 256, windowed, reseed every 1 block(s)` shows which
+  fill ran.
+
+#### 4. What it changes
+
+v14's salt is different, so every v14 hash is, and every testnet node must be
+rebuilt. The testnet round owed for D1, D3 and the seed fold now covers this
+too. v13 is untouched by construction (at an interval of 1 the condition is
+always true) and by test (the v13 vector and the resync above).
+
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
 `contrib/hf14checks/CMakeLists.txt` names the resized translation units

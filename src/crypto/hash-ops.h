@@ -148,6 +148,17 @@ typedef void (*cn_v8_salt_fn)(void *user, const unsigned char seed[32],
  *
  * v13 keeps 13 and must: it validates mainnet today. FINDINGS F66, F67, F68. */
 #define CNA_V6_FULL_HISTORY_ODDS_V14 256U       // every pick draws from full history
+
+/* How many sixteen-message blocks the chain fill runs between HC-128 reseeds.
+ * v13 reseeds after every block, 257 key setups a nonce counting the midpoint
+ * one; v14 after every 16th, 17 key setups. Each reseed keys HC-128 from salt
+ * already written, so it is a point the index stream cannot be predicted past;
+ * v14 keeps one every 1,024 reads. Measured on three machines against
+ * RESEED-PREREG.md: a nonce 1.55x to 1.61x cheaper to mine, the GPU gap wider
+ * on two vendors. FINDINGS F84. Must divide 256 so the last block still
+ * reseeds and the draws after the fill stay data-dependent. */
+#define CNA_V6_RESEED_BLOCKS 1U
+#define CNA_V6_RESEED_BLOCKS_V14 16U
 #define CN_RANDOM_VALUES 32
 
 enum {

@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -934,7 +934,7 @@ public:
   virtual void get_cna_v3_data(char *out, uint64_t height, uint32_t seed) = 0;
   virtual void get_cna_v4_data(char *out, uint64_t height, uint32_t seed)  = 0;
   virtual void get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t height) = 0;
-  virtual void get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t height, uint32_t odds) = 0;
+  virtual void get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t height, uint32_t odds, uint32_t reseed_blocks) = 0;
 
   /**
    * @brief fetch a block by height
