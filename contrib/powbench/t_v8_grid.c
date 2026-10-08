@@ -1,35 +1,20 @@
 /* Hardware AES against software AES for CNA v8, over the whole consensus
- * domain, for the shipped hash and for the D1 candidate beside it.
+ * domain. The daemon's startup self-test compares the two arms at the corners
+ * of the domain only; this covers every draw. The arms are separate copies of
+ * the core, so they can drift apart in ways review would miss.
  *
- * WHY THIS EXISTS. cn_slow_hash_self_test compares the two v8 arms at exactly
- * one point, (xx, yy, iters) = (3, 3, 64), which is not even in the range the
- * chain draws from: cryptonote_tx_utils.cpp draws xx and yy from [4, 8] and
- * iters from [0, 63]. So the arm every miner runs and the arm an ARM or an
- * older x86 runs have been compared on one input consensus never asks for.
- * That is a gap in v8 as it stands today, independent of D1.
+ * Checks (numbering kept from earlier versions; 2 and 3 were retired):
  *
- * The two arms are separate copies of the core, not one body behind a macro,
- * and they differ in source on purpose: r2 aliases &c in the hardware arm and
- * &b in the software arm. r2's only consumer is the sweep, so this is precisely
- * the part D1 proposes to delete, and the agreement it produces is the thing
- * most worth checking before and after.
+ *   1. hw == sw over all 5 x 5 x 64 = 1600 consensus draws, xx and yy in
+ *      [4, 8] and iters in [0, 63]. The digest printed at the end must stay
+ *      09d34831c25f506c.
+ *   4. the chain entry points, where the arms must also agree on the 32-byte
+ *      seed handed to the salt callback.
+ *   5. a handful of out-of-domain (xx, yy), including xx = 1 and yy = 1, so a
+ *      widened draw range does not walk into an untested corner.
+ *   6. the hash depends on xx, yy and iters only through (xx-1)*yy + iters.
  *
- * WHAT IT CHECKS, in order of what a failure would mean:
- *
- *   1. v8 shipped:   hw == sw over all 5 x 5 x 64 = 1600 consensus draws.
- *      (2 and 3 compared this against the D1 candidate. D1 was adopted on
- *      2026-10-07, so they became a function against itself and were removed.
- *      The digest at the end carries that forward: it must stay at
- *      09d34831c25f506c, the candidate's value over these same draws.)
- *   4. the chain entry points, where the arms must also agree
- *      on the 32-byte seed handed to the salt callback, since that is consensus
- *      input to HC-128 and comparing only the final hash covers it indirectly.
- *   5. a handful of out-of-domain (xx, yy), including xx = 1 and yy = 1 where
- *      the sweep loops do not execute at all, so a widened draw range later
- *      does not walk into an untested corner.
- *
- * Salt and random_values are varied per case from splitmix64, not left zeroed,
- * because a zero salt is the one input where the sweeps have least to do.
+ * Salt and random_values are varied per case from splitmix64, not zeroed.
  *
  * Build: sh contrib/powbench/build-v8-grid.sh
  * Exit status is 0 only if every check passes.
@@ -42,9 +27,8 @@
 
 #include "hash-ops.h"
 
-/* The four cores, called directly rather than through the dispatchers: the
- * point is to run both arms on one machine, which the dispatcher will not do.
- * The ns pair is built from contrib/powbench/v8ns-hw.c and v8ns-sw.c. */
+/* The cores, called directly rather than through the dispatchers: the point
+ * is to run both arms on one machine, which the dispatcher will not do. */
 extern void cn_slow_hash_v14_hw(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 extern void cn_slow_hash_v14_sw(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 

@@ -107,8 +107,7 @@ int cn_hardware_aes_supported(void)
     return cached;
 }
 
-/* See hash-ops.h. Per thread so a measurement harness can turn it on without
- * changing what verification does on the same process's other threads. */
+/* See cn_nt_fill_enable in hash-ops.h. */
 static __thread int cn_tls_nt_fill = 0;
 
 int cn_nt_fill_enable(int on)
@@ -134,10 +133,8 @@ int cn_nt_fill(void)
 #define CN_DISPATCH(call_hw, call_sw) do { call_sw; } while (0)
 #endif
 
-/* v8 hashes into the legacy buffer, which at 1 MB is large enough. Raising the
- * pad past it means pointing CN_V8_PAD at cna_scratchpad and relaxing this.
- * Here rather than in hash-ops.h because that header is included from C++,
- * where _Static_assert is not a keyword. */
+/* v8 hashes into the legacy buffer (CN_V8_PAD), so its pad must fit. Here
+ * rather than in hash-ops.h, which is also compiled as C++. */
 _Static_assert(CN_SCRATCHPAD_MEMORY_V8 <= CN_SCRATCHPAD_MEMORY,
                "v8 pad must fit the legacy buffer it hashes into; see CN_V8_PAD");
 
@@ -179,8 +176,7 @@ void cn_slow_hash_v11(cn_hash_context_t *ctx, const void *data, size_t length, c
                 cn_slow_hash_v11_sw(ctx, data, length, hash, iters, init_size_blk, xx, yy));
 }
 
-/* CNA v8, the HF14 hash. Same pads and signature as v11, since it is v11's
- * core with salt_pad removed (D1). */
+/* CNA v8, the HF14 hash. Same pads and signature as v11. */
 void cn_slow_hash_v14(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy)
 {
     /* v8 runs at CN_SCRATCHPAD_MEMORY_V8, which fits the legacy pad. */
@@ -190,7 +186,7 @@ void cn_slow_hash_v14(cn_hash_context_t *ctx, const void *data, size_t length, c
 }
 
 /* The consensus entry: the salt is fetched inside the hash, seeded from the
- * AES fill, and the per-nonce draws come back with it. PLAN-v8 Phase 6 B2. */
+ * AES fill, and the per-nonce draws come back with it. */
 void cn_slow_hash_v14_chain(cn_hash_context_t *ctx, const void *data, size_t length, char *hash, uint8_t init_size_blk, cn_v8_salt_fn salt_fn, void *salt_user)
 {
     cn_pads_require(ctx, 1, 0);
@@ -254,11 +250,8 @@ int cn_page_tier_actual(const void *p, size_t size, int requested_tier)
  * pad everywhere else, v14 included. Call it after a hash of that
  * version has run, or the buffer will not be allocated yet.
  *
- * v13 exactly, not >= 13: v14 hashes from the legacy pad (CN_V8_PAD) and its
- * dispatcher asks for cn_pads_require(ctx, 1, 0), so cna_scratchpad is never
- * allocated at v14. Reading its tier returned the is_mapped field of a NULL
- * buffer, which is CN_PAGES_MALLOC, so every v14 miner was told it was on
- * normal pages no matter what the 1 MB pad actually got. */
+ * v13 exactly, not >= 13: v14 hashes from the legacy pad and never allocates
+ * cna_scratchpad. */
 int cn_page_tier_for_version(const cn_hash_context_t *ctx, uint8_t major_version)
 {
     if (ctx == NULL)
@@ -522,12 +515,9 @@ void cn_hash_context_free(cn_hash_context_t *context)
     free(context);
 }
 
-/* Known-answer vectors for the algorithms that validate mainnet today,
- * generated from master. v8 must not move these: the branch carries them
- * unchanged so CI proves on every platform that v10, v11 and v13 are
- * untouched, rather than a reviewer taking a byte-identical claim on
- * trust. Input is "nerva live-algorithm known-answer vector".
- * v13's seed is seed[i] = i * 7 + 3. */
+/* Known-answer vectors for the algorithms that validate mainnet, generated
+ * from master; they must never change. Input is "nerva live-algorithm
+ * known-answer vector"; v13's seed is seed[i] = i * 7 + 3. */
 static const struct { uint32_t iters; uint8_t blk; uint16_t xx, yy, zz, ww;
                      unsigned char want[32]; } cn_v10_kat[] = {
     { 0, 8, 2, 2, 2, 2, {0xd4,0xb2,0xe4,0x3a,0x9e,0xa2,0x76,0x56,0x43,0x67,0x5c,0x95,0x90,0xf3,0xa4,0x67,0x05,0x47,0x19,0x08,0x39,0x73,0x4d,0x5d,0x51,0x82,0xf7,0x2d,0x97,0xdb,0x21,0x89} },
@@ -544,15 +534,9 @@ static const struct { uint32_t iters; uint8_t blk; uint16_t xx, yy;
 
 static const unsigned char cn_v13_kat[32] = {0xa0,0x64,0x2e,0x89,0x8c,0x90,0x08,0x4f,0x5c,0x7c,0x08,0x4d,0xc0,0x6d,0x4a,0x32,0x3c,0xf2,0x78,0x06,0x23,0xa7,0xc5,0x67,0x67,0xc7,0xcf,0xe4,0x02,0x8d,0x0e,0x3c};
 
-/* v8 known-answer vectors, generated from the shipped implementation.
- * salt and random_values are zeroed before each case so the vector
- * depends only on (input, iters, blk, xx, yy).
- *
- * REGENERATED 2026-10-07 for D1, which removed salt_pad_v8 and the four extra
- * hashes. v8 has never validated a block, so changing what it computes is a
- * question we are allowed to ask; these are the deliberate act that says the
- * hash moved. v10, v11 and v13 above are byte-identical to before, which the
- * generator proves rather than a reviewer asserting it. */
+/* v8 known-answer vectors. salt and random_values are zeroed before each
+ * case, so each vector depends only on (input, iters, blk, xx, yy). They
+ * change only when v8's hash is changed on purpose. */
 static const struct { uint16_t xx, yy; uint32_t iters; unsigned char want[32]; } cn_v14_kat[] = {
     { 4, 4, 0, {0xad,0x8d,0xe0,0x71,0x9d,0xb4,0x39,0xaa,0xfa,0x95,0xc1,0xd2,0x5d,0x47,0x3a,0x2a,0xa0,0x53,0x9b,0x53,0xca,0xe9,0xd9,0xf4,0xde,0x94,0xba,0x93,0xd7,0x8d,0x16,0xad} },
     { 4, 5, 1, {0xe1,0xdb,0x7b,0xf1,0x20,0xe0,0xda,0x35,0x55,0xca,0xa2,0x2f,0x7c,0xa0,0xaa,0xb2,0x71,0x2b,0xbf,0x09,0xd3,0xaa,0xab,0x68,0xc2,0x23,0xd0,0xa9,0xb7,0xcb,0x77,0x16} },
@@ -564,12 +548,8 @@ static const struct { uint16_t xx, yy; uint32_t iters; unsigned char want[32]; }
 
 /* Fixed salt and fixed draws, so the chain entry's self-test compares the two
  * AES arms rather than the callback. draw_out is NULL when it is called just to
- * fill a salt buffer.
- *
- * `user`, when non-NULL, is a 32-byte buffer that receives the seed the hash
- * handed in. The seed is the AES fill's final chain state and is consensus
- * input to HC-128, so the two arms must agree on it; comparing the resulting
- * hashes covers it only indirectly. */
+ * fill a salt buffer. `user`, when non-NULL, receives the 32-byte seed the hash
+ * passed in, so the arms can be compared on it directly. */
 static void cn_selftest_salt(void *user, const unsigned char seed[32], char *salt_out, cn_v8_draw_t *draw_out)
 {
     size_t i;
@@ -579,10 +559,8 @@ static void cn_selftest_salt(void *user, const unsigned char seed[32], char *sal
         salt_out[i] = (char)(i * 31u + 7u);
     if (draw_out != NULL)
     {
-        /* The busiest point consensus can draw: 119 steps. See the domain
-         * note in cn_slow_hash_self_test. Any caller comparing the chain entry
-         * against the caller-supplied-salt entry has to pass these same three,
-         * and the chain known-answer vector depends on them. */
+        /* The largest step count consensus can draw (119). The chain
+         * known-answer vector depends on these three. */
         draw_out->xx = 8;
         draw_out->yy = 8;
         draw_out->iters = 63;
@@ -590,25 +568,15 @@ static void cn_selftest_salt(void *user, const unsigned char seed[32], char *sal
 }
 
 /* The chain entry over v8_in below, with cn_selftest_salt's salt and draws:
- * the seed handed to the callback, all eight lanes of the fill folded, and the
- * hash. Generated by contrib/powbench/t_gen_kat.c on 2026-10-07 with the fold
- * in place (FINDINGS F81). */
+ * the seed handed to the callback and the resulting hash. Generated by
+ * contrib/powbench/t_gen_kat.c. */
 static const unsigned char cn_v14_chain_seed_kat[32] = {0xef,0x7c,0x59,0x04,0x83,0xec,0xbc,0xe7,0xae,0x8b,0xb8,0x19,0x62,0x0b,0x15,0xd7,0x69,0x7c,0xd7,0x92,0xf2,0xf1,0x17,0xd9,0x75,0xa6,0x87,0x16,0x89,0x10,0xbb,0x5a};
 static const unsigned char cn_v14_chain_kat[32] = {0x5d,0xb0,0xbf,0xe7,0xbf,0x88,0xbc,0x34,0x07,0xa0,0x4c,0xae,0x19,0xf0,0x7c,0x04,0xee,0x39,0xcc,0x5f,0xb2,0x8f,0xca,0x49,0xb0,0xdd,0x31,0xe3,0x97,0x85,0x99,0x5c};
 
-/* Known-answer vectors, checked on every build and every platform.
- *
- * Separate from cn_slow_hash_self_test on purpose: that one compares the two
- * AES arms against each other, so it returns early when there is no hardware
- * AES, which is exactly the platform where a divergence is most likely and
- * where nothing else would notice. This runs through the dispatchers, so it
- * checks whichever arm the platform actually uses.
- *
- * It also catches what HW == SW structurally cannot: a change that moves both
- * arms together, which is what editing a macro they share does.
- *
- * Returns 1 on pass. An allocation failure returns 1 as well, since it says
- * nothing about whether the hashes are right. */
+/* Known-answer vectors, checked at startup on every platform. Unlike
+ * cn_slow_hash_self_test, which compares the two AES arms and needs hardware
+ * AES, this runs through the dispatchers and also catches a change that moves
+ * both arms together. Returns 1 on pass, and on allocation failure. */
 int cn_slow_hash_known_answer_test(void)
 {
     static const char live_in[] = "nerva live-algorithm known-answer vector";
@@ -668,12 +636,9 @@ int cn_slow_hash_known_answer_test(void)
         if (memcmp(h, cn_v14_kat[k].want, HASH_SIZE) != 0) ok = 0;
     }
 
-    /* The chain entry, which is what consensus calls. The table above passes
-     * no salt callback, so it cannot see the seed the hash hands the callback,
-     * which is the B2 binding: a change that went back to seeding from part of
-     * the fill would pass every other check here. This pins the seed directly
-     * and the hash it leads to, with cn_selftest_salt standing in for the
-     * chain. FINDINGS F81. */
+    /* The chain entry, which is what consensus calls. Pins the seed handed to
+     * the callback as well as the hash, with cn_selftest_salt standing in for
+     * the chain. */
     {
         unsigned char got_seed[32];
         memset(got_seed, 0, sizeof(got_seed));
@@ -738,12 +703,8 @@ int cn_slow_hash_self_test(void)
      * routes through cn_slow_hash_v11), and they're where HW and SW differ
      * in r2's source buffer (&c on HW, &b on SW in slow-hash-impl.h).
      *
-     * Every draw below is one consensus can actually produce. iters was 64 for
-     * both, and no caller can reach that: both derive it as a modulus by at
-     * most 64, so it lies in [0, 63]. v11's xx/yy were 2, and v11 draws both
-     * from [4, 8], so the one point its two arms were compared on was a point
-     * the chain never asks for. v10's xx/yy/zz/ww of 2 are reachable and are
-     * kept, since v10 draws them from roughly [2, 7]. */
+     * Every draw below is one consensus can produce: iters is in [0, 63],
+     * v11's xx and yy in [4, 8], v10's parameters in roughly [2, 7]. */
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
     memset(ctx->salt, 0, CN_SALT_MEMORY);
     cn_slow_hash_v10_hw(ctx, input, sizeof(input) - 1, hw, 63, 8, 2, 2, 2, 2);
@@ -758,20 +719,9 @@ int cn_slow_hash_self_test(void)
     cn_slow_hash_v11_sw(ctx, input, sizeof(input) - 1, sw, 63, 8, 4, 4);
     if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
 
-    /* v14 (CNA v8). The two arms are separate copies of the core, so a slip
-     * between them is invisible to review and would split the chain along the
-     * AES-NI line.
-     *
-     * Both ends of the consensus domain, which is what this check used to miss
-     * entirely. get_block_longhash_v14 draws xx and yy from [4, 8] and iters
-     * from [0, 63] (cryptonote_tx_utils.cpp), so the single point this used to
-     * test, (3, 3, 64), was outside that range on all three axes: the arms were
-     * only ever compared where the chain never asks. (4, 4, 0) and (8, 8, 63)
-     * are the fewest and the most steps it can draw, 12 and 119.
-     *
-     * Exhaustive coverage of the 5 x 5 x 64 product lives in
-     * contrib/powbench/t_v8_grid.c; this one gates startup, so it takes the
-     * corners. */
+    /* v14 (CNA v8), at both ends of the consensus domain: (4, 4, 0) and
+     * (8, 8, 63), the fewest and most steps it can draw (12 and 119).
+     * contrib/powbench/t_v8_grid.c covers all 1600 draws. */
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
     memset(ctx->salt, 0, CN_SALT_MEMORY);
     cn_slow_hash_v14_hw(ctx, input, sizeof(input) - 1, hw, 0, 8, 4, 4);
@@ -786,11 +736,9 @@ int cn_slow_hash_self_test(void)
     cn_slow_hash_v14_sw(ctx, input, sizeof(input) - 1, sw, 63, 8, 8, 8);
     if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
 
-    /* The chain entry, which is the one consensus uses and the one nothing
-     * else can reach: HF14 is not active, so no daemon calls it in anger yet.
-     * It shares cn_v8_core with the call above, but the callback hook sits
-     * between the fill and the salt, so an arm that mishandled it would be
-     * invisible to every check that does not go through it. */
+    /* The chain entry, which consensus uses. The callback hook sits between
+     * the fill and the salt, so only a check through it can see an arm that
+     * mishandles it. */
     {
         unsigned char seed_hw[32], seed_sw[32];
         memset(seed_hw, 0, sizeof(seed_hw));
@@ -811,15 +759,9 @@ int cn_slow_hash_self_test(void)
     cn_slow_hash_v14_hw(ctx, input, sizeof(input) - 1, sw, 63, 8, 8, 8);
     if (memcmp(hw, sw, HASH_SIZE) != 0) ok = 0;
 
-    /* v14 must also differ from v11 on the same inputs, which catches a build
-     * where the variant silently failed to take effect (stale macro, bad copy,
-     * an arm that picked up salt_pad). The HW/SW check above would still pass
-     * in all of those.
-     *
-     * Same salt as the v14 run above, refilled because v11's salt_pad patches
-     * it in place. This used to zero the salt instead, so the two hashes were
-     * taken over different salts and differed whatever the algorithms did: the
-     * check could not fail. */
+    /* v14 must differ from v11 on the same inputs, which catches a build where
+     * the v8 variant failed to take effect. Same salt as the v14 run above,
+     * refilled because v11's salt_pad patches it in place. */
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
     cn_selftest_salt(NULL, NULL, ctx->salt, NULL);
     cn_slow_hash_v11_hw(ctx, input, sizeof(input) - 1, sw, 63, 8, 8, 8);

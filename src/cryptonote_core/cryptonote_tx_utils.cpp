@@ -686,8 +686,7 @@ namespace cryptonote
     HC128_State rng_state;
     HC128_Init(&rng_state, (unsigned char *)blob_hash.data, (unsigned char *)blob_hash.data + 16);
 
-    // v13 keeps the 95/5 window it shipped with. It validates mainnet, so this
-    // value is not ours to change; D3 raised the odds for v14 only.
+    // v13's odds and reseed interval validate mainnet and must not change.
     db.get_cna_v6_data(context->salt, &rng_state, stable_height,
                        (uint32_t)CNA_V6_FULL_HISTORY_ODDS, (uint32_t)CNA_V6_RESEED_BLOCKS);
 
@@ -715,48 +714,31 @@ namespace cryptonote
       bool failed;
     };
 
-    // Called from inside cn_slow_hash_v14, after the AES fill and before
-    // anything reads the salt. `seed` is the fill's final chain state with all
-    // eight AES lanes folded in, so a device cannot produce salts without first
-    // running the whole 1 MB fill. FINDINGS.md F81.
-    //
-    // The draws stay here, after the fill, because get_cna_v6_data re-seeds its
-    // HC128 state from bytes it has already written: they depend on the salt's
-    // content and cannot be reached by fast-forwarding the keystream. That is
-    // what makes v5's variable work per nonce safe. FINDINGS.md F5, F42.
+    // Called from inside cn_slow_hash_v14_chain, after the AES fill and before
+    // anything reads the salt. `seed` is the fill's final state with all eight
+    // AES lanes folded in. The per-nonce draws are taken here, after the fill,
+    // so they depend on the salt's content.
     void v14_fetch_salt(void *user, const unsigned char seed[32], char *salt_out, cn_v8_draw_t *draw)
     {
       v14_salt_ctx *c = static_cast<v14_salt_ctx *>(user);
 
-      // Everything below is wrapped because this is a C++ function called from
-      // C: cn_v8_core is a C frame, and get_cna_v6_data reaches build_block_cache,
-      // which does throw0(DB_ERROR(...)). Letting that unwind through cn_v8_core
-      // is ABI-dependent and would skip the frame's cleanup, including the
-      // malloc'd `text` that init_hash owns and finalize_hash frees. Record the
-      // failure instead; get_block_longhash_v14 turns it into a false return.
+      // Called from a C frame (cn_v8_core), so no exception may escape: record
+      // the failure and let get_block_longhash_v14 return false.
       try
       {
       HC128_State rng_state;
       HC128_Init(&rng_state, const_cast<unsigned char *>(seed), const_cast<unsigned char *>(seed) + 16);
 
-      // v6's chain fill, but with every pick drawn from the whole chain (D3).
-      // v13 still sends ~95% of its reads to a 5.3 MB window of recent blocks;
-      // v14 does not, because that window fits in an FPGA's block RAM, which is
-      // what made it worth giving up. FINDINGS F66, F67. And it reseeds after
-      // every 16th block rather than every block, F84.
+      // v6's chain fill with every pick drawn from full history and a reseed
+      // after every 16th block.
       c->db->get_cna_v6_data(salt_out, &rng_state, c->stable_height,
                              (uint32_t)CNA_V6_FULL_HISTORY_ODDS_V14,
                              (uint32_t)CNA_V6_RESEED_BLOCKS_V14);
 
       HC128_NextKeys(&rng_state);
       size_t rng_key_idx = 0;
-      // These three reach the hash only through (xx-1)*yy + iters, a single
-      // step count in [12, 119]. D1 removed the sweeps, and the sweep was the
-      // only thing that read xx and yy separately, so draws with the same total
-      // now give the same hash. Proved over all 1600 in-domain draws by
-      // t_v8_grid check 6. They are kept as three because collapsing them to
-      // one draw would change how much HC-128 keystream this consumes, and so
-      // would change the salt seed and every hash after it.
+      // These three reach the hash only through (xx-1)*yy + iters. They stay
+      // three draws because that fixes how much keystream is consumed.
       // xx: [4, 8]
       draw->xx = (uint16_t)((uint32_t)4U + HC128_U32(&rng_state, &rng_key_idx, 5U));
       // yy: [4, 8]
@@ -776,11 +758,8 @@ namespace cryptonote
         c->failed = true;
       }
 
-      // The hash runs to completion either way and randomize_scratchpad_256k_v8
-      // reads the whole salt, which allocate_hugepage never zeroes. Without
-      // this the failure path is an uninitialized read: harmless in effect,
-      // since the resulting hash is discarded, but undefined and it would light
-      // up a sanitizer.
+      // The hash runs to completion either way and reads the whole salt, so
+      // never leave it uninitialized.
       if (c->failed)
         memset(salt_out, 0, CN_SALT_MEMORY);
     }
@@ -788,9 +767,9 @@ namespace cryptonote
   //---------------------------------------------------------------
   bool get_block_longhash_v14(crypto::cn_hash_context_t *context, BlockchainDB &db, const blobdata &blob, crypto::hash &res, uint64_t height)
   {
-    // CryptoNight-Adaptive v8: v5's core at v5's 1 MB pad with no salt_pad
-    // (D1), over v6's chain fill drawing every pick from full history (D3).
-    // The salt is fetched from inside the hash, after the AES fill (B2).
+    // CryptoNight-Adaptive v8: v5's core at a 1 MB pad with no salt_pad, over
+    // v6's chain fill with every pick drawn from full history. The salt is
+    // fetched from inside the hash, after the AES fill.
     if (height < CN_SEED_MIN_HEIGHT)
       return false;
     const uint64_t stable_height = height - 256;
@@ -803,10 +782,9 @@ namespace cryptonote
     db.get_cna_v2_data(&context->random_values, stable_height, CN_SCRATCHPAD_MEMORY_V8);
     context->cached_height = (uint64_t)-1;
 
-    // The salt is fetched from inside the hash, not here, so its seed can be
-    // the AES fill's final chain state. See v14_fetch_salt above and
-    // CN_V8_FETCH_SALT. init_size_blk is pinned, not drawn, so it is known
-    // before the fill, which is what makes that ordering possible at all.
+    // The salt is fetched from inside the hash (v14_fetch_salt), so its seed
+    // can be the AES fill's final state. init_size_blk is fixed, so it is
+    // known before the fill.
     v14_salt_ctx sctx;
     sctx.db = &db;
     sctx.stable_height = stable_height;
@@ -816,10 +794,8 @@ namespace cryptonote
     crypto::cn_slow_hash_v14_chain(context, blob.data(), blob.size(), res,
                                    CN_V8_INIT_SIZE_BLK, v14_fetch_salt, &sctx);
 
-    // The hash ran to completion either way, so the C frame cleaned up after
-    // itself; res is simply meaningless if the salt never arrived. Stamp it so
-    // that a caller which ignores the return value still fails closed, the way
-    // it did when the only false return happened before res was written.
+    // res is meaningless if the salt fetch failed. Stamp it so a caller that
+    // ignores the return value still fails the difficulty check.
     if (sctx.failed)
     {
       memset(res.data, 0xff, sizeof(res.data));
@@ -855,9 +831,7 @@ namespace cryptonote
       case 13:
         return get_block_longhash_v13(context, db, blob, res, height);
       default:
-        // >= 14: CryptoNight-Adaptive v8. CNA v7 was written for this same fork
-        // but was never released: it did not perform, so it was removed rather
-        // than shipped, and v8 took its slot.
+        // >= 14: CryptoNight-Adaptive v8
         return get_block_longhash_v14(context, db, blob, res, height);
     }
   }

@@ -1,5 +1,12 @@
 # CNA v8, Phase 8: the design pass
 
+> **A historical record of the design pass.** D1 and D3 shipped; after this was
+> written the fill's reseed interval went to every 16th block (F84, F85), a
+> rejection-free draw was rejected (F86), and the GPU figures were corrected
+> several times (F78 to F80, F86, F88). For what v8 is now, read "Current
+> state" at the top of [FINDINGS.md](FINDINGS.md).
+
+
 What v8 should be, given everything measured. Written 2026-10-06, after the pad
 decision closed, and on the standing that **v8 has never validated a block**, so
 it is not bound to reproduce what it currently computes.

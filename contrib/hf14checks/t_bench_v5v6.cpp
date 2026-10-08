@@ -1,11 +1,11 @@
-// v5 across pad sizes, plus v6 and v7, on the REAL hash functions.
+// v5 across pad sizes, plus v6 (v13) and v8 (v14), on the REAL hash functions.
 //
 // v5 (cn_slow_hash_v11) draws its loop counts, AES block size and iteration
 // count per nonce, so a single-point measurement misrepresents it. Parameters
-// here come from the same ranges get_block_longhash_v5 uses:
+// here come from the same ranges get_block_longhash_v11 uses:
 //   xx  = 4 + rand(5)              [4,8]
 //   yy  = 4 + rand(5)              [4,8]
-//   init_size_blk = 2 << rand(3)   2, 4 or 8
+//   init_size_blk = 2 << rand(3)   2, 4 or 8 (v8 rows: fixed at 8, as consensus)
 //   iters = rand(1 + rand(64))     [0,62]
 //
 // The pad rows are separate compilations of the same source at a different
@@ -37,6 +37,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <chrono>
 #include <thread>
@@ -52,7 +53,7 @@ extern "C" {
 }
 
 static const char SAMPLE[] =
-  "nerva v5 v6 v7 comparison input, long enough for the variant 1 tweak at 35";
+  "nerva v5 v6 v8 comparison input, long enough for the variant 1 tweak at 35";
 
 typedef void (*v5fn)(cn_hash_context_t *, const void *, size_t, char *,
                      size_t, uint8_t, uint16_t, uint16_t);
@@ -66,21 +67,19 @@ void cn_slow_hash_v11_p1_5(cn_hash_context_t *, const void *, size_t, char *, si
 void cn_slow_hash_v11_p2(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v11_p4(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v11_p8(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
-/* CNA v8 at the same two sizes. v8 is v11 with salt_pad's extra-hash selector
- * widened to four entries, so it shares the signature and the pad. 1 MB
- * isolates the selector change against v5 at the size v5 ships; 4 MB is where
- * v8 is meant to live and exercises v5pad.inc's salt wrap, a different path. */
+/* CNA v8 at 1 MB (its shipped size) and 4 MB. v8 is v11's core without
+ * salt_pad, so it shares the signature. */
 void cn_slow_hash_v14_p1(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 void cn_slow_hash_v14_p4(cn_hash_context_t *, const void *, size_t, char *, size_t, uint8_t, uint16_t, uint16_t);
 }
 
-enum Gen { GEN_V5 = 5, GEN_V6 = 6 };
+enum Gen { GEN_V5 = 5, GEN_V6 = 6, GEN_V8 = 8 };
 
 struct V {
   const char *key;        // short id used by the ratio lines below
   const char *name;
   Gen         gen;
-  v5fn        fn;         // GEN_V5 only
+  v5fn        fn;         // GEN_V5 and GEN_V8
   size_t      own_pad;    // bytes we must supply; 0 = the function allocates
   size_t      pad_kb;     // what the hash actually walks, for the report
   unsigned    single_n;
@@ -93,13 +92,9 @@ struct V {
 // compilation is an inner function that reads context->scratchpad with no
 // allocation of its own, so it must be handed a buffer, the 1 MB ones included.
 static const V VS[] = {
-  // single_n is 2000 on the rows that carry the v5-against-v8 comparison, not
-  // the 60 the pad-sweep rows use. v5 draws its work per nonce and the spread
-  // is about 4.7x, so at n=60 the standard error on the mean is near 4.5% and
-  // a 2% gate cannot be resolved. Worse, the Rng seed is fixed, so a small
-  // sample repeats the same draw every run: a difference that is pure sampling
-  // looks stable across runs and reads as a real result. n=2000 costs about
-  // 1.6 s a row here and brings the error under 1%.
+  // single_n is 2000 on the rows that carry the v5-against-v8 comparison: work
+  // per nonce varies with the draw, and a small fixed-seed sample repeats the
+  // same unrepresentative draw every run. n=2000 brings the error under 1%.
   { "v5ref",  "v5 1MB ref",  GEN_V5, cn_slow_hash_v11,       0,            1024, 2000, 20, true  },
   { "v5ctl",  "v5 1MB ctl",  GEN_V5, cn_slow_hash_v11_p1,    1024ull*1024, 1024, 2000, 20, false },
   { "v5_125", "v5 1.25MB",   GEN_V5, cn_slow_hash_v11_p1_25, 1280ull*1024, 1280, 40, 14, true  },
@@ -109,12 +104,10 @@ static const V VS[] = {
   { "v5_8",   "v5 8MB",      GEN_V5, cn_slow_hash_v11_p8,    8192ull*1024, 8192, 20,  6, true  },
   { "v6",     "v6 (HF13)",   GEN_V6, NULL,                   0,            8192, 20,  6, true  },
   // CNA v8. v8ref comes out of libcncrypto.a, v8ctl is the same source
-  // recompiled here, exactly as v5ref/v5ctl pair up. The comparison that
-  // decides Phase 1 is v5ctl against v8ctl and v5_4 against v8_4: same
-  // translation unit, same flags, same pad, one token of difference.
-  { "v8ref",  "v8 1MB ref",  GEN_V5, cn_slow_hash_v14,       0,            1024, 2000, 20, true  },
-  { "v8ctl",  "v8 1MB ctl",  GEN_V5, cn_slow_hash_v14_p1,    1024ull*1024, 1024, 2000, 20, false },
-  { "v8_4",   "v8 4MB",      GEN_V5, cn_slow_hash_v14_p4,    4096ull*1024, 4096, 600, 10, true  },
+  // recompiled here, exactly as v5ref/v5ctl pair up.
+  { "v8ref",  "v8 1MB ref",  GEN_V8, cn_slow_hash_v14,       0,            1024, 2000, 20, true  },
+  { "v8ctl",  "v8 1MB ctl",  GEN_V8, cn_slow_hash_v14_p1,    1024ull*1024, 1024, 2000, 20, false },
+  { "v8_4",   "v8 4MB",      GEN_V8, cn_slow_hash_v14_p4,    4096ull*1024, 4096, 600, 10, true  },
 };
 static const size_t NVS = sizeof(VS) / sizeof(VS[0]);
 
@@ -123,7 +116,11 @@ struct BigPad {
   cn_hash_context_t *ctx; uint8_t *orig; void *mem;
   BigPad(cn_hash_context_t *c, size_t bytes) : ctx(NULL), orig(NULL), mem(NULL) {
     if (bytes == 0) return;
+#if defined(_WIN32)
     mem = _aligned_malloc(bytes, 4096);
+#else
+    if (posix_memalign(&mem, 4096, bytes) != 0) mem = NULL;
+#endif
     if (mem == NULL) return;
     std::memset(mem, 0, bytes);
     ctx = c; orig = c->scratchpad; c->scratchpad = (uint8_t *)mem;
@@ -132,7 +129,11 @@ struct BigPad {
   // must run before cn_hash_context_free, or the free sees our buffer
   void release() {
     if (ctx) { ctx->scratchpad = orig; ctx = NULL; }
+#if defined(_WIN32)
     if (mem) { _aligned_free(mem); mem = NULL; }
+#else
+    if (mem) { free(mem); mem = NULL; }
+#endif
   }
   ~BigPad() { release(); }
 };
@@ -150,10 +151,12 @@ static void one_hash(const V &v, cn_hash_context_t *ctx, const uint8_t *seed, Rn
 {
   switch (v.gen)
   {
-  case GEN_V5: {
+  case GEN_V5:
+  case GEN_V8: {
     const uint16_t xx  = (uint16_t)(4u + rng.next() % 5u);
     const uint16_t yy  = (uint16_t)(4u + rng.next() % 5u);
-    const uint8_t  blk = (uint8_t)(2u << (rng.next() % 3u));
+    const uint8_t  drawn_blk = (uint8_t)(2u << (rng.next() % 3u));
+    const uint8_t  blk = v.gen == GEN_V8 ? (uint8_t)CN_V8_INIT_SIZE_BLK : drawn_blk;
     const size_t   it  = (size_t)(rng.next() % (1u + rng.next() % 64u));
     v.fn(ctx, SAMPLE, sizeof(SAMPLE) - 1, out, it, blk, xx, yy);
     break;
@@ -197,14 +200,9 @@ static void bench_single(const V &v, double &mean, double &lo, double &hi)
   mean = total / (double)v.single_n;
 }
 
-// Throughput across t threads, each with its own context and pad.
-//
-// Every thread allocates a pad and memsets it, and at 32 threads that is up to
-// 768 MB of memset for v7. Timing that alongside the hashing made the wide
-// thread counts look like a collapse in the algorithm when it was really the
-// allocator: 8 MB read 0.04x of linear. So each thread sets up, faults its pad
-// in with one warm hash, and only then waits at a barrier. The clock covers
-// the hashing and nothing else.
+// Throughput across t threads, each with its own context and pad. Each thread
+// sets up, faults its pad in with one warm hash, and only then waits at the
+// start line, so the clock covers the hashing and not the allocation.
 static double bench_threads(const V &v, unsigned threads, unsigned per_thread)
 {
   const int total = (int)(threads * per_thread);
@@ -261,7 +259,7 @@ static double mean_of(const char *key)
   return -1.0;
 }
 
-static void bench_v5_v6_v7()
+static void bench_v5_v6_v8()
 {
   std::printf("  %-12s %8s %11s %11s %11s %10s\n",
               "VERSION", "pad KB", "mean ms", "min ms", "max ms", "H/s");
@@ -284,7 +282,7 @@ static void bench_v5_v6_v7()
   std::printf("  %-12s %10s %12s %14s\n", "VERSION", "x of 1MB", "x of pad", "ms per MB");
   for (size_t i = 0; i < NVS; i++)
   {
-    if (VS[i].gen != GEN_V5 || means[i] <= 0.0) continue;
+    if (VS[i].gen == GEN_V6 || means[i] <= 0.0) continue;
     const double mb = (double)VS[i].pad_kb / 1024.0;
     std::printf("  %-12s %9.2fx %11.2fx %14.2f\n", VS[i].name, means[i] / ctl, mb, means[i] / mb);
   }
@@ -336,7 +334,7 @@ static void bench_v5_v6_v7()
 int main()
 {
   setvbuf(stdout, NULL, _IONBF, 0);
-  std::printf("== v5 pad sweep vs v6 vs v7, real hash functions ==\n");
-  RUN(bench_v5_v6_v7);
+  std::printf("== v5 pad sweep vs v6 vs v8, real hash functions ==\n");
+  RUN(bench_v5_v6_v8);
   return check_summary("t_bench_v5v6");
 }

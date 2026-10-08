@@ -1,51 +1,21 @@
-/* Do non-temporal stores help v8's fill, and at which pad size does that change?
+/* Ordinary stores against streaming (non-temporal) stores in v8's pad fill,
+ * across pad sizes, to find the pad at which streaming stops losing. Uses the
+ * resized recompilations from contrib/hf14checks/v5pad*.c and prints each
+ * pad's per-thread working set (pad plus 256 KB of salt) as a ratio to the L3
+ * size given on the command line.
  *
- * This is B2 in PLAN-v8-PHASE7: the streaming-store attack is worth +22% on
- * v13's 8 MB pad and a 39% to 61% LOSS on v8's 1 MB one, and the sign flips
- * somewhere in between. Nobody knows where. The threshold is not at 1.0x
- * over-subscription: V6-MINER-LOG lesson 9 measures 1.3x as changing nothing
- * and 3.8x as wide open.
+ * Method:
  *
- * So this sweeps the pad instead of fixing it, using the same resized
- * recompilations v8bench uses (contrib/hf14checks/v5pad*.c), and prints the
- * per-thread working set as a ratio to the cache the operator supplies. The
- * deliverable is one number: the over-subscription ratio at which a v8 attacker
- * starts winning. With it, "do not grow the pad" stops being a judgement.
+ *   A-B-B-A per group of four nonces, cycles counted per arm with rdtsc, so
+ *   drift hits both arms equally.
  *
- * Remember the salt. The working set is the pad PLUS 256 KB of salt per thread,
- * so at a 1 MB pad it is 1.25 MB and not 1 MB. Every ratio in lesson 9 counts
- * pads only and is therefore 25% low.
+ *   One draw from get_block_longhash_v14's ranges feeds all four nonces of a
+ *   group, so both arms hash identical work. Their digests must agree; a
+ *   mismatch is reported.
  *
- * Method, following what this project learned the hard way:
- *
- *   A-B-B-A per group of four nonces, so drift and boost behaviour hit both
- *   arms equally instead of landing on whichever ran second. Cycles are counted
- *   per arm with rdtsc rather than wall clock, so a descheduled thread does not
- *   land entirely on one arm.
- *
- *   Parameters are drawn from the ranges get_block_longhash_v14 uses, and the
- *   same draw feeds all four nonces of a group, so the two arms always hash
- *   identical work. Work per nonce varies several-fold in v8, so unmatched
- *   parameters would measure the draw and not the change.
- *
- *   The two arms must also agree bit for bit, and that is checked rather than
- *   assumed: a correctness test riding along with the timing one.
- *
- * SIZING, which is the reason this is not simply the fork's version with more
- * rows. The fork ran a fixed 20 s per point and 1.3M nonces in total, a number
- * chosen by guess. Measured on 2026-10-06, this machine when quiet is stable to
- * under 1% where the working set is comfortably cache-resident and bistable to
- * 11% exactly at the cache cliff, which is the regime this harness is built to
- * find. A flat sample count is therefore both too slow everywhere and too
- * imprecise where it matters, and a longer run at the cliff just averages two
- * states together rather than resolving them.
- *
- * So each point prints a SPLIT-HALF CHECK: the same ratio computed from the
- * first and second halves of its own window. If the halves agree the window was
- * long enough and nothing is gained by lengthening it. If they disagree the
- * point is unstable, and the answer is more repeats rather than a longer run.
- * Default 4 s a point, which is about 25 s for the whole sweep; raise it only
- * when the split-half says to.
+ *   Each point also prints the ratio from each half of its window. Halves that
+ *   disagree mark the point UNSTABLE (typically at the cache cliff, where the
+ *   timing is bimodal); repeat it rather than lengthening the window.
  *
  *   t_v8_nt [threads] [seconds_per_point] [L3_MB]
  *
@@ -140,7 +110,7 @@ static void *worker(void *arg)
     double t_start, t_mid, deadline;
     int i;
 
-    if (ctx == NULL || salt0 == NULL) { w->failed = 1; return NULL; }
+    if (ctx == NULL || salt0 == NULL) goto fail;
     memset(blob, (int)(w->id + 1), sizeof(blob));
 
     /* Warm through the real dispatcher: the resized entry points are the hash
@@ -149,19 +119,17 @@ static void *worker(void *arg)
     cn_nt_fill_enable(0);
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
     cn_slow_hash_v14(ctx, blob, sizeof(blob), h[0], 8, CN_V8_INIT_SIZE_BLK, 4, 4);
-    if (ctx->salt == NULL) { w->failed = 1; return NULL; }
+    if (ctx->salt == NULL) goto fail;
 
     own = (uint8_t *)aligned_alloc_4k(w->pad, &raw);
-    if (own == NULL) { w->failed = 1; return NULL; }
+    if (own == NULL) goto fail;
     memset(own, 0, w->pad);
     saved = ctx->scratchpad;
     ctx->scratchpad = own;
 
-    /* v8's sweeps write into the salt through salt_pad_v8_defer, so the state a
-     * nonce starts from is not the state the previous nonce started from. Both
-     * arms have to start from the same salt or they are not hashing the same
-     * work, and their digests cannot be compared at all. Snapshot once, restore
-     * before every nonce; the restore costs both arms equally. */
+    /* Snapshot the salt and restore it before every nonce, so both arms always
+     * hash the same input whatever the body does to it. The restore costs both
+     * arms equally. */
     memcpy(salt0, ctx->salt, CN_SALT_MEMORY);
 
     t_start  = now_s();
@@ -204,6 +172,12 @@ static void *worker(void *arg)
     free(raw);
     free(salt0);
     cn_hash_context_free(ctx);
+    return NULL;
+
+fail:
+    w->failed = 1;
+    free(salt0);
+    if (ctx != NULL) cn_hash_context_free(ctx);
     return NULL;
 }
 
@@ -300,7 +274,7 @@ int main(int argc, char **argv)
     printf("\n  Negative means streaming LOSES, which is the defended state:\n");
     printf("  the pad is cache resident, the fill's stores never reach DRAM,\n");
     printf("  and streaming only forces traffic that was not happening.\n");
-    printf("  The sign flip is the attack switching on. PLAN-v8-PHASE7 B2.\n");
+    printf("  The sign flip is where streaming stores start to pay.\n");
     printf("\n  A point marked UNSTABLE needs repeats, not a longer window.\n");
     return 0;
 }

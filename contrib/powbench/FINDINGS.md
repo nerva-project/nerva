@@ -10,6 +10,56 @@ the code next to them does not have, and commit messages carry figures nobody
 has reproduced. Every entry below names how it was checked. Entries that rest
 on an unreproduced claim live in "Open questions", not here.
 
+## Current state, 2026-10-08: read this first
+
+Findings are kept in the order they were made, and many later ones correct
+earlier ones; the later finding wins and the correction is noted where it
+applies. **Every GPU figure before F78 measured our own kernels and is
+superseded.** This section is the summary of what holds now.
+
+**What v8 (the HF14 hash, `get_block_longhash_v14`) is:**
+
+- v5's core (the body of `cn_slow_hash_v11`) at a 1 MB pad, with no
+  `salt_pad` (D1, F72) and `init_size_blk` fixed at 8 (F42).
+- The chain salt is fetched from inside the hash after the AES fill, seeded
+  from all eight AES lanes of the fill's final state (B2, F46, F81).
+- v6's chain fill, with every pick drawn from full history (D3, F73) and
+  HC-128 reseeded every 16th block instead of every block (F84, F85),
+  written as plain loops (F87) and pinned by a known-answer test run whenever
+  a database is opened (F85).
+- The per-nonce draws reach the hash only through one step count,
+  `(xx-1)*yy + iters`, in [12, 119] (F58), so cost per nonce is close to
+  uniform and there is nothing to screen for.
+
+**What it measures:**
+
+| | result | findings |
+|---|---|---|
+| sync, HF14 against v13, end to end at 4.4M height | 3.98x faster, before the reseed change and the loop rewrite, which each made v14 cheaper again | F75, F84, F87 |
+| reseed change | mining 1.55x to 1.61x on all threads, verify 1.62x | F84 |
+| GPU, RTX 3050 against 7950X | CPU better by 4.9x when the CPU feeds the card, 6.7x when the card does everything (measured) | F84, F86 |
+| GPU, by component | core about 10.7x, AES about 4.2x, chain fill 1.7x to 2.6x against a competent kernel | F78 to F80, F88 |
+| cross-CPU spread, one thread, real nonce | about 2.42x against a 2.50x limit; the i7-7700HQ gains only 1.26x from the reseed change | F84 |
+| ASIC | bound by the 16,384 random reads per nonce, not by the cipher | F65 |
+| pool resistance | a miner needs the 237 MB block cache, not a full node | F71 |
+
+**Closed, each by measurement or analysis:** the floating-point stage (F37
+to F41; removed, archived at tag `archive/cna-v8-fp-stage`), a different pad
+(F54, F55), raising `iters` (F48), chained reads without reseeds (D5,
+PLAN-v8-PHASE8), a larger block cache (D7), a rejection-free draw (F86),
+strengthening the draw's divergence (F88), and non-outsourceable PoW (F83,
+[NONOUTSOURCEABLE-POW.md](NONOUTSOURCEABLE-POW.md)). An AES keystream in
+place of HC-128 in the fill was considered and not pursued: its only upside is
+single-thread verification, and F86's mechanism (the CPU fill is read-bound at
+full load) suggests it would favour a card.
+
+**Validation:** known-answer vectors for v10, v11, v13 and v14 at every
+startup, a known-answer test for the chain fill at every database open,
+`t_v8_grid` over all 1,600 draws, and two local testnet rounds across the fork
+(F49, and F90 for v8 as it now stands). Alternative chains more than 256
+blocks past a split cannot be checked by this PoW (F90); that limit is now a
+deliberate rule, in a separate PR (F91).
+
 ## The code
 
 ### F1. `salt_pad` is shared by two live consensus functions
@@ -6368,23 +6418,19 @@ remote peer, is the intended anti-Sybil behaviour and is unchanged.
    is about 1.5x.** See F6b.
 2. **Why was RandomX dropped in January 2020?** See F13. Worth asking someone
    who was there before Phase 2 reinvents a piece of it.
-3. **v7's figures are commit-message claims, not findings.** The "per-nonce
-   program only governed 3% of the hash" line and the 1.76x-versus-3.07x GPU
-   numbers have not been reproduced. Low priority while v7 is not shipping,
-   except that the 3% lesson is the one worth carrying into Phase 2: a
-   construction can look strong while almost none of its randomness is
+3. ~~**v7's figures are commit-message claims, not findings.**~~ **Moot: v7
+   was deleted before release** and never validated a block. The lesson stays:
+   a construction can look strong while almost none of its randomness is
    load-bearing.
-4. **How far does the FP cost really fall with chain length?** F41 measured
-   about 6% at 1.96M blocks with the order controlled, where F37's model of a
-   mainnet-shaped nonce says 4.4%. They differ by more than either error bar and
-   a 2M-block chain is not a 4.4M-block one. Resolving it needs either a much
-   longer testnet or the daemon-side split timing in F38's open question.
+4. ~~**How far does the FP cost really fall with chain length?**~~ **Moot:
+   the floating-point stage was not shipped** and is removed from the tree
+   (archived at tag `archive/cna-v8-fp-stage`).
 5. **No GPU number is trustworthy at full occupancy.** Carried from
    `RESULTS.md`: every large-pad row on every machine hit the launch cap
    because a display-attached GPU trips TDR. Still true of the large-pad
-   rows, which are now off by default. It does not affect F37, whose rows
-   are all 1 MB, all ran their full nonce count, and are compared against a
-   measured cross-row floor rather than against each other in isolation.
+   rows, which are now off by default. The figures in "Current state" come
+   from 1 MB rows and from `t_fill_gpu` (F86, F88), which check their
+   kernels bit for bit against the CPU before timing.
 6. **Why the RX 580 dispatches without writing output.** F37. Not pursued,
    because it cannot change that conclusion, but it is unexplained and the
    next person to meet it should know it is a known device failure and not
@@ -6399,9 +6445,12 @@ remote peer, is the intended anti-Sybil behaviour and is unchanged.
    real one should be more expensive and the bound stronger" was the
    intuition this project held for months, and it was backwards.
 8. **Whether a GPU can feed v8's chain fill to a CPU.** F43, confirmed
-   independently by F46 at 1.95x. The limit is PCIe bandwidth at 256 KB of
-   salt per nonce. Neither side has been built; PLAN-v8 Phase 6 B2 is the
-   proposed fix.
+   independently by F46 at 1.95x before B2. B2 has since shipped: the salt's
+   seed is the AES fill's final state with all eight lanes folded (F46, F81),
+   so a feeder must run the whole 1 MB fill per candidate before it can
+   produce a salt. That split has not been built or measured since. The
+   neighbouring arrangements have: a card doing everything loses to the CPU
+   by 6.7x (F86), and a CPU feeding the card by 4.9x (F84).
 9. ~~**Does raising `iters` help or hurt?**~~ **Closed, it hurts.** F48.
    Step 1 measured +0.67 ms at 64K against a pre-registered +0.5 ms ceiling,
    and the 9.4 ns/step slope shows the chase stays in L2 at a 1 MB pad.
@@ -6410,19 +6459,18 @@ remote peer, is the intended anti-Sybil behaviour and is unchanged.
 ## Reproducing
 
     # the v6 cost-oracle screen (counts only, unaffected by machine load)
-    gcc -O2 -I src -I src/crypto -I contrib/epee/include \
-        contrib/powbench/screen.c src/crypto/cna-vm.c src/crypto/hc128.c \
-        -o screen -lm
+    gcc -O2 -I contrib/powbench/noboost -I src -I src/crypto \
+        -I contrib/epee/include contrib/powbench/screen.c \
+        src/crypto/cna-vm.c src/crypto/hc128.c -o screen -lm
     ./screen 200000 200 2048      # static programs, live nonces, passes each
 
-    # F42's screening grid: all 75 (xx, yy, init_size_blk) cells of v8, timed.
-    # Same flags and sources as build-v8bench.sh, because it times the same
-    # shipped hash; -DSLOW_HASH_HW_AES_BUILT=1 and -maes are not optional and
-    # the numbers are about 5x slow without them.
-    gcc -O2 -maes -march=x86-64 -fno-strict-aliasing -ffp-contract=off \
+    # tools that link the real hash (screen_time.c, t_iters.c, t_gen_kat.c):
+    # -DSLOW_HASH_HW_AES_BUILT=1 and -maes are not optional, the numbers are
+    # about 5x slow without them. Swap in the tool's own source file.
+    gcc -O2 -maes -march=x86-64 -fno-strict-aliasing \
         -DSLOW_HASH_HW_AES_BUILT=1 -I contrib/powbench/noboost \
         -I src -I src/crypto -I contrib/epee/include \
-        contrib/powbench/screen_grid.c \
+        contrib/powbench/screen_time.c \
         src/crypto/slow-hash.c src/crypto/slow-hash-hw.c \
         src/crypto/slow-hash-sw.c src/crypto/slow-hash-v8-hw.c \
         src/crypto/slow-hash-v8-sw.c src/crypto/cna-vm.c \
@@ -6431,11 +6479,13 @@ remote peer, is the intended anti-Sybil behaviour and is unchanged.
         src/crypto/groestl.c src/crypto/jh.c src/crypto/skein.c \
         src/crypto/hash-extra-blake.c src/crypto/hash-extra-groestl.c \
         src/crypto/hash-extra-jh.c src/crypto/hash-extra-skein.c \
-        contrib/epee/src/memwipe.c -pthread -o screen_grid -lm
-    ./screen_grid 51 0.927        # rounds, chain fill cost in ms
+        contrib/epee/src/memwipe.c -pthread -o screen_time -lm
+
+    # F42's screening grid (screen_grid.c) studied the per-nonce init_size_blk
+    # draw, which B1 removed, and was deleted with it; it is in git history.
 
     # regenerate the known-answer vectors in cn_slow_hash_known_answer_test.
-    # Same source list as screen_grid above, swapping in t_gen_kat.c. Paste the
+    # Same source list as above, swapping in t_gen_kat.c. Paste the
     # output over the tables in slow-hash.c. ONLY do this when the algorithm is
     # meant to change, and say so in the commit: the whole point of the vectors
     # is that regenerating them is a deliberate act.
@@ -6446,8 +6496,11 @@ remote peer, is the intended anti-Sybil behaviour and is unchanged.
     gcc ... contrib/powbench/t_gen_kat.c <same sources> -o t_gen_kat
     ./t_gen_kat
 
-Stop mining and close browsers before running it. F41's method notes apply
-unchanged: a contaminated run of this probe reads as a cell effect.
+Stop mining and close browsers before running any timing tool. F41's method
+notes apply: a contaminated run reads as an effect of whatever is being varied.
+
+Every other harness has its own `build-*.sh` script in `contrib/powbench/`,
+listed in [BUILD.txt](BUILD.txt).
 
 `screen.c` aborts rather than report if its instrumented interpreter stops
 matching `cn_vm_execute`. Keep that gate. It has already caught one error.

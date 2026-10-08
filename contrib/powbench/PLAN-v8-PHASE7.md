@@ -1,5 +1,11 @@
 # CNA v8, Phase 7: close the implementation gap, keep the resistance
 
+> **A historical record.** Its pad decision (1 MB) stands. Its statement that
+> v8 needs no consensus change was overtaken by Phase 8, which changed the hash
+> (D1, D3) and, later, the reseed interval. For what v8 is now, read "Current
+> state" at the top of [FINDINGS.md](FINDINGS.md).
+
+
 What to change in v8 before HF14, derived from the v6 miner project rather than
 from reasoning. Companion to [PLAN-v8.md](PLAN-v8.md), which has Phases 1 to 6,
 and to [FINDINGS.md](FINDINGS.md), which has the evidence.

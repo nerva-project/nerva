@@ -139,10 +139,7 @@ static BOOL SetLockPagesPrivilege(HANDLE hProcess, BOOL bEnable)
 
 /* v8's pad init steps the salt once per CN_V8_SALT_STEP pad bytes, so it
  * consumes exactly CN_SALT_MEMORY bytes at any pad that is a whole multiple of
- * the salt. At 1 MB that is the shipped step of 4. FINDINGS.md F4, F22, F23.
- *
- * salt_pad_v8, which used to live here, is gone with D1 (FINDINGS F72), and so
- * is the stride modulus that only its sweep read. */
+ * the salt: a step of 4 at 1 MB. */
 #define CN_V8_SALT_STEP  (CN_SCRATCHPAD_MEMORY / CN_SALT_MEMORY)
 
 /* A pad that breaks any of these produces an out-of-bounds salt read or an
@@ -157,9 +154,8 @@ _Static_assert(CN_SCRATCHPAD_MEMORY % 128 == 0,
 _Static_assert(CN_SCRATCHPAD_MEMORY != 1048576 || CN_V8_SALT_STEP == 4,
                "at a 1 MB pad the derived salt step must be exactly the shipped 4");
 
-/* v8's pad init. The shipped macro steps once per 4 pad bytes, exact at 1 MB
- * and an overrun above it. Stepping with the pad also consumes the whole salt
- * at every size, which is what keeps chain binding intact. FINDINGS.md F23. */
+/* v8's pad init: XOR the whole salt into the pad, one byte every
+ * CN_V8_SALT_STEP bytes, then apply the random values. */
 #define randomize_scratchpad_256k_v8(r, salt, scratchpad)                   \
     uint32_t x = 0;                                                         \
     for (uint32_t i = 0; i < CN_SCRATCHPAD_MEMORY; i += CN_V8_SALT_STEP)    \
@@ -356,20 +352,10 @@ static inline uint8x16_t cn_arm_aesenc(uint8x16_t a, uint8x16_t k)
     U64(b)[0] = U64(&state.k[16])[0] ^ U64(&state.k[48])[0]; \
     U64(b)[1] = U64(&state.k[16])[1] ^ U64(&state.k[48])[1];
 
-/* Store one filled block into the pad, streaming past the caches when this
- * thread asked for it. See cn_nt_fill in hash-ops.h for why it is off by
- * default and why it is kept anyway.
- *
- * With the switch off this is the memcpy it replaces, so the emitted code and
- * the resulting hash are unchanged. The known-answer vectors are what prove
- * the second half of that.
- *
- * dst is 16-byte aligned, which _mm_stream_si128 requires: the pad is page
- * aligned and the offset is a multiple of init_size_byte, itself a multiple of
- * AES_BLOCK_SIZE. src is loaded unaligned, being the running text buffer.
- *
- * The software-AES copy of expand_key is deliberately left alone: it is the
- * reference path and nobody mines on it. */
+/* Store one filled block into the pad: streaming stores when this thread
+ * enabled cn_nt_fill, otherwise a plain memcpy. dst is 16-byte aligned, as
+ * _mm_stream_si128 requires: the pad is page aligned and the offset is a
+ * multiple of init_size_byte. The software-AES expand_key does not use this. */
 STATIC INLINE void cn_fill_store(uint8_t *dst, const uint8_t *src, uint32_t nbytes)
 {
 #if defined(__x86_64__) || defined(__i386__)

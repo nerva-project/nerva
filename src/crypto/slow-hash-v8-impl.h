@@ -29,12 +29,10 @@
 /* CNA v8 hash bodies. Included by slow-hash-v8-{hw,sw}.c, which set the pad
  * size first.
  *
- * The two arms used to differ at r2, &c here and &b in the software arm, which
- * was deliberate and load-bearing. D1 removed the sweeps and the sweep was r2's
- * only consumer, so the arms are now structurally identical and that particular
- * divergence, which would have shown up only on machines without AES-NI and
- * only in the field, is no longer reachable. F58 section 4.
- * cn_slow_hash_self_test still compares the pair.
+ * v8 is v11's core with no salt_pad (no sweeps, no extra hashes), at a 1 MB
+ * pad, with the chain salt fetched from inside the hash after the AES fill.
+ * The hardware and software arms are the same statements in the same order;
+ * cn_slow_hash_self_test compares them at startup.
  */
 
 /* Which buffer v8 hashes in. Overridable so resized benchmark builds can
@@ -44,66 +42,20 @@
 #endif
 
 
-/* D1: salt_pad_v8 and its four extra hashes are GONE, adopted 2026-10-07.
- *
- * The sweeps were 23.9% of a nonce, measured in the daemon over a million
- * nonces (F57), and provably not hard: A1b reordered 30 of them into two
- * passes and the digest did not move (F51). Work that can be reordered into a
- * different number of passes without changing the answer is not work an
- * attacker has to do in the form we paid for it.
- *
- * The extra hashes went with them because F56 showed the move is binary: once
- * the pad XOR is severed, blake/groestl/jh/skein still run, still cost cycles
- * and reach the digest through nothing. Two arms whose only difference was the
- * extra hash produced identical digests, which is what dead code looks like
- * from the outside.
- *
- * What this costs, recorded because it is real: the four hash cores were the
- * only thing forcing a specialised implementation to carry more than AES and
- * keccak. That is an area argument, and F65 later priced the ASIC bound as
- * memory-driven rather than area-driven, which is why it was affordable.
- *
- * The deferral (slow-hash-v8-defer.h) went too: it existed to make these
- * sweeps cheap, and there is nothing left to defer.
- *
- * PLAN-v8-PHASE8 D1. THIS CHANGED THE HASH, deliberately, and the
- * known-answer vectors were regenerated in the same commit. */
-
-/* The CN step over v8's 1 MB pad.
- *
- * These used to live in slow-hash-v8-defer.h and read the pad through
- * CN_V8_COMP, because under the deferral the pad held `logical ^ comp` and
- * every read had to materialise the logical value before anything nonlinear
- * saw it. With the sweeps gone there is nothing to compensate for, comp is
- * identically zero, and the deferred forms reduce term for term to the plain
- * v11 steps: the only difference was that the deferred versions worked in a
- * local buffer and copied back where these work in place.
- *
- * So v8's step IS v11's step, over a different pad size. CN_SCRATCHPAD_MEMORY
- * is redefined to CN_SCRATCHPAD_MEMORY_V8 by the TUs that include this, so
- * state_index and e2i index 1 MB rather than 2.
- *
- * That equivalence is not taken on trust: t_v8_grid compares this against the
- * old no-sweep candidate, which reached the same place through the deferred
- * path with zero sweeps recorded, over all 1600 consensus draws. */
+/* The CN step. v8's step is v11's step: the TUs that include this redefine
+ * CN_SCRATCHPAD_MEMORY to CN_SCRATCHPAD_MEMORY_V8, so state_index and e2i
+ * index v8's pad. contrib/powbench/t_v8_grid.c checks the result over all
+ * 1600 consensus draws. */
 #define pre_aes_v8()          pre_aes()
 #define post_aes_variant_v8() post_aes_variant()
 #define aes_sw_variant_v8()   aes_sw_variant()
 
-/* The floating-point stage that used to hook in between the xx/yy loop and the
- * iters loop was never in consensus and is removed. It is preserved, building
- * and with its tests, at tag archive/cna-v8-fp-stage. FINDINGS F29 to F41. */
-
 /* Runs between the AES fill and the first thing that reads the salt. `text`
- * holds the fill's final chain state at this point. A NULL salt_fn leaves the
- * context's salt and the caller's parameters alone, which is what the
- * benchmarks and the self-test want. PLAN-v8 Phase 6 B2.
+ * holds the fill's final state. A NULL salt_fn leaves the context's salt and
+ * the caller's parameters alone (benchmarks and the self-test).
  *
- * The seed folds ALL of `text`, not its first 32 bytes. aes_pseudo_round
- * encrypts each 16-byte lane independently, so the fill is eight separate
- * chains, and text[0..32) is lanes 0 and 1 alone. Seeding from those let a
- * device produce the salt after a quarter of the fill's AES. With the fold,
- * every lane reaches the seed, so the seed needs the whole fill. FINDINGS F81.
+ * The seed folds all of `text`: the fill is eight independent AES lanes, and
+ * every lane must reach the seed for the seed to need the whole fill.
  * Byte-wise, so both arms and both byte orders compute the same bytes. */
 #define CN_V8_FETCH_SALT()                                   \
     do {                                                     \
@@ -170,10 +122,8 @@ static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t leng
 
 #else /* CN_USE_SOFTWARE_AES */
 
-/* Software-AES arm. Still a separate copy rather than one body behind a macro,
- * because pre_aes_v8 and post_aes_variant_v8 differ between the two. It used to
- * diverge further, at r2, but D1 removed the sweep that was r2's only consumer,
- * so the two bodies are now the same statements in the same order. */
+/* Software-AES arm. A separate copy rather than one body behind a macro,
+ * because the AES step macros differ between the two arms. */
 static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy, cn_v8_salt_fn salt_fn, void *salt_user)
 {
     uint8_t * const hp_state = CN_V8_PAD(context);

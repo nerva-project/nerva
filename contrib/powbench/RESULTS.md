@@ -1,5 +1,11 @@
 # CryptoNight-Adaptive v5 / v6 / v7: measurements, mistakes, and results
 
+> **A historical record: the comparison that set v8's original targets.** v7
+> was deleted before release, and every GPU figure here predates F78 and is
+> superseded. For what v8 is now, read "Current state" at the top of
+> [FINDINGS.md](FINDINGS.md).
+
+
 Work done 2026-09-24 to 2026-09-28 to answer three questions before HF14 is
 finalised:
 

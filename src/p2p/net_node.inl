@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -2754,12 +2754,9 @@ namespace nodetool
     if (address.get_zone() != epee::net_utils::zone::public_)
       return false; // Unable to determine how many connections from host
 
-    // for testing networks we allow more than 1 connection. cc02066 is titled
-    // "Only allow multiple connections from the same IP on testing networks"
-    // but exempted stagenet alone, so testnet kept the mainnet limit of one
-    // inbound connection per host and a third node on 127.0.0.1 could not peer
-    // with the first two. Mainnet is unchanged: the limit is what stops one
-    // host taking several of a node's inbound slots.
+    // Testing networks allow several connections per host, so local multi-node
+    // testnets can peer. Mainnet allows one, so a single host cannot take
+    // several of a node's inbound slots.
     const size_t max_connections = m_nettype == cryptonote::MAINNET ? 1 : 3;
     size_t count = 0;
 

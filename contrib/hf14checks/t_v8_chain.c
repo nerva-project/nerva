@@ -26,21 +26,15 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-/* PLAN-v8 Phase 6 B2: the chain salt is fetched from inside the hash, seeded
- * from the AES fill's final chain state, so a device cannot produce salts
- * without first running the whole 1 MB fill.
+/* v8's consensus entry, cn_slow_hash_v14_chain: the chain salt is fetched from
+ * inside the hash, seeded from the AES fill's final state, so a device cannot
+ * produce salts without first running the whole 1 MB fill.
  *
- * Nothing exercises that path at runtime today: HF14 is not active, so the
- * daemon never calls cn_slow_hash_v14_chain, and cn_slow_hash_self_test only
- * covers the NULL-callback entry. Without this check the consensus path would
- * ship having never run.
- *
- * The load-bearing property is B2's whole point and it is the one a refactor
- * would silently break: THE SEED MUST BE THE FILL'S OUTPUT, NOT THE BLOB'S
- * HASH. If someone "simplifies" it back to keccak(blob), every test that only
- * compares hashes still passes, because the hash is self-consistent either
- * way. Case 2 is what catches that: the seed has to move when init_size_blk
- * moves, since blk changes how the fill chains but cannot change keccak(blob).
+ * The property a refactor could silently break: THE SEED MUST BE THE FILL'S
+ * OUTPUT, NOT THE BLOB'S HASH. If it were simplified back to keccak(blob),
+ * every test that only compares hashes would still pass. Case 2 catches that:
+ * the seed has to move when init_size_blk moves, since blk changes how the
+ * fill chains but cannot change keccak(blob).
  */
 
 #include <stdio.h>

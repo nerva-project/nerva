@@ -1340,13 +1340,9 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags, uint3
   if (auto result = mdb_env_open(m_env, filename.c_str(), mdb_flags, 0644))
     throw0(DB_ERROR(lmdb_error("Failed to open lmdb environment: ", result).c_str()));
 
-  // Reap reader slots left by processes that died without mdb_env_close. The
-  // table holds 126; once it fills, every new read transaction fails with
-  // MDB_READERS_FULL, which surfaces as unrelated-looking DB errors and reads
-  // like chain corruption. Anything that opens this environment read-only and
-  // exits uncleanly leaks one, so a miner or a benchmark crashing repeatedly is
-  // enough to wedge the daemon. Cheap, and only touches slots whose owning
-  // process is gone.
+  // Reap reader slots left by processes that exited without mdb_env_close.
+  // Once the table fills, every new read transaction fails with
+  // MDB_READERS_FULL. Only touches slots whose owning process is gone.
   {
     int dead = 0;
     if (mdb_reader_check(m_env, &dead) == MDB_SUCCESS && dead > 0)
@@ -2853,13 +2849,9 @@ static inline uint64_t cna_v6_pick(HC128_State *rng_state, size_t *rng_key_idx, 
  * it keys HC128_Init from the output buffer, which is what limits the run-ahead
  * to a block.
  *
- * Written as plain loops on purpose. It used to be a lambda capturing every
- * local by reference, called from two loops: the compiler kept it out of line,
- * so the fill's state lived behind the closure and every byte stored into the
- * salt forced it to be reloaded. Same output, about 1.75x slower at v14's
- * parameters. FINDINGS F86, F87. Byte-for-byte identical to
- * cna_v6_data_reference, which the known-answer test and NERVA_SALT_SELFCHECK
- * both check. */
+ * Written as plain loops, not a closure, so the compiler keeps the fill's
+ * state in registers. Byte-for-byte identical to cna_v6_data_reference, which
+ * the known-answer test and NERVA_SALT_SELFCHECK both check. */
 static void cna_v6_data_run_ahead(const block_cache_data *cache, uint64_t height,
                                   uint64_t window_size, uint64_t window_base,
                                   HC128_State *rng_state, char *out, uint32_t odds,
@@ -3017,29 +3009,23 @@ void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t
   if (reseed_blocks == 0 || 256 % reseed_blocks != 0)
     throw0(DB_ERROR("get_cna_v6_data: reseed interval must divide 256"));
 
-  // Sliding window variant of get_cna_v5_data: 95% of block reads are biased
-  // to the most recent CNA_V6_WINDOW_BLOCKS_V13 blocks (~5.6 MB), which fits in L3
-  // and reduces post-HF13 sync time regardless of chain length.  The remaining
-  // ~5% draw from the full history to preserve pool resistance.
+  // Sliding window variant of get_cna_v5_data. At odds below 256 (v13) about
+  // 95% of block reads go to the most recent CNA_V6_WINDOW_BLOCKS_V13 blocks
+  // (~5.6 MB), which fit in L3; the rest draw from full history. At 256 (v14)
+  // every read draws from full history.
   build_block_cache(height);
   boost::shared_lock<boost::shared_mutex> cache_lock(m_block_cache_lock);
-  /* The window is reachable only while some pick can take the else branch
-   * below, which needs odds < 256. v14 passes exactly 256, so for v14 this is
-   * computed and never read. Pinned rather than left to a comment: drop v14's
-   * odds and an FPGA goes back to serving ~95% of its reads from the 5.3 MB
-   * window held in block RAM, which is the property D3 bought. */
+  /* The window is read only when odds < 256. v14 passes 256, so for v14 it
+   * is computed and never read. */
   static_assert(CNA_V6_FULL_HISTORY_ODDS_V14 == 256,
-                "v14 below 256 makes the window live again: see FINDINGS F66, F67");
+                "v14 must draw every pick from full history");
   static_assert(CNA_V6_RESEED_BLOCKS == 1,
                 "v13 reseeds after every block; it validates mainnet");
   static_assert(CNA_V6_RESEED_BLOCKS_V14 >= 1 && 256 % CNA_V6_RESEED_BLOCKS_V14 == 0,
                 "the last block must still reseed: see CNA_V6_RESEED_BLOCKS_V14");
 
-  /* Announce each distinct odds value once, so which fill a daemon is actually
-   * running can be read off the log rather than inferred from the height. F61
-   * is the reason: an instrumented path that never says anything is
-   * indistinguishable from one that never runs, and that cost hours. Across a
-   * fork this prints twice, which is the interesting moment. */
+  /* Log each distinct odds value once, so the log shows which fill is
+   * running. Logs again when a fork changes it. */
   {
     static std::atomic<uint32_t> announced(0xFFFFFFFFu);
     uint32_t prev = announced.load(std::memory_order_relaxed);

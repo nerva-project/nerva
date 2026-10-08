@@ -30,10 +30,7 @@ endif ()
 
 include_directories(
   "${NERVA_ROOT}/src"
-  # t_v8_chain.c includes "hash-ops.h" the way the crypto sources do, rather
-  # than "crypto/hash-ops.h". Without this the target does not compile, which
-  # is how it sat from the commit that registered it until this one: a test
-  # that cannot build reports nothing and looks like a test that passes.
+  # t_v8_chain.c includes "hash-ops.h" the way the crypto sources do
   "${NERVA_ROOT}/src/crypto"
   "${NERVA_ROOT}/contrib/epee/include"
   "${NERVA_ROOT}/external/easylogging++"
@@ -71,10 +68,9 @@ hf14check(t_clsag t_clsag.cpp)
 hf14check(t_serialization t_serialization.cpp)
 hf14check(t_fee_weight t_fee_weight.cpp)
 hf14check(t_ring_size t_ring_size.cpp)
-# The consensus entry for v8. Nothing else reaches it: HF14 is not active, so
-# no daemon calls cn_slow_hash_v14_chain yet. PLAN-v8 Phase 6 B2.
+# v8's consensus entry, cn_slow_hash_v14_chain
 hf14check(t_v8_chain t_v8_chain.c)
-# The resized v5 compilations are only comparable to the shipped v5/v6/v7 in
+# The resized compilations are only comparable to the shipped hashes in
 # libcncrypto.a if they are built the same way. These are the crypto flags the
 # main build uses for slow-hash-hw.c, taken from its flags.make.
 # -fno-strict-aliasing is not optional: slow-hash type-puns the scratchpad.

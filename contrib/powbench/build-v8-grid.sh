@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build t_v8_grid: hardware AES against software AES for CNA v8 across the
-# whole consensus draw range, for the shipped hash and the D1 candidate.
+# whole consensus draw range.
 #
 #   sh contrib/powbench/build-v8-grid.sh [output]
 #   ./t_v8_grid        exit 0 only if every check passes
@@ -9,12 +9,6 @@
 # hardware translation units compile to the software body and the run compares
 # software against software, which would pass and mean nothing. The binary
 # refuses to run on a CPU without AES-NI for the same reason.
-#
-# The D1 candidate TUs (v8ns-{hw,sw}.c) were deleted on 2026-10-07 when D1 was
-# adopted into the real translation units, which is what their own header said
-# to do. What remains compares the shipped hash's two AES arms.
-# Historical note, since the rest of this comment describes them:
-# CN_V8_NO_SWEEP and renamed symbols, so it links beside the shipped v8.
 #
 # -fno-strict-aliasing matches CMakeLists.txt for these translation units,
 # so this builds the same code the daemon does.

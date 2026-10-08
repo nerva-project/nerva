@@ -1,11 +1,17 @@
 # CNA v8: plan
 
+> **A historical record, kept for its reasoning.** For what v8 is now and what
+> holds, read "Current state" at the top of [FINDINGS.md](FINDINGS.md). Later
+> phases changed v8 substantially: Phase 8 removed `salt_pad` entirely (D1) and
+> made every chain-fill pick full-history (D3), and the fill now reseeds every
+> 16th block.
+
 A v5-derived PoW for Nerva, aiming to beat the current v6 on all three axes at
 once.
 
 **Companion documents, all in this directory:**
 
-- [FINDINGS.md](FINDINGS.md) is the evidence. Numbered findings F1 to F41, each
+- [FINDINGS.md](FINDINGS.md) is the evidence. Numbered findings F1 to F91, each
   stating how it was checked and, where it was later shown wrong, what replaced
   it. Nothing enters it from a comment or a commit message alone.
 - [RESULTS.md](RESULTS.md) is the v5 / v6 / v7 comparison that set the targets
@@ -32,26 +38,26 @@ reason those two answers came out the way they did.
 
 ## Status
 
-**Phases 1 and 3 to 6 are done. Phase 2, floating point, is built and measured
-but not shipped and not decided.**
-
 | phase | state |
 |---|---|
-| 1, fourth hash function | done, measured on four machines |
-| 2, floating point | built and measured, **not shipped**; leaning against |
+| 1, fourth hash function | done, then superseded: D1 (Phase 8) removed `salt_pad` and its extra hashes |
+| 2, floating point | built and measured, **not shipped**; removed, archived at tag `archive/cna-v8-fp-stage` |
 | 3, pad and parameters | done, pad is 1 MB |
 | 4, plumbing | done, `get_block_longhash_v14` live at major_version >= 14 |
-| 5, validation | done; the testnet fork round passed on two machines, F49 |
-| 6, hardening vs the measured miner | B1, B2, B3 and A1b all landed |
-| 7, implementation gap and the pad size | **planned, not started**; see [PLAN-v8-PHASE7.md](PLAN-v8-PHASE7.md) |
+| 5, validation | done; testnet rounds F49 and F90 |
+| 6, hardening vs the measured miner | B1, B2 and B3 landed; A1b's deferral went with D1 |
+| 7, implementation gap and the pad size | done; pad stays 1 MB, see [PLAN-v8-PHASE7.md](PLAN-v8-PHASE7.md) |
+| 8, design pass | D1 and D3 shipped, reseed every 16th block shipped; see [PLAN-v8-PHASE8.md](PLAN-v8-PHASE8.md) |
 
 Phase 6 exists because [0xROOTPLS](https://github.com/0xROOTPLS) built an optimized miner, measured it
 at 2.43x the reference and reported it in full. Its breakdown showed that once
 the deferrable parts are removed the chain fill is the only irreducible work v8
 has.
 
-What v8 is, in one sentence: **v5 with `salt_pad`'s extra-hash selector widened
-from three entries to four, at v5's 1 MB pad, using v6's windowed chain fill.**
+What v8 is, in one sentence: **v5's core at a 1 MB pad with no `salt_pad`, over
+v6's chain fill with every pick drawn from full history.** (When this plan was
+written it was v5 with `salt_pad`'s selector widened to four hashes, over v6's
+windowed fill.)
 
 v7 has been deleted. It was written for this same fork but never released: it
 did not perform, HF14 never activated while it existed, so no block was ever

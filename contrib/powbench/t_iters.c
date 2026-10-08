@@ -26,24 +26,19 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-/* FINDINGS.md F48 step 1: what does raising `iters` cost a verifier?
- *
- * v8's CryptoNight inner loop is 0.05% of a nonce. `iters` is
- * (height + 1) % iters_divisor with iters_divisor in [1,64], so at most 63
- * steps, and v11 has derived it that way since HF11. The question is whether
- * restoring a real dependent pad chase would buy GPU resistance that does not
- * rest on the AES-NI-against-T-tables assumption everything else rests on.
- *
- * F48 predicts the answer is no, for two reasons: a chase over a 1 MB pad is
- * hidden by occupancy on a GPU and is L2-resident on a CPU, and by F38 it adds
- * work to the specialisable hash core rather than to the chain fill. This
- * measures the cost side, which is step 1 and the cheap half. If the cost is
- * prohibitive the other two steps never need to run.
+/* What raising v8's `iters` would cost a verifier: single-thread time of the
+ * v8 hash against iters, from the shipped range (at most 63) up to 262144,
+ * and the marginal cost per CN step.
  *
  * Each CN step is two dependent pad accesses: pre_aes loads at state_index(a)
  * and post_aes_variant loads and stores at state_index(c), with the second
  * address depending on the first result. So the slope is the latency of a
- * dependent pair, not a throughput figure. */
+ * dependent pair, not a throughput figure.
+ *
+ * Build: as screen_time.c's header, with contrib/powbench/t_iters.c in place
+ * of screen_time.c.
+ *
+ *   t_iters [rounds]       default 15; the median of the rounds is reported */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -86,6 +81,7 @@ int main(int argc, char **argv)
     char blob[76], out[32];
     double med[NIT];
 
+    if (rounds < 1) rounds = 1;
     cn_hash_context_t *ctx = cn_hash_context_create();
     if (!ctx) return 1;
     memset(blob, 0xA5, sizeof blob);
@@ -94,10 +90,10 @@ int main(int argc, char **argv)
     if (!ctx->salt) return 1;
 
     double *samp = malloc(NIT * (size_t)rounds * sizeof(double));
+    if (!samp) return 1;
 
     /* Interleaved, with the order reversed on alternate rounds, so a thermal
-     * drift cancels instead of loading onto whichever row runs late. Same
-     * discipline as F42. */
+     * drift cancels instead of loading onto whichever row runs late. */
     for (int r = 0; r < rounds; r++)
         for (size_t q = 0; q < NIT; q++) {
             size_t k = (r & 1) ? NIT - 1 - q : q;
@@ -111,8 +107,8 @@ int main(int argc, char **argv)
         med[k] = samp[k * rounds + rounds / 2];
     }
 
-    printf("v8 verify cost against iters, 7950X class, one thread\n");
-    printf("xx=yy=6 (30 salt_pad sweeps, the mean), blk=%d pinned\n\n", CN_V8_INIT_SIZE_BLK);
+    printf("v8 verify cost against iters, one thread\n");
+    printf("xx=yy=6 (30 xx/yy steps, the mean draw), blk=%d\n\n", CN_V8_INIT_SIZE_BLK);
     printf("     iters      ms     vs shipped    ns per CN step\n");
     for (size_t k = 0; k < NIT; k++) {
         double extra = med[k] - med[1];                     /* against iters=63 */

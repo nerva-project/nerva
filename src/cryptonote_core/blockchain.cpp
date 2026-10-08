@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -1748,11 +1748,8 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     memset(proof_of_work.data, 0xff, sizeof(proof_of_work.data));
     if(!get_block_longhash(m_hash_context, this, bei.bl, proof_of_work, bei.height))
     {
-      // A false return means we could not compute the hash, for instance an
-      // LMDB error while fetching v8's chain salt. That is a local fault and
-      // says nothing about the block, so do not set m_bad_pow: that flag costs
-      // the sending peer P2P_IP_FAILS_BEFORE_BLOCK and would ban it for our
-      // own failure.
+      // We could not compute the hash (a local fault, such as a database
+      // error), which says nothing about the block, so do not set m_bad_pow.
       MERROR_VER("Block with id: " << id << std::endl << " for alternative chain, could not compute proof of work; treating as unverifiable rather than invalid");
       bvc.m_verifivation_failed = true;
       return false;

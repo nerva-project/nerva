@@ -26,7 +26,7 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-/* Cost-uniformity test for the CNA v6 VM, used as a design gate for v8.
+/* Cost-uniformity test for the CNA v6 VM (mainnet's v13 hash).
  *
  * A PoW is easiest to reason about when every nonce costs the same to hash.
  * Where cost varies, it should at least not be knowable in advance: if the
@@ -59,8 +59,8 @@
  *   - whether the 2048 passes of one nonce really do execute the same trace
  *   - the measured CBRANCH taken rate, against the predicted 1 - 2^-16.5
  *
- * The gate for v8: the correlation between estimate and measured cost should
- * be near zero. Run this against any candidate before it ships.
+ * Pass condition: the correlation between estimate and measured cost is near
+ * zero.
  *
  * The instrumented interpreter is a copy of cn_vm_execute with counters added.
  * A copy can drift from the original and quietly measure the wrong function,
@@ -68,9 +68,11 @@
  * registers and pads and compares both afterwards. If that check fails nothing
  * else here means anything, so it aborts.
  *
- * Build (no nerva build tree needed, the two sources are self-contained):
- *   gcc -O2 -I src -I src/crypto contrib/powbench/screen.c \
- *       src/crypto/cna-vm.c src/crypto/hc128.c -o screen
+ * Build (no nerva build tree needed):
+ *   gcc -O2 -I contrib/powbench/noboost -I src -I src/crypto \
+ *       -I contrib/epee/include contrib/powbench/screen.c \
+ *       src/crypto/cna-vm.c src/crypto/hc128.c -o screen -lm
+ *   ./screen [static_programs] [nonces] [passes]
  */
 
 #include <stdio.h>
@@ -324,6 +326,12 @@ int main(int argc, char **argv)
 
     sm_state = 0x5EEDF00DCAFEBABEull;
 
+    if (n_static < 1 || n_dynamic < 1 || passes < 1)
+    {
+        fprintf(stderr, "usage: screen [static_programs] [nonces] [passes], all >= 1\n");
+        return 1;
+    }
+
     pad_a = (uint8_t *)malloc(PAD_BYTES);
     pad_b = (uint8_t *)malloc(PAD_BYTES);
     if (!pad_a || !pad_b) { fprintf(stderr, "out of memory\n"); return 1; }
@@ -340,6 +348,8 @@ int main(int argc, char **argv)
         int *distinct = (int *)malloc((size_t)n_static * sizeof(int));
         long zero_memop = 0, total_cbr = 0;
         double sum_m = 0, sum_d = 0;
+
+        if (!memops || !distinct) { fprintf(stderr, "out of memory\n"); return 1; }
 
         for (i = 0; i < n_static; i++)
         {

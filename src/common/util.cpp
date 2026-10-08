@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 // 
 // All rights reserved.
@@ -806,12 +806,8 @@ std::string get_nix_version_display_string()
 
   bool check_aesni()
   {
-    /* Before the HW-vs-SW comparison and outside it, and outside the NO_AES
-     * guard as well: NO_AES drops only the hardware translation units, so such
-     * a build still computes consensus hashes through the software path, and it
-     * is the build with the least other checking, because there is no hardware
-     * arm left for the self-test below to compare against. The vectors are the
-     * only check that can see a change which moves both arms together. */
+    /* Outside the NO_AES guard: a NO_AES build still hashes through the
+     * software path, and these vectors are its only check. */
     if (!crypto::cn_slow_hash_known_answer_test())
     {
         MGUSER_RED(

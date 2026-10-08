@@ -1,8 +1,8 @@
-/* Template for a second compilation of v5 (cn_slow_hash_v11) at a different
-   scratchpad size, so pad size can be varied without touching consensus code.
-   This is a separate translation unit with renamed symbols, the same pattern
-   slow-hash-sw.c and slow-hash-hw.c already use. The shipped 1 MB v11 is
-   linked in unchanged alongside these and is the reference row in the bench.
+/* Template for a second compilation of v5 (cn_slow_hash_v11) and v8
+   (cn_slow_hash_v14) at a different scratchpad size, so pad size can be varied
+   without touching consensus code. A separate translation unit with renamed
+   symbols, the same pattern slow-hash-sw.c and slow-hash-hw.c use. The shipped
+   1 MB builds are linked in unchanged alongside these as reference rows.
 
    Each includer defines, before including this file:
      V5PAD_TAG    identifier suffix for the renamed symbols, e.g. p2
@@ -88,24 +88,11 @@ _Static_assert((CN_SALT_MEMORY & (CN_SALT_MEMORY - 1)) == 0,
 
 #define V5PAD_BLOCKS (CN_SCRATCHPAD_MEMORY / AES_BLOCK_SIZE)
 
-/* The wrap exists so v5, whose salt stride is hardcoded for a 1 MB pad, can be
-   benchmarked at larger sizes without reading past the salt. At exactly 1 MB it
-   is a provable no-op: the index never reaches the mask.
-
-   It is identity there rather than a redundant AND, and that is not a
-   micro-optimisation. The 1 MB "ctl" row is the control for the whole
-   comparison, and it is only a control if it is the same code as the shipped
-   function. Once v8 became pad-aware and stopped needing the wrap at all, a
-   wrap left on v5 alone turned the 1 MB v5-against-v8 comparison into wrapped
-   against unwrapped, which overstated v8 by 3 to 5 points on the two narrower
-   cores and tripped the harness's own consistency check.
-
-   Identity at and BELOW 1 MB, not only at exactly 1 MB. v5's smallest stride
-   is 4, so the salt index tops out at pad / 4, which reaches CN_SALT_MEMORY
-   only at exactly 1 MB and is short of it at every smaller size. Written as
-   `== 1048576` the sub-1 MB rows added for PLAN-v8-PHASE7 C1 would carry an AND
-   the 1 MB control does not, which is the same wrapped-against-unwrapped
-   asymmetry described above. */
+/* The wrap lets v5, whose salt stride is hardcoded for a 1 MB pad, run at
+   larger sizes without reading past the salt. At and below 1 MB the salt index
+   never reaches CN_SALT_MEMORY (v5's smallest stride is 4), so the wrap is the
+   identity there rather than a redundant AND: the 1 MB "ctl" row must be the
+   same code as the shipped function to be a control. */
 #if CN_SCRATCHPAD_MEMORY <= 1048576
 #define V5PAD_SALT_WRAP(i) (i)
 #else
@@ -141,10 +128,8 @@ _Static_assert((V5PAD_BLOCKS & (V5PAD_BLOCKS - 1)) == 0,
     for (j = offset_1; j < CN_SCRATCHPAD_MEMORY; j += offset_2) \
         hp_state[j] ^= (salt)[V5PAD_SALT_WRAP(x++)];
 
-/* v8 needs no override: its macros derive the stride from CN_SCRATCHPAD_MEMORY,
- * already redefined above, so the resized builds pick up the right one. v5 needs
- * the wrap below because its stride is hardcoded for 1 MB. If a salt_pad_v8
- * override reappears here, the benchmark and the daemon have diverged. */
+/* v8 needs no override: its pad init derives the salt step from
+ * CN_SCRATCHPAD_MEMORY, already redefined above. */
 
 
 #include "crypto/slow-hash-impl.h"

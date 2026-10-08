@@ -91,27 +91,18 @@ void cn_fast_hash(const void *data, size_t length, char *hash);
 #define CN_SCRATCHPAD_MEMORY    1048576         // 1 MB — used by v9–v12
 #define CN_SCRATCHPAD_MEMORY_V13 (8*1024*1024)  // 8 MB — v13: a bigger pad keeps hashing memory-bound
                                                 // (1 CPU = 1 vote) and costlier to put on an ASIC
-/* CNA v8 (HF14). Same 1 MB pad v5 has used since HF11, chosen on measurement
- * across four CPUs: a larger pad is worse on both fairness axes and excludes
- * small-cache machines from multi-threading first. FINDINGS.md F24, F27, F28.
- * Its own constant, and v8 has its own translation unit, so this is a one-line
- * change if that is ever revisited. */
+/* CNA v8 (HF14) pad size. v8's translation units redefine
+ * CN_SCRATCHPAD_MEMORY to this. */
 #define CN_SCRATCHPAD_MEMORY_V8 (1024*1024)
 
-/* v8 pins init_size_blk instead of drawing it per nonce. The draw changes the
- * AES operation count by zero (pad/(blk*16) iterations of blk blocks is pad/16
- * blocks at any width) and the time by up to 2.24x, so it was the largest
- * screenable axis in the algorithm and bought nothing. 8 is the fastest width
- * at every (xx, yy) and fills state.init exactly. FINDINGS.md F42. */
+/* v8 uses a fixed init_size_blk instead of drawing it per nonce: the width
+ * changes timing but not the number of AES operations. */
 #define CN_V8_INIT_SIZE_BLK 8
 
-/* v8 fetches its chain salt from inside the hash, after the AES fill, and the
- * seed it passes out is the fill's final chain state, all eight lanes folded
- * into 32 bytes. A device that wants to produce salts for a CPU therefore has
- * to run the whole 1 MB fill per candidate first: 65,536 AES blocks of ten
- * rounds, in eight chains of 8,192 dependent steps. The per-nonce draws come
- * back with the salt because they are taken from the salt-advanced keystream
- * and are not knowable any earlier. PLAN-v8 Phase 6 B2, FINDINGS.md F46, F81. */
+/* v8 fetches its chain salt from inside the hash, after the AES fill. The
+ * callback gets a 32-byte seed folded from all eight lanes of the fill's final
+ * state, writes the salt, and returns the per-nonce draws, which come from the
+ * keystream the salt fetch leaves behind. */
 typedef struct {
     uint16_t xx;
     uint16_t yy;
@@ -123,40 +114,19 @@ typedef void (*cn_v8_salt_fn)(void *user, const unsigned char seed[32],
 
 #define CN_SALT_MEMORY 262144
 
-/* The sliding window, ~5.6 MB of recent blocks, which a windowed fill keeps
- * cache-resident. Named _V13 because that is the only algorithm it still
- * affects: v14 passes CNA_V6_FULL_HISTORY_ODDS_V14 below, at which every pick
- * is full-history and the window branch is unreachable. That is not structural,
- * it follows from the value being 256, so db_lmdb.cpp carries a static_assert
- * tying the two together. Change one and the compiler makes you consider the
- * other. */
+/* v13's window of recent blocks (~5.6 MB) for the chain fill. v14's odds are
+ * 256, so v14 never reads it; db_lmdb.cpp asserts that. */
 #define CNA_V6_WINDOW_BLOCKS_V13 100000U
 #define CNA_V6_FULL_HISTORY_ODDS 13U            // out of 256 (~5%) go to full history
 
-/* v14 draws EVERY pick from full history. D3, adopted 2026-10-07.
- *
- * The 13 above was never argued for, only inherited: it was chosen so a syncing
- * node kept 95% of its reads inside the window and therefore in cache.
- * That also hands the same residency to an attacker, and the window is 5.3 MB,
- * which fits in an FPGA's block RAM. At 13 of 256 an FPGA serves 94.9% of its
- * reads on-chip; at 256 it serves none.
- *
- * Costs measured on a 7950X and an i7-7700HQ against the thresholds fixed in
- * D3-ODDS-PREREG.md before the run: the whole-nonce cross-machine spread moves
- * 2.171x to 2.338x with D1 also in, against a 2.50x limit, and sync gains
- * nothing at the fork because PoW is skipped below ASSUME_VALID_HEIGHT.
- *
- * v13 keeps 13 and must: it validates mainnet today. FINDINGS F66, F67, F68. */
+/* v14 draws every chain-fill pick from full history. v13 keeps the value
+ * above because it validates mainnet. */
 #define CNA_V6_FULL_HISTORY_ODDS_V14 256U       // every pick draws from full history
 
-/* How many sixteen-message blocks the chain fill runs between HC-128 reseeds.
- * v13 reseeds after every block, 257 key setups a nonce counting the midpoint
- * one; v14 after every 16th, 17 key setups. Each reseed keys HC-128 from salt
- * already written, so it is a point the index stream cannot be predicted past;
- * v14 keeps one every 1,024 reads. Measured on three machines against
- * RESEED-PREREG.md: a nonce 1.55x to 1.61x cheaper to mine, the GPU gap wider
- * on two vendors. FINDINGS F84. Must divide 256 so the last block still
- * reseeds and the draws after the fill stay data-dependent. */
+/* Sixteen-message blocks the chain fill runs between HC-128 reseeds; each
+ * reseed keys HC-128 from salt already written. v13 reseeds after every block
+ * and validates mainnet; v14 after every 16th. Must divide 256 so the last
+ * block still reseeds. */
 #define CNA_V6_RESEED_BLOCKS 1U
 #define CNA_V6_RESEED_BLOCKS_V14 16U
 #define CN_RANDOM_VALUES 32
@@ -217,24 +187,10 @@ int cn_page_tier_for_version(const cn_hash_context_t *ctx, uint8_t major_version
 cn_hash_context_t *cn_hash_context_create(void);
 void cn_hash_context_free(cn_hash_context_t *context);
 
-/* Fill the pad with streaming stores instead of ordinary ones, per thread.
- *
- * OFF BY DEFAULT AND IT MUST STAY THAT WAY. This exists to be measured, not to
- * be enabled: on v8 it is a 39% to 61% LOSS at every thread count, because a
- * 1 MB pad stays in cache, the fill's stores never reach DRAM, and streaming
- * only forces traffic that was not happening. It was worth +22% on v13, whose
- * 8 MB pad cannot stay in cache. See PLAN-v8-PHASE7 A6 and V6-MINER-LOG
- * lesson 9.
- *
- * It is kept because it is the tripwire for the pad size: if anything ever
- * moves v8's working set past the over-subscription threshold, this number
- * flips sign and the attack arrives with it. Shared by every version that
- * fills through expand_key(): v8, v11, v10 and v9.
- *
- * The hash is bit-identical either way, which the known-answer vectors are
- * what actually prove. Per thread, so turning it on in a measurement harness
- * cannot change what verification does on another thread of the same process.
- */
+/* Per-thread switch to fill the pad with streaming stores. Off by default:
+ * v8's pad stays in cache, where streaming stores are slower. Kept for
+ * benchmarks. The hash is identical either way. Affects every version that
+ * fills through expand_key(): v8, v11, v10 and v9. */
 int cn_nt_fill_enable(int on);
 int cn_nt_fill(void);
 
@@ -258,13 +214,10 @@ int cn_slow_hash_known_answer_test(void);
 
 void cn_slow_hash(cn_hash_context_t *context, const void *data, size_t length, char *hash, int variant, int prehashed, size_t iters);
 void cn_slow_hash_v11(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
-/* v14 (CNA v8): v11's core at the same 1 MB pad with no salt_pad at all (D1),
- * so neither the sweeps nor the extra hashes run. Same signature as v11; the
- * hash depends on xx, yy and iters only through (xx-1)*yy + iters.
- *
- * Named for the hard fork, not the CNA generation, which is why there is no
- * v12 and why CNA v8 is called v14. The name previously held CNA v7, which was
- * removed before release and never validated a block, so reuse is safe. */
+/* v14 (CNA v8): v11's core at a 1 MB pad without salt_pad, with a
+ * caller-supplied salt (benchmarks and self-tests). The hash depends on xx, yy
+ * and iters only through (xx-1)*yy + iters. Named for the hard fork, not the
+ * CNA generation. */
 void cn_slow_hash_v14(cn_hash_context_t *context, const void *data, size_t length, char *hash, size_t iters, uint8_t init_size_blk, uint16_t xx, uint16_t yy);
 /* Consensus entry for v8: salt fetched inside the hash via salt_fn, seeded
  * from the AES fill. iters/xx/yy come back through the callback. */

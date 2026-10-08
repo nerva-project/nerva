@@ -26,10 +26,10 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-/* How much of a v6 hash's time is the VM, and what does the cost spread in
- * FINDINGS.md F6 amount to in throughput rather than in operation counts?
+/* How much of a v6 (v13) hash's time is the VM, and what does the VM's cost
+ * spread (screen.c) amount to in throughput rather than in operation counts?
  *
- * F6 measures memory operations. A hash also pays an 8 MB AES fill, an 8 MB
+ * screen.c counts memory operations. A hash also pays an 8 MB AES fill, an 8 MB
  * salt XOR and an 8 MB finalize pass, and those do not vary with the program,
  * so the VM's share of total hash time bounds what the spread is worth. This
  * measures that share directly, two ways:
@@ -46,17 +46,20 @@
  * Wants an idle machine. Stop the daemon and close the browser first, or the
  * numbers are noise.
  *
- * Build:
- *   gcc -O2 -maes -march=x86-64 -fno-strict-aliasing \
- *       -I src -I src/crypto -I contrib/epee/include \
+ * Build (-DSLOW_HASH_HW_AES_BUILT=1 and -maes are required, or it times
+ * software AES):
+ *   gcc -O2 -maes -march=x86-64 -fno-strict-aliasing -DSLOW_HASH_HW_AES_BUILT=1 \
+ *       -I contrib/powbench/noboost -I src -I src/crypto -I contrib/epee/include \
  *       contrib/powbench/screen_time.c \
  *       src/crypto/slow-hash.c src/crypto/slow-hash-hw.c src/crypto/slow-hash-sw.c \
+ *       src/crypto/slow-hash-v8-hw.c src/crypto/slow-hash-v8-sw.c \
  *       src/crypto/cna-vm.c src/crypto/hc128.c src/crypto/oaes_lib.c \
- *       src/crypto/aesb.c src/crypto/keccak.c src/crypto/blake256.c \
- *       src/crypto/groestl.c src/crypto/jh.c src/crypto/skein.c \
+ *       src/crypto/aesb.c src/crypto/keccak.c src/crypto/hash.c \
+ *       src/crypto/blake256.c src/crypto/groestl.c src/crypto/jh.c src/crypto/skein.c \
  *       src/crypto/hash-extra-blake.c src/crypto/hash-extra-groestl.c \
  *       src/crypto/hash-extra-jh.c src/crypto/hash-extra-skein.c \
- *       -o screen_time -lm
+ *       contrib/epee/src/memwipe.c -pthread -o screen_time -lm
+ *   ./screen_time [nonces]
  */
 
 #include <stdio.h>
@@ -173,6 +176,7 @@ int main(int argc, char **argv)
 
     sm_state = 0xA5A5C0FFEE123456ull;
 
+    if (n < 1) { fprintf(stderr, "usage: screen_time [nonces], nonces >= 1\n"); return 1; }
     ctx = cn_hash_context_create();
     if (!ctx) { fprintf(stderr, "cn_hash_context_create failed\n"); return 1; }
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));

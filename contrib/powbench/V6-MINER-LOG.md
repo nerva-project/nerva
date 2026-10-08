@@ -1,5 +1,10 @@
 # v13 (CNA v6) miner optimization log
 
+> Lessons 9 and 10, about v8, predate D1: the `salt_pad` sweeps they discuss
+> no longer exist in v8. For what v8 is now, read "Current state" at the top of
+> [FINDINGS.md](FINDINGS.md).
+
+
 Running record of the work, the measurements and the mistakes. Started
 2026-10-04.
 

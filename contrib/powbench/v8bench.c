@@ -26,38 +26,22 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-/* CNA v8 against CNA v5: a standalone, statically linkable benchmark.
+/* CNA v8 against CNA v5 (v11's body): a standalone, statically linkable
+ * benchmark of single-thread hash cost, a pad-size sweep, and thread scaling.
  *
- * Phase 1 of the v8 plan widens salt_pad's extra-hash selector from three of
- * the four available hashes to all four, so Skein stops being dead weight in
- * the table and becomes a fourth structurally distinct datapath that an ASIC
- * cannot trim. The question this answers is what that costs to verify, which
- * has to hold on the weakest machine in the set, not the fastest.
+ * Work per nonce varies with the draw, so a small sample measures the draw and
+ * not the algorithm: n is 2000 at 1 MB by default. Variants are measured
+ * INTERLEAVED on identical parameters, so thermal drift, boost behaviour and
+ * background load hit all of them equally.
  *
- * Two things make this harder to measure than it looks, and both are handled
- * here rather than left to the reader:
- *
- *   Work per nonce varies about 4.7x. v5 draws xx, yy, init_size_blk and iters
- *   per nonce, so a small sample measures the draw and not the algorithm. At
- *   n=60 the standard error on the mean is near 4.5%, which cannot resolve a
- *   2% question. Worse, with a fixed RNG seed a small sample repeats the same
- *   unrepresentative draw every run, so a sampling artifact looks stable and
- *   reads as a real result. That happened during development and inverted the
- *   sign of the answer. n is 2000 here at 1 MB.
- *
- *   The two variants are measured INTERLEAVED, one v5 nonce then one v8 nonce
- *   on identical parameters, rather than as consecutive blocks. Thermal drift,
- *   boost behaviour and background load then hit both equally instead of
- *   landing on whichever ran second.
- *
- * The control pair is what makes the result trustworthy: "ref" is the shipped
- * function out of the library, "ctl" is the same source recompiled here at the
- * same pad size. They should agree. Whatever they differ by is this machine's
- * noise floor, and the verdict is scaled to it rather than to a fixed
- * threshold that may be below what the machine can resolve.
+ * Controls: "shipped" is the function out of the library, "recomp" is the same
+ * source recompiled here at the same pad size (contrib/hf14checks/v5pad*.c).
+ * The two v8 builds are first checked to produce identical hashes.
  *
  * Build (static, no MSYS2 or MinGW DLLs needed at runtime):
  *   see build-v8bench.sh next to this file
+ *
+ *   v8bench [samples_1MB] [samples_4MB] [thread_counts, e.g. 1,8,16 or 0]
  */
 
 /* before any system header: sched_getcpu() is a GNU extension, and glibc and
@@ -274,15 +258,9 @@ static struct params draw(void)
     struct params p;
     p.xx  = (uint16_t)(4 + rnd() % 5);
     p.yy  = (uint16_t)(4 + rnd() % 5);
-    /* Pinned, not drawn: get_block_longhash_v14 passes CN_V8_INIT_SIZE_BLK.
-     * Drawing it here measured an algorithm the daemon stopped running when
-     * blk was pinned, and every figure would have drifted silently.
-     *
-     * One sample feeds every variant in the interleaved pass, which is what
-     * makes the comparison controlled, so the v5/v11 control rows run at
-     * blk=8 too. Those rows are therefore the selector control, not v11 as
-     * deployed: v11 still draws blk in consensus. Sweeping blk is
-     * screen_grid.c's job. FINDINGS.md F42. */
+    /* Fixed, as get_block_longhash_v14 passes CN_V8_INIT_SIZE_BLK. One sample
+     * feeds every variant, so the v5 rows run at blk=8 too, although v11
+     * draws blk in consensus. */
     p.blk = CN_V8_INIT_SIZE_BLK;
     p.iters = rnd() % (1 + rnd() % 64);
     return p;
@@ -291,18 +269,12 @@ static struct params draw(void)
 struct result { double mean_ms, min_ms, max_ms; };
 
 /* One interleaved pass over k variants: each sample draws its parameters once
- * and hands the same ones to every variant in turn, recording each.
+ * and hands the same ones to every variant in turn, recording each. Controls
+ * go through the same pass as what they control for. The starting variant
+ * rotates each sample, so no variant always runs first against a cold pad.
  *
- * Everything compared here has to go through this together. An earlier version
- * interleaved v5 against v8 but measured ref against ctl in separate passes,
- * so drift cancelled in the first comparison and not in the second. The
- * control then read as noise the paired figures did not have, and on one
- * machine tripped a "too noisy to use" guard while its paired numbers were
- * in line with every other box. The control has to be measured the same way
- * as the thing it is the control for.
- *
- * The starting variant rotates each sample, so no variant always runs first
- * against a cold pad or last against a warm one. */
+ * With pad_bytes set, every variant (shipped ones included: the dispatcher
+ * only allocates a NULL pad) hashes into the same malloc'd buffer. */
 static void bench_group(hashfn *fns, struct result *res, unsigned k,
                         size_t pad_bytes, unsigned n, int *ok)
 {
@@ -360,17 +332,9 @@ static void bench_group(hashfn *fns, struct result *res, unsigned k,
     *ok = 1;
 }
 
-/* Do the shipped and recompiled v8 builds compute the same function?
- *
- * The timing control can only say their costs are close, and a cost ratio has
- * no way to separate an algorithm difference from a memory artifact. This
- * compares the hashes themselves, which settles it outright: same inputs, same
- * pad size, so the outputs must be identical byte for byte.
- *
- * It is the check that would have caught v5pad.inc keeping a salt_pad_v8
- * override after the shipped macro became pad-aware, where the benchmark and
- * the daemon quietly ran different algorithms while every timing looked
- * plausible. */
+/* Do the shipped and recompiled v8 builds compute the same function? Same
+ * inputs, same pad size, so the outputs must be identical byte for byte.
+ * Returns the number of mismatches, or -1 if it could not run. */
 static int shipped_matches_recompiled(void)
 {
     static const char blob[] = "nerva cna v8 shipped against recompiled, identical inputs";
@@ -393,8 +357,7 @@ static int shipped_matches_recompiled(void)
     {
         const struct params p = draw();
 
-        /* salt_pad writes back into salt, so both builds must start from the
-         * same salt, and random_values must match too */
+        /* both builds start from the same salt and random_values */
         memset(&ctx->random_values, 0, sizeof(ctx->random_values));
         memset(ctx->salt, 0, CN_SALT_MEMORY);
         cn_slow_hash_v14(ctx, blob, sizeof(blob) - 1, a, p.iters, p.blk, p.xx, p.yy);
@@ -435,26 +398,11 @@ static int shipped_matches_recompiled(void)
  * closer to one box one vote.
  */
 
-/* Start gate: hold every worker until all of them are built, so the clock
- * measures hashing rather than thread creation and page faults.
- *
- * This used a POSIX barrier and does not any more, for two independent reasons.
- *
- * macOS does not implement them. Barriers are optional in the standard and
- * Apple's libpthread omits them, so the type and its three functions are simply
- * undeclared there and the harness would not compile at all.
- *
- * The fixed participant count was also wrong. The barrier was sized t + 1, and
- * when pthread_create failed partway the controller tried to absorb the missing
- * slots by waiting once per missing thread. Its first such wait blocks, because
- * the barrier has not been reached, so it could never make the remaining calls:
- * the loop whose comment read "or everyone waits forever" was itself the thing
- * that waited forever. Only reachable when thread creation fails, which is why
- * it survived this long.
- *
- * A gate needs no fixed count. Workers announce arrival and block; the
- * controller waits for however many workers actually exist, then releases them.
- * Nothing has to be known in advance and nothing has to be absorbed. */
+/* Start gate: hold every worker until all of them are set up, so the clock
+ * measures hashing rather than thread creation and page faults. Workers
+ * announce arrival and block; the controller waits for however many workers
+ * were actually created, then releases them. A mutex and condition variable
+ * rather than a POSIX barrier, which macOS does not provide. */
 struct start_gate {
     pthread_mutex_t m;
     pthread_cond_t  c;
@@ -522,12 +470,10 @@ static void *worker_main(void *arg)
     if (ctx == NULL) { gate_arrive(w->start); return NULL; }
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
 
-    /* Set up, allocate and fault the pad in BEFORE the barrier. Timing the
-     * allocation alongside the hashing is what made an earlier harness read a
-     * thread-count collapse that was really the allocator: every thread
-     * memsets its pad, and at 32 threads that is hundreds of MB. */
-    { struct params wp; rng_state = 1; wp = draw();
-      cn_slow_hash_v11(ctx, blob, sizeof(blob) - 1, out, wp.iters, wp.blk, wp.xx, wp.yy); }
+    /* Set up, allocate and fault the pad in BEFORE the gate, so allocation is
+     * not timed. Fixed warm-up parameters: the shared draw() state must not be
+     * touched from several threads. */
+    cn_slow_hash_v11(ctx, blob, sizeof(blob) - 1, out, 8, CN_V8_INIT_SIZE_BLK, 4, 4);
     if (ctx->salt == NULL) { cn_hash_context_free(ctx); gate_arrive(w->start); return NULL; }
 
     own = (uint8_t *)malloc(w->pad_bytes);
@@ -562,17 +508,10 @@ static void *worker_main(void *arg)
     return NULL;
 }
 
-/* Total H/s across t threads, measured as all the work divided by the wall
- * time of the whole group.
- *
- * Not the sum of each thread's own rate, which was the first version and is
- * biased upward: v8's work per nonce varies about 4.7x, so threads finish at
- * different times, and the ones still running after others have exited get a
- * quieter machine and report a rate no miner would ever see. The bias grows
- * with thread count, which is exactly where the interesting behaviour is.
- *
- * The parent joins the barrier so timing starts when the last worker is set
- * up, keeping allocation and page-faulting out of the measurement. */
+/* Total H/s across t threads: all the work divided by the wall time of the
+ * whole group. Not the sum of per-thread rates, which overstates throughput
+ * because threads that finish late run on a quieter machine. Timing starts
+ * when the gate releases, after every worker is set up. */
 static double bench_threads(hashfn fn, size_t pad_bytes, unsigned n, unsigned t)
 {
     struct start_gate start;
@@ -729,16 +668,9 @@ static void placement_check(const char *where)
     }
 }
 
-/* Cost must rise with the pad. A sweep that falls has measured more than one
- * kind of core, whatever the affinity says, so it is checked on its own rather
- * than trusting the placement probes to have noticed. */
 /* The pad sweep, smallest first. 256 KB is the floor: below it the pad stops
- * being a whole multiple of CN_SALT_MEMORY and the sweep reads past the salt.
- * PLAN-v8-PHASE7 C1 is why the two sizes below 1 MB are here; Phase 3 never
- * measured them, so 1 MB was the endpoint of its sample rather than a bracketed
- * minimum. PAD_1MB is the index anything that wants the shipped size must use:
- * it was 0 while the sweep started at 1 MB, and a hardcoded 0 left behind here
- * would silently compare a 1 MB row against a 256 KB one. */
+ * being a whole multiple of CN_SALT_MEMORY. PAD_1MB is the shipped size's
+ * index. */
 #define NPADS   6
 #define PAD_1MB 2
 static const char *const g_pad_short[NPADS] =
@@ -746,6 +678,8 @@ static const char *const g_pad_short[NPADS] =
 static const char *const g_pad_long[NPADS] =
     { "256 KB", "512 KB", "1 MB", "2 MB", "4 MB", "8 MB" };
 
+/* Cost must rise with the pad. A sweep that falls has measured more than one
+ * kind of core, whatever the affinity says. */
 static void check_monotonic(const double ms[NPADS])
 {
     const char *const *names = g_pad_long;
@@ -818,6 +752,10 @@ int main(int argc, char **argv)
     double ctl_noise, d1, d4, gate;
 
     detect_narrow();
+    if (n1 < 1 || n4 < 1) {
+        printf("usage: v8bench [samples_1MB] [samples_4MB] [thread_counts], samples >= 1\n");
+        return 1;
+    }
 
     {
         char brand[49];
@@ -827,7 +765,7 @@ int main(int argc, char **argv)
 
         cpu_brand(brand);
         printf(g_narrow ? "CNA v8 vs CNA v5\n"
-                        : "CNA v8 (Skein in salt_pad) against CNA v5\n");
+                        : "CNA v8 against CNA v5\n");
         printf("CPU: %s\n", brand);
         placement_baseline();
 
@@ -879,8 +817,8 @@ int main(int argc, char **argv)
         } else if (bad > 0) {
             printf("  STOP: shipped v8 and recompiled v8 gave different hashes on %d of 24\n"
                    "  inputs. They are not the same algorithm, so the timings below would be\n"
-                   "  meaningless. Check whether v5pad.inc still overrides something the\n"
-                   "  shipped macros now handle themselves.\n", bad);
+                   "  meaningless. Check contrib/hf14checks/v5pad.inc against the shipped\n"
+                   "  v8 translation units.\n", bad);
             return 1;
         } else if (g_narrow) {
             printf("  shipped v8 == recomp v8 (24 inputs)\n\n");
@@ -889,24 +827,10 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Two interleaved groups, one per pad size, because the shipped builds no
-     * longer share a pad: v5 ships at 1 MB and v8 now ships at 4 MB. An earlier
-     * version put cn_slow_hash_v11 and cn_slow_hash_v14 in the same "1 MB" row
-     * and kept doing so after v8 moved, which silently turned the headline
-     * comparison into v5 at 1 MB against v8 at 4 MB. Every variant compared to
-     * another must be at the same pad, and that is what these groups enforce.
-     *
-     * Each group also carries one shipped build, so the control answers the
-     * question that actually matters: does the benchmarked build behave like
-     * the one that ships? At 1 MB that is v5, at 4 MB it is v8. One confound
-     * worth knowing: the shipped builds read the context's own pad, which is
-     * hugepage-backed, while the recompiled ones read a plain malloc buffer,
-     * so a small difference is expected and is not a fault in either. */
+    /* Two interleaved groups, one per pad size; every variant compared to
+     * another runs at the same pad. The 1 MB group carries both shipped
+     * builds (v5 and v8 both ship at 1 MB) beside their recompiled controls. */
     {
-        /* The 1 MB group carried a fifth row, v15, the floating-point stage,
-         * until that was removed from the tree. It is preserved at tag
-         * archive/cna-v8-fp-stage, and runs from before then interleaved five
-         * variants rather than four. */
         hashfn one_mb[4]  = { cn_slow_hash_v11,       /* shipped v5, 1 MB */
                               cn_slow_hash_v11_p1,    /* recompiled v5, 1 MB */
                               cn_slow_hash_v14_p1,    /* recompiled v8, 1 MB */
@@ -926,25 +850,12 @@ int main(int argc, char **argv)
         v5p4  = r4[0]; v8p4  = r4[1];
     }
 
-    /* Phase 3's question is which pad to ship, so sweep it. Each size is a
-     * separate compilation of the same source at a different
-     * CN_SCRATCHPAD_MEMORY, which is also what makes v8's derived salt stride
-     * worth having: each build picks up the stride its pad requires with no
-     * per-size constant to get wrong.
-     *
-     * Two numbers matter per size and they pull against each other. Verify
-     * cost sets sync speed, and it rises with the pad. Cross-CPU spread sets
-     * how close this gets to one box one vote, and the whole premise of moving
-     * off v6's 8 MB is that a smaller pad narrows it. Collect both here; the
-     * spread needs every machine, so it is computed from the reported rows
-     * rather than printed by any single run. */
+    /* The pad sweep. Each size is a separate compilation of the same source at
+     * a different CN_SCRATCHPAD_MEMORY. Cross-CPU spread at each pad needs
+     * every machine's SWEEP line, so no single run prints it. */
     {
-        /* Sample counts are per pad, and chosen so every row gets a comparable
-         * amount of wall time rather than a comparable sample count. The
-         * previous version used 600 at 4 and 8 MB, which made the large pads
-         * the noisiest rows precisely where the pad decision needs precision:
-         * two runs minutes apart disagreed by 5.7% at 4 MB. These give roughly
-         * 7 s a row, about 30 s for the sweep, and cut that scatter by half. */
+        /* Sample counts are per pad, chosen so every row gets roughly the same
+         * wall time (about 7 s a row, 30 s for the sweep). */
         static const struct { const char *name; hashfn v5, v8; size_t pad; unsigned n; } sweep[NPADS] = {
             { "256KB", cn_slow_hash_v11_p025, cn_slow_hash_v14_p025, 256ull*1024, 16000 },
             { "512KB", cn_slow_hash_v11_p05,  cn_slow_hash_v14_p05,  512ull*1024,  8000 },
@@ -1020,11 +931,7 @@ int main(int argc, char **argv)
          * rather than a fixed sample count that is too small on a slow box and
          * wasteful on a fast one. */
         {
-            /* 12, not 6: both writers below are bounded at 12, and on a
-             * 32-thread machine the default ladder produces 8 entries
-             * (1,2,4,8,14,16,24,32), so a 6-element array was written two past
-             * its end. An explicit thread list of more than six counts did the
-             * same. Caught 2026-10-06 while sizing a run on the 7950X. */
+            /* both writers below are bounded at 12 */
             unsigned hw = 0, tcounts[12], ntc = 0, ti;
             long procs;
 
@@ -1161,30 +1068,10 @@ int main(int argc, char **argv)
     row("v5 4MB recomp",  &v5p4);
     row("v8 4MB recomp",  &v8p4);
 
-    /* The verdict below was wrong three separate ways and all three are fixed
-     * here, because each of them produced a confident and false statement.
-     *
-     * 1. It failed on improvements. The test was |delta| <= gate, so v8 being
-     *    24% CHEAPER at 4 MB reported "OVER GATE" exactly as a 24% regression
-     *    would. Phase 1 asks whether v8 costs more to verify, so only a
-     *    regression can fail.
-     *
-     * 2. It scaled the gate by the control. That made sense while ref and ctl
-     *    were measured in separate passes and their difference was drift. They
-     *    are interleaved now, so the control is no longer noise.
-     *
-     * 3. It called the control a noise floor and failed above 4%. Post
-     *    interleaving that number is a real, understood difference: ctl comes
-     *    from v5pad.inc, which wraps the salt index, and at 1 MB that wrap is a
-     *    logical no-op that still costs an AND in the innermost loop. Narrower
-     *    cores pay more for it. Failing on it condemned a machine whose actual
-     *    results were in line with every other box.
-     *
-     * What can still invalidate a conclusion is the two like-for-like
-     * comparisons disagreeing with each other, so that is what is checked. */
-    /* Each comparison is between two builds at the SAME pad, and each control
-     * asks whether the recompiled build matches the one that ships, at the size
-     * that build actually runs. */
+    /* Verdict: only a regression fails (v8 more than `gate` percent slower than
+     * v5 at the same pad). The controls are reported, not gated: the v5
+     * recompile wraps the salt index (v5pad.inc), a no-op at 1 MB that still
+     * costs an AND in the inner loop, so it differs slightly from shipped v5. */
     ctl_noise = fabs(v5ctl.mean_ms - v5ref.mean_ms) / v5ref.mean_ms * 100.0;
     d1 = (v8ctl.mean_ms - v5ctl.mean_ms) / v5ctl.mean_ms * 100.0;
     d4 = (v8p4.mean_ms  - v5p4.mean_ms)  / v5p4.mean_ms  * 100.0;
@@ -1214,12 +1101,10 @@ int main(int argc, char **argv)
                "\n");
 
 
-        /* The two builds are already proven identical by output at startup, so
-         * this figure is memory behaviour only. Some is expected: the shipped
-         * build reads v13's buffer while the recompiled one reads the
-         * benchmark's, so within the interleaved group the shipped build's pad
-         * is the one that has been sitting untouched while 4 MB of other pad
-         * streamed past it. Reported for information, never fatal. */
+        /* The two v8 builds are proven identical by output at startup and hash
+         * into the same buffer, so a large cost difference between them points
+         * at the build (flags, inlining). Reported for information, never
+         * fatal. */
         if (v8_ship_vs_recomp > 10.0)
             printf("\n  note: the two v8 builds differ by %.2f%% in cost while computing the\n"
                    "  same hashes. That is larger than buffer separation usually accounts\n"
