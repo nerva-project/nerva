@@ -579,13 +579,23 @@ static const unsigned char cn_v14_chain_kat[32] = {0x5d,0xb0,0xbf,0xe7,0xbf,0x88
  * both arms together. Returns 1 on pass, and on allocation failure. */
 int cn_slow_hash_known_answer_test(void)
 {
-    static const char live_in[] = "nerva live-algorithm known-answer vector";
-    static const char v8_in[] = "nerva cna v8 known-answer vector";
+    /* expand_key reads an 8-byte tweak at input offset 35, past the end of
+     * both strings, so they are hashed from zero-padded copies: the length
+     * passed is the string's and the bytes after it read as zero. */
+    static const char live_str[] = "nerva live-algorithm known-answer vector";
+    static const char v8_str[] = "nerva cna v8 known-answer vector";
+    const size_t live_len = sizeof(live_str) - 1, v8_len = sizeof(v8_str) - 1;
+    char live_in[64], v8_in[64];
     cn_hash_context_t *ctx = cn_hash_context_create();
     char h[HASH_SIZE];
     uint8_t seed[32];
     size_t k;
     int ok = 1, i;
+
+    memset(live_in, 0, sizeof(live_in));
+    memcpy(live_in, live_str, live_len);
+    memset(v8_in, 0, sizeof(v8_in));
+    memcpy(v8_in, v8_str, v8_len);
 
     if (ctx == NULL)
         return 1;
@@ -594,7 +604,7 @@ int cn_slow_hash_known_answer_test(void)
 
     /* the dispatchers allocate lazily, so run one hash before zeroing anything */
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
-    cn_slow_hash_v11(ctx, live_in, sizeof(live_in) - 1, h, 8, 8, 4, 4);
+    cn_slow_hash_v11(ctx, live_in, live_len, h, 8, 8, 4, 4);
     if (ctx->salt == NULL)
     {
         cn_hash_context_free(ctx);
@@ -605,7 +615,7 @@ int cn_slow_hash_known_answer_test(void)
     {
         memset(&ctx->random_values, 0, sizeof(ctx->random_values));
         memset(ctx->salt, 0, CN_SALT_MEMORY);
-        cn_slow_hash_v10(ctx, live_in, sizeof(live_in) - 1, h,
+        cn_slow_hash_v10(ctx, live_in, live_len, h,
                          cn_v10_kat[k].iters, cn_v10_kat[k].blk, cn_v10_kat[k].xx,
                          cn_v10_kat[k].yy, cn_v10_kat[k].zz, cn_v10_kat[k].ww);
         if (memcmp(h, cn_v10_kat[k].want, HASH_SIZE) != 0) ok = 0;
@@ -615,7 +625,7 @@ int cn_slow_hash_known_answer_test(void)
     {
         memset(&ctx->random_values, 0, sizeof(ctx->random_values));
         memset(ctx->salt, 0, CN_SALT_MEMORY);
-        cn_slow_hash_v11(ctx, live_in, sizeof(live_in) - 1, h,
+        cn_slow_hash_v11(ctx, live_in, live_len, h,
                          cn_v11_kat[k].iters, cn_v11_kat[k].blk,
                          cn_v11_kat[k].xx, cn_v11_kat[k].yy);
         if (memcmp(h, cn_v11_kat[k].want, HASH_SIZE) != 0) ok = 0;
@@ -623,14 +633,14 @@ int cn_slow_hash_known_answer_test(void)
 
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
     memset(ctx->salt, 0, CN_SALT_MEMORY);
-    cn_slow_hash_v13(ctx, live_in, sizeof(live_in) - 1, h, seed);
+    cn_slow_hash_v13(ctx, live_in, live_len, h, seed);
     if (memcmp(h, cn_v13_kat, HASH_SIZE) != 0) ok = 0;
 
     for (k = 0; k < sizeof(cn_v14_kat) / sizeof(cn_v14_kat[0]); k++)
     {
         memset(&ctx->random_values, 0, sizeof(ctx->random_values));
         memset(ctx->salt, 0, CN_SALT_MEMORY);
-        cn_slow_hash_v14(ctx, v8_in, sizeof(v8_in) - 1, h,
+        cn_slow_hash_v14(ctx, v8_in, v8_len, h,
                          cn_v14_kat[k].iters, CN_V8_INIT_SIZE_BLK,
                          cn_v14_kat[k].xx, cn_v14_kat[k].yy);
         if (memcmp(h, cn_v14_kat[k].want, HASH_SIZE) != 0) ok = 0;
@@ -643,7 +653,7 @@ int cn_slow_hash_known_answer_test(void)
         unsigned char got_seed[32];
         memset(got_seed, 0, sizeof(got_seed));
         memset(&ctx->random_values, 0, sizeof(ctx->random_values));
-        cn_slow_hash_v14_chain(ctx, v8_in, sizeof(v8_in) - 1, h,
+        cn_slow_hash_v14_chain(ctx, v8_in, v8_len, h,
                                CN_V8_INIT_SIZE_BLK, cn_selftest_salt, got_seed);
         if (memcmp(got_seed, cn_v14_chain_seed_kat, sizeof(got_seed)) != 0) ok = 0;
         if (memcmp(h, cn_v14_chain_kat, HASH_SIZE) != 0) ok = 0;

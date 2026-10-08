@@ -74,8 +74,9 @@ static void probe_fn(void *user, const unsigned char seed[32], char *salt_out, c
 
 int main(void)
 {
-    static const char blob_a[] = "nerva v8 chain-entry check, blob A";
-    static const char blob_b[] = "nerva v8 chain-entry check, blob B";
+    /* zero-padded: the hash reads an 8-byte tweak at offset 35, past the strings */
+    static const char blob_a[64] = "nerva v8 chain-entry check, blob A";
+    static const char blob_b[64] = "nerva v8 chain-entry check, blob B";
     cn_hash_context_t *ctx = cn_hash_context_create();
     char h1[32], h2[32];
     struct probe p1, p2;
@@ -89,8 +90,8 @@ int main(void)
     /* 1. deterministic: same blob, same callback, same hash */
     memset(&p1, 0, sizeof p1); p1.give.xx = 6; p1.give.yy = 5; p1.give.iters = 17;
     memset(&p2, 0, sizeof p2); p2.give = p1.give;
-    cn_slow_hash_v14_chain(ctx, blob_a, sizeof(blob_a) - 1, h1, CN_V8_INIT_SIZE_BLK, probe_fn, &p1);
-    cn_slow_hash_v14_chain(ctx, blob_a, sizeof(blob_a) - 1, h2, CN_V8_INIT_SIZE_BLK, probe_fn, &p2);
+    cn_slow_hash_v14_chain(ctx, blob_a, strlen(blob_a), h1, CN_V8_INIT_SIZE_BLK, probe_fn, &p1);
+    cn_slow_hash_v14_chain(ctx, blob_a, strlen(blob_a), h2, CN_V8_INIT_SIZE_BLK, probe_fn, &p2);
     CHECK(p1.calls == 1, "the callback runs exactly once per hash");
     CHECK(memcmp(h1, h2, 32) == 0, "same blob and same salt give the same hash");
     CHECK(memcmp(p1.seed, p2.seed, 32) == 0, "same blob gives the same seed");
@@ -99,31 +100,31 @@ int main(void)
      * blk changes how the fill chains, so it must move the seed. keccak(blob)
      * would not move, which is exactly the regression to catch. */
     memset(&p2, 0, sizeof p2); p2.give = p1.give;
-    cn_slow_hash_v14_chain(ctx, blob_a, sizeof(blob_a) - 1, h2, 2, probe_fn, &p2);
+    cn_slow_hash_v14_chain(ctx, blob_a, strlen(blob_a), h2, 2, probe_fn, &p2);
     CHECK(memcmp(p1.seed, p2.seed, 32) != 0,
           "the seed moves with init_size_blk, so it is the fill, not keccak(blob)");
 
     /* 3. the seed still depends on the blob */
     memset(&p2, 0, sizeof p2); p2.give = p1.give;
-    cn_slow_hash_v14_chain(ctx, blob_b, sizeof(blob_b) - 1, h2, CN_V8_INIT_SIZE_BLK, probe_fn, &p2);
+    cn_slow_hash_v14_chain(ctx, blob_b, strlen(blob_b), h2, CN_V8_INIT_SIZE_BLK, probe_fn, &p2);
     CHECK(memcmp(p1.seed, p2.seed, 32) != 0, "a different blob gives a different seed");
     CHECK(memcmp(h1, h2, 32) != 0, "a different blob gives a different hash");
 
     /* 4. the draws the callback returns are the ones the hash uses: changing
      * them must change the hash with everything else held fixed */
     memset(&p2, 0, sizeof p2); p2.give = p1.give; p2.give.xx = 7;
-    cn_slow_hash_v14_chain(ctx, blob_a, sizeof(blob_a) - 1, h2, CN_V8_INIT_SIZE_BLK, probe_fn, &p2);
+    cn_slow_hash_v14_chain(ctx, blob_a, strlen(blob_a), h2, CN_V8_INIT_SIZE_BLK, probe_fn, &p2);
     CHECK(memcmp(h1, h2, 32) != 0, "xx returned by the callback reaches the hash");
 
     memset(&p2, 0, sizeof p2); p2.give = p1.give; p2.give.iters = 18;
-    cn_slow_hash_v14_chain(ctx, blob_a, sizeof(blob_a) - 1, h2, CN_V8_INIT_SIZE_BLK, probe_fn, &p2);
+    cn_slow_hash_v14_chain(ctx, blob_a, strlen(blob_a), h2, CN_V8_INIT_SIZE_BLK, probe_fn, &p2);
     CHECK(memcmp(h1, h2, 32) != 0, "iters returned by the callback reaches the hash");
 
     /* 5. a NULL callback leaves the caller's salt and parameters alone, which
      * is what every benchmark and the self-test rely on */
     for (size_t i = 0; i < CN_SALT_MEMORY; i++)
         ctx->salt[i] = (char)(i * 31u + 7u);
-    cn_slow_hash_v14(ctx, blob_a, sizeof(blob_a) - 1, h2, 17, CN_V8_INIT_SIZE_BLK, 6, 5);
+    cn_slow_hash_v14(ctx, blob_a, strlen(blob_a), h2, 17, CN_V8_INIT_SIZE_BLK, 6, 5);
     CHECK(memcmp(h1, h2, 32) == 0,
           "NULL callback with the same salt and draws matches the chain entry");
 

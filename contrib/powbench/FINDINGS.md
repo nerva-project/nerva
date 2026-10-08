@@ -55,8 +55,9 @@ full load) suggests it would favour a card.
 
 **Validation:** known-answer vectors for v10, v11, v13 and v14 at every
 startup, a known-answer test for the chain fill at every database open,
-`t_v8_grid` over all 1,600 draws, and two local testnet rounds across the fork
-(F49, and F90 for v8 as it now stands). Alternative chains more than 256
+`t_v8_grid` over all 1,600 draws, two local testnet rounds across the fork
+(F49, and F90 for v8 as it now stands), and an independent review of the
+`src/` changes (F92). Alternative chains more than 256
 blocks past a split cannot be checked by this PoW (F90); that limit is now a
 deliberate rule, in a separate PR (F91).
 
@@ -6365,6 +6366,51 @@ main chain again, and the other is past the limit once more.
 Split at 1527, A 64 past and B 162 past. n1 logged `REORGANIZE on height: 1527`
 and `REORGANIZE SUCCESS`, n4 followed through n1, and all four nodes report 1688
 as `7c40da8b...`. The limit does not touch reorganisations within 256.
+
+### F92. An independent review of the `src/` changes found nothing that splits the chain, and three smaller issues, two fixed
+
+*2026-10-08. A separate session with none of this project's context reviewed
+`git diff master...pow/cna-v8 -- src` at `13f53b2`, told to trust no comment or
+document, and verified its own claims by running code.*
+
+**What it confirmed by running code:** the run-ahead chain fill equals master's
+loop on 9,840 random cases (all 256 KB of output plus the full HC-128 state,
+heights 1 to 1.5M); every pre-v14 hash is byte-identical to master's (562
+hashes over legacy, v7_8, v9, v10, v11 and v13, at -O0 to -Os, both AES arms);
+v14's AES arms agree on all 1,600 draws and on chain inputs, seeds compared
+directly; every pad, salt and index access stays in bounds; and no failure path
+can make an invalid block look valid.
+
+**Fixed:**
+
+- **The startup known-answer test read past its inputs.** `expand_key` reads an
+  8-byte tweak at input offset 35, and the test strings are 32 and 40 bytes, so
+  the vectors depended on whatever the compiler placed after them; on another
+  layout the daemon could refuse to start. The inputs are now zero-padded
+  64-byte copies hashed at the same lengths, in `slow-hash.c`, in the generator
+  `t_gen_kat.c` and in `t_v8_chain.c`. All 15 vectors regenerated from the
+  padded inputs are byte-identical to the shipped ones.
+- **A peer could reach the new "could not compute proof of work" branch.** An
+  alternative block whose chosen parent sits below the height its version can
+  be hashed at made `get_block_longhash` return false, which this branch treats
+  as a local fault and scores 1; master scored it as bad proof of work and
+  banned at once. `get_longhash_height_supported` now states each version's
+  lowest hashable height, mirroring the guards in the `get_block_longhash_v*`
+  functions, and `handle_alternative_block` refuses such a block as bad proof
+  of work before hashing. No consensus change: the block was rejected either
+  way.
+
+**Not fixed, a coverage gap:** nothing at startup pins `v14_fetch_salt`'s own
+logic (keying HC-128 from the seed, the three draws and their ranges, the
+`iters` formula, the 1 MB `random_values` bound). The hash vectors supply salt
+and draws through a test callback, and the chain-fill test stops at the fill.
+The code is correct today; a regression there would pass every startup check
+and be caught only by a testnet. Closing it needs a fake `BlockchainDB` for an
+end-to-end vector through `get_block_longhash_v14`.
+
+**Pre-existing, not this PR:** the `random_values` cache keyed on height alone,
+reachable on testnet and stagenet; handled by PR #163. The v14 path refetches on
+every call and is not affected.
 
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 

@@ -62,7 +62,9 @@ static void emit(const char *h)
     printf("}");
 }
 
-static const char in[] = "nerva live-algorithm known-answer vector";
+/* Zero-padded to 64 bytes: expand_key reads an 8-byte tweak at offset 35,
+ * past the end of the string. The length hashed is strlen. */
+static const char in[64] = "nerva live-algorithm known-answer vector";
 
 /* A copy of cn_selftest_salt in slow-hash.c, which is static there. The chain
  * vectors depend on it, so the two must not drift. */
@@ -93,7 +95,7 @@ int main(void)
 
     /* warm so the pads are allocated before anything is zeroed */
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
-    cn_slow_hash_v11(ctx, in, sizeof(in) - 1, h, 8, 8, 4, 4);
+    cn_slow_hash_v11(ctx, in, strlen(in), h, 8, 8, 4, 4);
     if (!ctx->salt) return 1;
 
     printf("/* Known-answer vectors for the algorithms that validate mainnet today,\n");
@@ -112,7 +114,7 @@ int main(void)
         for (i = 0; i < (int)(sizeof(cs) / sizeof(cs[0])); i++) {
             memset(&ctx->random_values, 0, sizeof(ctx->random_values));
             memset(ctx->salt, 0, CN_SALT_MEMORY);
-            cn_slow_hash_v10(ctx, in, sizeof(in) - 1, h, cs[i].it, cs[i].blk,
+            cn_slow_hash_v10(ctx, in, strlen(in), h, cs[i].it, cs[i].blk,
                              cs[i].xx, cs[i].yy, cs[i].zz, cs[i].ww);
             printf("    { %u, %u, %u, %u, %u, %u, ", cs[i].it, cs[i].blk,
                    cs[i].xx, cs[i].yy, cs[i].zz, cs[i].ww);
@@ -131,7 +133,7 @@ int main(void)
         for (i = 0; i < (int)(sizeof(cs) / sizeof(cs[0])); i++) {
             memset(&ctx->random_values, 0, sizeof(ctx->random_values));
             memset(ctx->salt, 0, CN_SALT_MEMORY);
-            cn_slow_hash_v11(ctx, in, sizeof(in) - 1, h, cs[i].it, cs[i].blk, cs[i].xx, cs[i].yy);
+            cn_slow_hash_v11(ctx, in, strlen(in), h, cs[i].it, cs[i].blk, cs[i].xx, cs[i].yy);
             printf("    { %u, %u, %u, %u, ", cs[i].it, cs[i].blk, cs[i].xx, cs[i].yy);
             emit(h);
             printf(" },\n");
@@ -142,7 +144,7 @@ int main(void)
     printf("static const unsigned char cn_v13_kat[32] = ");
     memset(&ctx->random_values, 0, sizeof(ctx->random_values));
     memset(ctx->salt, 0, CN_SALT_MEMORY);
-    cn_slow_hash_v13(ctx, in, sizeof(in) - 1, h, seed);
+    cn_slow_hash_v13(ctx, in, strlen(in), h, seed);
     emit(h);
     printf(";\n");
 
@@ -153,7 +155,7 @@ int main(void)
     printf(" * depends only on (input, iters, blk, xx, yy). */\n");
     printf("static const struct { uint16_t xx, yy; uint32_t iters; unsigned char want[32]; } cn_v14_kat[] = {\n");
     {
-        static const char v8_in[] = "nerva cna v8 known-answer vector";
+        static const char v8_in[64] = "nerva cna v8 known-answer vector";
         const struct { uint16_t xx, yy; uint32_t it; } cs[] = {
             { 4, 4, 0 }, { 4, 5, 1 }, { 5, 4, 17 },
             { 6, 6, 64 }, { 8, 8, 63 }, { 7, 5, 7 },
@@ -161,7 +163,7 @@ int main(void)
         for (i = 0; i < (int)(sizeof(cs) / sizeof(cs[0])); i++) {
             memset(&ctx->random_values, 0, sizeof(ctx->random_values));
             memset(ctx->salt, 0, CN_SALT_MEMORY);
-            cn_slow_hash_v14(ctx, v8_in, sizeof(v8_in) - 1, h,
+            cn_slow_hash_v14(ctx, v8_in, strlen(v8_in), h,
                              cs[i].it, CN_V8_INIT_SIZE_BLK, cs[i].xx, cs[i].yy);
             printf("    { %u, %u, %u, ", cs[i].xx, cs[i].yy, cs[i].it);
             emit(h);
@@ -175,11 +177,11 @@ int main(void)
      * pins that seed and the hash it leads to. gen_chain_salt must stay
      * byte-for-byte what cn_selftest_salt in slow-hash.c does. */
     {
-        static const char v8_in[] = "nerva cna v8 known-answer vector";
+        static const char v8_in[64] = "nerva cna v8 known-answer vector";
         unsigned char got_seed[32];
         memset(got_seed, 0, sizeof(got_seed));
         memset(&ctx->random_values, 0, sizeof(ctx->random_values));
-        cn_slow_hash_v14_chain(ctx, v8_in, sizeof(v8_in) - 1, h,
+        cn_slow_hash_v14_chain(ctx, v8_in, strlen(v8_in), h,
                                CN_V8_INIT_SIZE_BLK, gen_chain_salt, got_seed);
         printf("\n/* The chain entry with cn_selftest_salt's fixed salt and draws. */\n");
         printf("static const unsigned char cn_v14_chain_seed_kat[32] = ");

@@ -836,6 +836,20 @@ namespace cryptonote
     }
   }
   //---------------------------------------------------------------
+  // Whether a block of this version can be hashed at this height at all. The
+  // same guards as the get_block_longhash_v* functions: below these heights
+  // they return false, and no valid block of that version can sit there.
+  bool get_longhash_height_supported(const uint8_t major_version, const uint64_t height)
+  {
+    if (major_version < 7)
+      return true;
+    if (major_version == 7)
+      return height >= 1 + CN_SEED_BACKREACH;
+    if (major_version == 8)
+      return height >= 256 + CN_SEED_BACKREACH;
+    return height >= CN_SEED_MIN_HEIGHT;
+  }
+  //---------------------------------------------------------------
   crypto::hash get_block_longhash(crypto::cn_hash_context_t *context, Blockchain *bc, const block& b, const uint64_t height)
   {
     // 0xff rather than null: an all-zero hash passes check_hash at every

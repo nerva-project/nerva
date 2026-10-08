@@ -1744,6 +1744,17 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     // Check the block's hash against the difficulty target for its alt chain
     uint64_t current_diff = get_next_difficulty_for_alternative_chain(alt_chain, bei);
     CHECK_AND_ASSERT_MES(current_diff, false, "!!!!!!! DIFFICULTY OVERHEAD !!!!!!!");
+    // The height comes from the parent the sender chose. Below the lowest
+    // height this version can be hashed at, no valid block exists, so this is
+    // the sender's fault: refuse it as bad proof of work.
+    if (!get_longhash_height_supported(bei.bl.major_version, bei.height))
+    {
+      MERROR_VER("Block with id: " << id << std::endl << " for alternative chain, version " << (unsigned)bei.bl.major_version << " cannot be valid at height " << bei.height);
+      bvc.m_verifivation_failed = true;
+      bvc.m_bad_pow = true;
+      return false;
+    }
+
     crypto::hash proof_of_work;
     memset(proof_of_work.data, 0xff, sizeof(proof_of_work.data));
     if(!get_block_longhash(m_hash_context, this, bei.bl, proof_of_work, bei.height))
@@ -4511,9 +4522,9 @@ void Blockchain::ensure_batch_longhashes(uint64_t blockchain_height)
   // an lmdb cursor and the uncommitted batch never comes into it.
   m_db->warm_block_cache(blockchain_height);
 
-  // The contexts live for the batch, not the chunk. Each carries a 24 MB
-  // buffer, and cn_hash_context_create is not thread safe (oaes seeds itself
-  // through gmtime), so building them once per batch beats hundreds of times.
+  // The contexts live for the batch, not the chunk: each allocates its pads,
+  // and cn_hash_context_create is not thread safe (oaes seeds itself through
+  // gmtime), so building them once per batch beats hundreds of times.
   while (m_longhash_contexts.size() < todo.size())
   {
     crypto::cn_hash_context_t *c = crypto::cn_hash_context_create();
