@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 // 
 // All rights reserved.
@@ -61,5 +61,6 @@ namespace cryptonote
     bool m_already_exists;
     bool m_partial_block_reward;
     bool m_bad_pow; // if bad pow, bad peer outright for DoS protection
+    bool m_alt_chain_too_deep; // past the depth the pow can check; not the peer's fault
   };
 }

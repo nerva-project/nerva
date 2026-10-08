@@ -773,6 +773,20 @@ namespace cryptonote
     }
   }
   //---------------------------------------------------------------
+  // How many blocks past a chain split a block of this version can sit and
+  // still be hashed. From v7 on the proof of work reads chain data a fixed
+  // depth below the block, from the main chain's block cache, so a block that
+  // far past the split would be hashed against the other branch's history.
+  // 0 means the hash reads no chain data and there is no limit.
+  uint64_t get_longhash_alt_chain_depth_limit(const uint8_t major_version)
+  {
+    if (major_version < 7)
+      return 0;
+    if (major_version == 7)
+      return 1;
+    return CN_SEED_STABLE_DEPTH;
+  }
+  //---------------------------------------------------------------
   crypto::hash get_block_longhash(crypto::cn_hash_context_t *context, Blockchain *bc, const block& b, const uint64_t height)
   {
     // 0xff rather than null: an all-zero hash passes check_hash at every
