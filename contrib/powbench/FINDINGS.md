@@ -6142,6 +6142,29 @@ across a warp, falls entirely on the fill (the core, at about 10.7x, is already
 the larger gate), and needs a memoryless distribution or it reopens screening
 by abandoning expensive nonces. Not worth a pre-registration at present.
 
+### F89. The daemon's measurement switches are removed; they remain at commit 71d555b
+
+*2026-10-08. Pre-review cleanup, no behaviour change in a default daemon.*
+
+Removed from `db_lmdb.cpp`: `NERVA_SALT_AB` (alternating the fill's two loops,
+with per-arm cycle counters), `NERVA_SALT_NO_RUNAHEAD` (routing every call to
+the reference loop), `NERVA_SALT_ODDS_AB` and `cna_v6_data_shadow` (two
+shadow fills per call to price the window, F61), and the `__rdtsc` helper. Its
+`#include <x86intrin.h>` sat under an `_M_X64` guard as well as `__x86_64__`,
+and MSVC has no such header, which was the review's open nit. About 250 lines.
+
+**Kept:** `NERVA_SALT_SELFCHECK`, which runs the reference loop beside the
+run-ahead for the first 64 calls and refuses to continue on a mismatch. It is a
+correctness check against real chain data, the complement of the startup
+known-answer test's synthetic cache, and F85 and F87 both relied on it. The
+reference loop stays because both checks need it. Also kept, deliberately:
+`cn_nt_fill_enable` in `slow-hash.c`, off by default, which its own comment
+keeps as the tripwire for the pad size.
+
+Findings measured with them, F61 among them, name the switch they used. To
+reproduce one, build from 71d555b or earlier. Checked: the daemon builds with no new warnings, and the startup
+known-answer test passes.
+
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
 `contrib/hf14checks/CMakeLists.txt` names the resized translation units
