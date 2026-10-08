@@ -6165,6 +6165,88 @@ Findings measured with them, F61 among them, name the switch they used. To
 reproduce one, build from 71d555b or earlier. Checked: the daemon builds with no new warnings, and the startup
 known-answer test passes.
 
+### F90. The second testnet round: v14 as it now stands validates on two machines, survives a contested reorg across the fork, and binds; and chain-dependent PoW cannot reorganise past 256 blocks
+
+*2026-10-08, at `1370c8b`, the build reporting `v0.3.0.0-1370c8b47` on every
+node. Covers everything since F49 changed v14's hash: D1, D3, the eight-lane
+seed fold (F81), the reseed interval (F85) and the plain-loop fill (F87).*
+
+#### 1. Setup
+
+Fresh private testnet from genesis, testnet HF14 at height 1000, every node at
+`--fixed-difficulty 1000` so the proof of work is binding (F49 explains why not
+1). On the 7950X: n1, n2 and n3, isolated with `--add-exclusive-node`, run under
+the file name `nervad-tn.exe`. On the i7-7700HQ: one node connected only to n1
+over the LAN. Mining addresses from three distinct testnet wallets, so each
+block's origin is visible.
+
+#### 2. Results
+
+- **HF14 activated at exactly 1000** on every node: 999 is `major_version` 13,
+  1000 is 14.
+- **Blocks mined on the laptop were accepted by the 7950X**, in v13 and in v14.
+  F49 checked only the other direction, the laptop validating the 7950X's
+  blocks. The laptop mined at about 960 H/s on one thread.
+- **A contested reorg across the fork works, on both machines.** The chain was
+  rewound to a common 988 blocks, then split: n1 with the laptop mined to 1080,
+  n2 with n3 to 1120, so both branches cross 1000 with different v13 and v14
+  blocks (999: `d5fbc530...` against `6fc0d796...`; 1000: `abe36833...` against
+  `fb796835...`). On reconnecting, n1 logged `REORGANIZE on height: 988 of 1079`
+  and `REORGANIZE SUCCESS!`, dropping 92 of its own blocks including 80 at v14
+  and validating 132 of the other branch's. The laptop, connected only to n1,
+  followed. Every node then reported 1119 as
+  `445ce22a063ed9d368928b1c22a3dc63a03c1ba55a9a0634b06ba4173706388b`.
+- **A node with an empty database revalidated all 1,120 blocks** from genesis
+  in 6 seconds and matched every hash checked.
+- **The change binds.** The 2 October build, `bc42c85`, which predates D1, D3,
+  the seed fold and the reseed change, synced from genesis, accepted every
+  block through 999, rejected 1000 and banned its peer. Pre-fork consensus is
+  unchanged; v14's is not the same as on 2 October.
+
+#### 3. A finding about the design, not about v8: alternative chains deeper than 256 blocks cannot be validated
+
+The first attempt at the reorg split the nodes for more than 600 blocks. n1
+accepted the other branch as alternative blocks up to about 256 beyond the
+split, rejected the next one, and banned the sender. n2 did the same in
+reverse. The network stayed split.
+
+**Mechanism.** Every proof of work since v5 reads chain data at least
+`CN_SEED_STABLE_DEPTH` = 256 blocks below the block being checked
+(`stable_height = height - 256`), and `get_cna_v6_data` and `get_cna_v2_data`
+read it from the node's **main-chain** block cache. For an alternative block,
+that history is common to both branches only while the block is within 256 of
+the fork point. Past that the node hashes the block against its own branch's
+history, gets a different hash, and rejects a valid block.
+
+**Consequences, on mainnet today as well as at v14:**
+
+- A partition lasting more than 256 blocks, about 4.3 hours, never heals by
+  itself. Each side rejects the other's chain and bans its peers, and an
+  operator has to pop blocks or resync.
+- In the other direction it is a rolling checkpoint: an attacker cannot
+  reorganise honest nodes by more than 256 blocks, whatever its hashrate.
+
+Whether that is a bug or a property is a project decision. It is older than
+this branch, v8 does not change it, and no finding before this one records it.
+Recorded here so the decision is taken knowingly. A fix would have to build the
+fill from the alternative chain's own history, which is a consensus-adjacent
+change to `handle_alternative_block`, not to the hash.
+
+#### 4. Two traps worth knowing for the next round
+
+- **A banned 127.0.0.1 also closes that node's RPC.** The RPC server refuses
+  banned hosts, so on a loopback testnet a single ban leaves the daemon alive
+  but unreachable: every request fails with "connection closed". Restarting
+  clears it; the ban list is not persisted.
+- **An isolated node refuses `start_mining`** until it has a peer, so a
+  partition needs a partner node on each side (n3 here).
+
+#### 5. Not covered
+
+Transactions at v14 (CLSAG, Bulletproofs+, ring size 16) are master's HF14
+round, not this branch's, and were not exercised. Real difficulty retargeting
+across the fork is still suppressed by `--fixed-difficulty`.
+
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
 `contrib/hf14checks/CMakeLists.txt` names the resized translation units
