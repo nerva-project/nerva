@@ -578,6 +578,13 @@ void Blockchain::pop_blocks(uint64_t nblocks)
       pop_block_from_blockchain();
       ++i;
     }
+    // Stored alternative chains were checked against the chain just popped.
+    // One that split at or above the new top now looks like a chain that
+    // should have extended the main one, and build_alt_chain refuses every
+    // block built on it, so a node popped back to a split could never take
+    // the other branch until a restart dropped them. They are only a cache.
+    if (i > 0)
+      m_db->drop_alt_blocks();
   }
   catch (const std::exception& e)
   {
