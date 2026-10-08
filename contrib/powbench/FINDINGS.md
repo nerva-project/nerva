@@ -6407,17 +6407,28 @@ can make an invalid block look valid.
   regression there would have passed every check. `contrib/hf14checks/
   t_v14_longhash.cpp` now runs `get_block_longhash_v14` end to end over a fake
   database whose answers are derived from every argument it receives, checks
-  those arguments directly, and pins five hashes plus a digest over 64 more
-  cases. `src/blockchain_db/testdb.h`, the stub it builds on, had drifted from
-  the database interface and is brought up to date; nothing in the daemon
-  compiles it. **Checked by mutation:** nine deliberate breaks, one at a time,
-  each rebuilt into `cryptonote_core` (key and IV swapped, the xx range and the
-  yy range narrowed, `iters` off by one, the `random_values` bound set to v13's
-  8 MB, v13's odds and reseed interval passed, the keystream step before the
-  draws dropped, the stable height off by one). The test fails on all nine and
+  those arguments directly, checks that v14 leaves the shared `random_values`
+  cache invalidated, and pins five hashes plus a digest over 1,024 more cases.
+  `src/blockchain_db/testdb.h`, the stub it builds on, had drifted from the
+  database interface and is brought up to date; nothing in the daemon compiles
+  it. **Checked by mutation:** eleven deliberate breaks, one at a time, each
+  rebuilt into `cryptonote_core` (key and IV swapped, the xx range and the yy
+  range narrowed, `iters` off by one, the `iters` divisor range off by one, the
+  `random_values` bound set to v13's 8 MB, v13's odds and reseed interval
+  passed, the keystream step before the draws dropped, the stable height off
+  by one, the cache invalidation removed). The test fails on all eleven and
   passes on the original. The 8 MB bound at first crashed the test, writing
   past the pad exactly as it would in the daemon; the fake now keeps its
   indices in range so that case fails cleanly.
+
+  **The reviewer's second pass found the sampling too thin.** The divisor range
+  off by one moves only about 1.35% of hashes, so the first version's 69 cases
+  missed it about 39% of the time, and a node with that bug would reject about
+  one valid block in 74. The aggregate went from 64 cases to 1,024, where it
+  escapes about once in a million runs; it is now caught, by the aggregate
+  alone. The cache-invalidation check came from the same pass. The whole test
+  runs in under two seconds. It is not run by CI: hf14checks builds against a
+  finished daemon build and is run by hand.
 
 **Pre-existing, not this PR:** the `random_values` cache keyed on height alone,
 reachable on testnet and stagenet; handled by PR #163. The v14 path refetches on

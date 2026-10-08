@@ -36,7 +36,8 @@
 //
 // The database is a fake whose answers are derived from every argument it is
 // given, so a wrong height, bound, odds or reseed interval changes the hash.
-// The arguments are also checked directly. The real chain fill is pinned
+// The arguments are also checked directly, and so is the invalidation of the
+// random_values cache that v13 shares. The real chain fill is pinned
 // separately, at every database open.
 //
 //   t_v14_longhash           check against the pinned vectors
@@ -125,7 +126,7 @@ namespace
     { 4500123, 5, {0x6c,0x01,0xe7,0x10,0x37,0x31,0xd1,0xb9,0x86,0x6b,0x5c,0xd8,0x6b,0x52,0x37,0x02,0x88,0x2d,0xf9,0xbf,0xd2,0x2c,0x46,0x28,0x5d,0x96,0x28,0x4f,0x4b,0x5e,0xc0,0x39} },
   };
 
-  void make_blob(uint8_t seed, std::string &blob)
+  void make_blob(uint64_t seed, std::string &blob)
   {
     // the size of a real hashing blob, so the tweak at offset 35 is in bounds
     blob.resize(76);
@@ -147,8 +148,12 @@ namespace
       std::string blob;
       make_blob(c.blob_seed, blob);
       crypto::hash res;
+      // as if v13 had just cached random_values for this height: v14 must not
+      // reuse them (its bound differs) and must leave the cache invalidated
+      ctx->cached_height = c.height;
       const bool ok = cryptonote::get_block_longhash(ctx, db, 14, blob, res, c.height);
       CHECK_TRUE(ok);
+      CHECK_TRUE(ctx->cached_height == (uint64_t)-1);
 
       // the arguments themselves, so a failure says which one moved
       CHECK_TRUE(db.v2_calls == 1 && db.v6_calls == 1);
@@ -168,17 +173,19 @@ namespace
         CHECK_TRUE(std::memcmp(res.data, c.want, 32) == 0);
     }
 
-    // 64 more cases folded into one digest, so a change that moves only some
-    // draws (a narrowed range, say) cannot pass by landing on unaffected ones
+    // 1,024 more cases folded into one digest, so a change that moves only a
+    // few draws cannot pass by landing on unaffected ones. A divisor range off
+    // by one moves about 1.35% of hashes; at this count it escapes about once
+    // in a million runs.
     {
-      static const unsigned char want_all[32] = {0x46,0x6a,0x85,0x28,0xef,0x63,0x81,0x1a,0x00,0xa6,0xb3,0x42,0xae,0x0b,0x4b,0x76,0xdb,0xd0,0xa8,0x32,0x6e,0x79,0xca,0x9c,0x3e,0x1c,0x70,0xaa,0x6e,0xcc,0x3e,0xe7};
+      static const unsigned char want_all[32] = {0x2c,0x19,0x06,0xa3,0x52,0x35,0x38,0xc6,0x51,0x79,0x7f,0xb1,0x62,0xce,0x7d,0xfb,0xd8,0x2d,0x2d,0xe3,0x1e,0x88,0xca,0xf0,0xa0,0x11,0xb1,0xb3,0x13,0xaf,0x70,0xc7};
       std::string all;
       uint64_t s = 0x76313468ULL;
-      for (int i = 0; i < 64; i++)
+      for (int i = 0; i < 1024; i++)
       {
         FakeChainDB db;
         std::string blob;
-        make_blob((uint8_t)(100 + i), blob);
+        make_blob(100 + (uint64_t)i, blob);
         const uint64_t height = 511 + splitmix(s) % 5000000;
         crypto::hash res;
         CHECK_TRUE(cryptonote::get_block_longhash(ctx, db, 14, blob, res, height));
@@ -188,7 +195,7 @@ namespace
       crypto::cn_fast_hash(all.data(), all.size(), digest);
       if (g_print)
       {
-        std::printf("  aggregate over 64 cases: {");
+        std::printf("  aggregate over 1024 cases: {");
         for (int i = 0; i < 32; i++) std::printf("0x%02x%s", (unsigned char)digest.data[i], i < 31 ? "," : "");
         std::printf("}\n");
       }
