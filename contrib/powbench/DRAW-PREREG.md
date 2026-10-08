@@ -126,3 +126,8 @@ was not measured on the card; it uses B's index draw and removes the same loop.
 
 The finding that replaces the lever: the rejection loop is a GPU gate worth
 keeping, and possibly worth strengthening, under a separate pre-registration.
+
+*Later the same day, F88: with better kernels for S, the CPU's lead on the fill
+under S is bounded between about 1.7x and 2.6x rather than measured at 2.87x.
+B, at 1.28x, is below that whole range, so the rejection stands. Strengthening
+the divergence is not pursued.*

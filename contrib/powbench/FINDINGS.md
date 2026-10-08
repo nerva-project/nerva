@@ -5982,6 +5982,10 @@ problem.
 
 #### 3. What it says about the shipped design
 
+*Qualified by F88: against better kernels the gate's size is bounded, not
+known. The CPU's lead on the fill is between about 1.7x and 2.6x, and the lever
+proposed below is not pursued.*
+
 **`HC128_U32`'s rejection loop is one of v8's GPU gates.** It was written as a
 uniform-sampling detail and costs a CPU about 0.1 ms a fill; it costs a card
 more than half of its fill time. That is a lever in the other direction, worth
@@ -6085,7 +6089,60 @@ Every node's v14 verification and every stock-daemon miner's v14 fill, by about
 gain about 0.07 ms a nonce today. No hash changes, so no fork and no vectors
 move. It also narrows the gap between the daemon's own miner and an optimised
 one, which is a fairness gain for people mining with the stock software.
- `hf14checks` inverts its own results if a TU misses its flags
+
+### F88. How much of the rejection loop's GPU cost survives a better kernel is bounded, not known: the CPU's lead on the fill is between about 1.7x and 2.6x, not 2.9x; option 1 is not pursued
+
+*2026-10-08. `t_fill_gpu` with two more kernels for the shipped draw, both
+gated bit for bit against the CPU. 7950X and RTX 3050, quiet. Transcript
+`results/fillgpu-sbuf-7950X-3050-2026-10-08.txt`.*
+
+F86 read the gap between S and B as the rejection loop being a GPU gate. That
+reading rested on one kernel, and this project has been misled by its own GPU
+kernels four times (F63, F78, F79, F80). Before building a lever on it, two
+better S kernels:
+
+- **S-buf** generates keystream blocks in lockstep into a 16-block ring in
+  `__local`, so HC-128 never runs divergently; only reading words out of the
+  ring does. Between two Inits the block sequence is fixed whatever is
+  consumed, which is what makes this legal.
+- **S-buf2** adds a branch-free draw: test eight candidate words at once and
+  take the first accepted one.
+
+| fill only, k = 16 | GPU fills/s | CPU better by |
+|---|---|---|
+| S, F86's kernel | 12,894 | 2.88x |
+| **S-buf** | **14,218** | **2.55x** |
+| S-buf2 | 6,571 | 5.42x |
+| B | 30,335 | 1.28x |
+
+**Buffering recovers only 10% to 15%**, so the cost is not HC-128 running
+divergently. **S-buf2 is slower**: as written it reads eight words through the
+ring for every draw, the always-true selector included, and costs more than it
+saves. It is a failed attempt at the competent kernel, not evidence for or
+against one.
+
+**What can be said.** A competent kernel for S reaches at least 14,218 fills/s,
+measured, and at most about 22,000, which is B's rate divided by S's 1.36x
+larger keystream volume (1.78 against 1.31 blocks a message), the one part of
+the gap no kernel removes. So under the shipped draw the CPU's lead on the fill
+is **between about 1.7x and 2.6x**. F86's 2.87x is the top of that range, not a
+measurement of it.
+
+**What does not change.** B is still rejected: at 1.28x it is below the whole
+range. The reseed decision is unaffected; its C-1 and C-2 never used a card's
+fill, and its measured C-3 in F86 used the same kernel on both sides.
+
+**Option 1, strengthening the divergence, is not pursued.** Divergence in a
+pure keystream loop is the kind a kernel can restructure away, given more
+effort than S-buf2's: what survives is keystream volume, which is just more
+HC-128, the cost the reseed change was made to cut. Divergence that would
+survive is per-lane *work* that differs, such as a data-dependent number of key
+setups, where a warp pays its slowest lane. That is bounded by the variance
+across a warp, falls entirely on the fill (the core, at about 10.7x, is already
+the larger gate), and needs a memoryless distribution or it reopens screening
+by abandoning expensive nonces. Not worth a pre-registration at present.
+
+### F15. `hf14checks` inverts its own results if a TU misses its flags
 
 `contrib/hf14checks/CMakeLists.txt` names the resized translation units
 explicitly in `set_source_files_properties` with

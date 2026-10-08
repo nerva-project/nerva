@@ -408,7 +408,152 @@ static const char *K_SRC =
 "        for (i = 0; i < 16; i++) acc ^= ks[i];\n"
 "    }\n"
 "    out[gid] = acc;\n"
-"}\n";
+"}\n"
+"/* S-buf: the shipped S draw, computed the way a competent miner would.\n"
+" *\n"
+" * Under S each lane consumes keystream at its own rate, so in \"fill\" the lanes\n"
+" * of a warp reach \"need the next 16-word block\" at different moments and the\n"
+" * warp runs HC-128 sixteen steps for each of them in turn. But between two\n"
+" * Inits the block sequence is fixed whatever is consumed, so here every lane\n"
+" * generates blocks into a small ring at the same pace, in lockstep, and the\n"
+" * divergent part is only reading words out of it. A lane that runs dry fills\n"
+" * itself on demand, the only divergent generation left. The ring holds blocks\n"
+" * [nxt, prod); cur is the current block, kept apart because after an Init the\n"
+" * draws still read the old block until the next advance, as on the CPU. */\n"
+"#define RB 16\n"
+"static void sb_produce(__local uint *P, __local uint *Q, uint *counter, __local uint *ring, uint *prod)\n"
+"{\n"
+"    uint t[16];\n"
+"    hc_sixteen_l(P, Q, counter, t, 1);\n"
+"    __local uint *d = ring + ((*prod) % RB) * 16;\n"
+"    for (uint i = 0; i < 16; i++) d[i] = t[i];\n"
+"    (*prod)++;\n"
+"}\n"
+"static void sb_advance(__local uint *P, __local uint *Q, uint *counter, __local uint *ring,\n"
+"                       uint *prod, uint *nxt, uint *cur)\n"
+"{\n"
+"    while (*prod <= *nxt) sb_produce(P, Q, counter, ring, prod);\n"
+"    __local uint *s = ring + ((*nxt) % RB) * 16;\n"
+"    for (uint i = 0; i < 16; i++) cur[i] = s[i];\n"
+"    (*nxt)++;\n"
+"}\n"
+"static uint sb_u32(__local uint *P, __local uint *Q, uint *counter, __local uint *ring,\n"
+"                   uint *prod, uint *nxt, uint *cur, uint *ki, uint max)\n"
+"{\n"
+"    --max;\n"
+"    const uint mask = 0xFFFFFFFFu >> clz(max | 1u);\n"
+"    uint r;\n"
+"    do {\n"
+"        if (*ki > 15) { sb_advance(P, Q, counter, ring, prod, nxt, cur); *ki = 0; }\n"
+"        r = cur[(*ki)++] & mask;\n"
+"    } while (r > max);\n"
+"    return r;\n"
+"}\n"
+"/* S-buf2: sb_u32 without the divergent loop. Test the next eight words at\n"
+" * once and take the first accepted one, so every lane does the same work per\n"
+" * pick; only the number of words consumed differs. Advances stay lazy, exactly\n"
+" * as HC128_U32's \"if (*ki > 15)\" before each read: after consuming m words from\n"
+" * position ki, (ki + m - 1) / 16 blocks were entered. */\n"
+"static uint sb_peek(__local uint *P, __local uint *Q, uint *counter, __local uint *ring,\n"
+"                    uint *prod, uint nxt, const uint *cur, uint t)\n"
+"{\n"
+"    if (t < 16) return cur[t];\n"
+"    const uint b = nxt + ((t - 16) >> 4);\n"
+"    while (*prod <= b) sb_produce(P, Q, counter, ring, prod);\n"
+"    return ring[(b % RB) * 16 + ((t - 16) & 15)];\n"
+"}\n"
+"static uint sb_u32_bl(__local uint *P, __local uint *Q, uint *counter, __local uint *ring,\n"
+"                      uint *prod, uint *nxt, uint *cur, uint *ki, uint max)\n"
+"{\n"
+"    --max;\n"
+"    const uint mask = 0xFFFFFFFFu >> clz(max | 1u);\n"
+"    for (;;) {\n"
+"        uint w[8], bits = 0;\n"
+"        for (uint j = 0; j < 8; j++) {\n"
+"            w[j] = sb_peek(P, Q, counter, ring, prod, *nxt, cur, *ki + j) & mask;\n"
+"            bits |= (uint)(w[j] <= max) << j;\n"
+"        }\n"
+"        const uint m = bits ? (31u - clz(bits & (0u - bits))) + 1u : 8u;\n"
+"        const uint adv = (*ki + m - 1) >> 4;\n"
+"        for (uint a = 0; a < adv; a++) {\n"
+"            __local uint *s = ring + ((*nxt) % RB) * 16;\n"
+"            for (uint i = 0; i < 16; i++) cur[i] = s[i];\n"
+"            (*nxt)++;\n"
+"        }\n"
+"        *ki = *ki + m - 16 * adv;\n"
+"        if (bits) return w[m - 1];\n"
+"    }\n"
+"}\n"
+"#define SB_ADV() sb_advance(P, Q, &counter, ring, &prod, &nxt, cur)\n"
+"#define SB_U32(m) (draw == 4 ? sb_u32_bl(P, Q, &counter, ring, &prod, &nxt, cur, &ki, (m)) : sb_u32(P, Q, &counter, ring, &prod, &nxt, cur, &ki, (m)))\n"
+"#define SB_PICK() (SB_U32(256u), SB_U32(height))\n"
+"#define SB_PUMP() { if (prod < nxt + RB) sb_produce(P, Q, &counter, ring, &prod); }\n"
+"__kernel void fill_buf(__global const uint *cache, const uint height, __global uint *salt_all,\n"
+"                       __local uint *scratch, const uint draw, const uint rounds,\n"
+"                       __global const uint *seeds, __global uint *out)\n"
+"{\n"
+"    const uint gid = get_global_id(0);\n"
+"    __local uint *P = scratch + get_local_id(0) * (1024 + RB * 16);\n"
+"    __local uint *Q = P + 512;\n"
+"    __local uint *ring = P + 1024;\n"
+"    __global uint *salt = salt_all + (size_t)gid * 65536;\n"
+"    __global const uchar *sb = (__global const uchar *)salt;\n"
+"    uint cur[16], msg[16], kk[4], vv[4];\n"
+"    uint counter = 0, ki, acc = 0, r, i, prod, nxt;\n"
+"    for (i = 0; i < 16; i++) cur[i] = 0;\n"
+"    for (r = 0; r < rounds; r++) {\n"
+"        __global const uint *sd = seeds + ((size_t)gid * rounds + r) * 8;\n"
+"        for (i = 0; i < 4; i++) { kk[i] = sd[i]; vv[i] = sd[4 + i]; }\n"
+"        hc_init_l(P, Q, &counter, kk, vv); prod = 0; nxt = 0;\n"
+"        SB_ADV();\n"
+"        ki = 0;\n"
+"        uint count = 0, o = 0;\n"
+"        for (uint hf = 0; hf < 2; hf++) {\n"
+"            const uint stop = hf ? 4096u : 2048u;\n"
+"            while (count < stop) {\n"
+"                SB_ADV();\n"
+"                for (uint k = 0; k < 16; k++) {\n"
+"                    __global const uint *e0 = cache + (size_t)SB_PICK() * 14;\n"
+"                    for (i = 0; i < 8; i++) msg[i] = e0[i];\n"
+"                    __global const uint *e1 = cache + (size_t)SB_PICK() * 14;\n"
+"                    msg[8] = e1[8]; msg[9] = e1[9];\n"
+"                    __global const uint *e2 = cache + (size_t)SB_PICK() * 14;\n"
+"                    msg[10] = e2[10]; msg[11] = e2[11];\n"
+"                    __global const uint *e3 = cache + (size_t)SB_PICK() * 14;\n"
+"                    msg[12] = e3[12]; msg[13] = e3[13];\n"
+"                    msg[14] = count; msg[15] = 0;\n"
+"                    SB_ADV();\n"
+"                    for (i = 0; i < 16; i++) salt[o / 4 + i] = msg[i] ^ cur[i];\n"
+"                    o += 64; count++;\n"
+"                    /* 1.75 blocks a message in lockstep, just under the mean\n"
+"                     * of about 1.78, so lanes rarely fill the ring */\n"
+"                    SB_PUMP();\n"
+"                    if ((count & 3u) != 3u) SB_PUMP();\n"
+"                }\n"
+"                if (((count / 16) % RESEED_K) == 0) {\n"
+"                    const uint iv_off  = o - 512  + SB_U32(496u);\n"
+"                    const uint key_off = o - 1024 + SB_U32(496u);\n"
+"                    for (i = 0; i < 4; i++) { kk[i] = ld_le(sb, key_off + 4 * i); vv[i] = ld_le(sb, iv_off + 4 * i); }\n"
+"                    hc_init_l(P, Q, &counter, kk, vv); prod = 0; nxt = 0;\n"
+"                }\n"
+"            }\n"
+"            if (hf == 0) {\n"
+"                for (uint q = 0; q < 4; q++) {\n"
+"                    const uint off = o - 131072u + SB_U32(131072u - 16u);\n"
+"                    for (i = 0; i < 4; i++) msg[i] = ld_le(sb, off + 4 * i);\n"
+"                }\n"
+"                SB_ADV();\n"
+"                for (i = 0; i < 16; i++) salt[o / 4 + i] = msg[i] ^ cur[i];\n"
+"                for (i = 0; i < 4; i++) { kk[i] = salt[o / 4 + i]; vv[i] = salt[o / 4 + 4 + i]; }\n"
+"                hc_init_l(P, Q, &counter, kk, vv); prod = 0; nxt = 0;\n"
+"            }\n"
+"        }\n"
+"        SB_ADV();\n"
+"        for (i = 0; i < 16; i++) acc ^= cur[i];\n"
+"    }\n"
+"    out[gid] = acc;\n"
+"}\n"
+;
 
 int main(int argc, char **argv)
 {
@@ -420,8 +565,10 @@ int main(int argc, char **argv)
         }
     uint32_t sink = 0;
     const int hw = 32;
-    static const int draws[2] = { DRAW_S, DRAW_B };
-    static const char *const dn[2] = { "S, shipped", "B, mulhi no selector" };
+    /* draw 3 is S computed by fill_buf: the CPU side treats it as S */
+    static const int draws[4] = { DRAW_S, DRAW_B, 3, 4 };
+    static const char *const dn[4] = { "S, shipped", "B, mulhi no selector", "S-buf, S kernel buffered",
+                                       "S-buf2, buffered branch-free" };
 
     printf("v14 chain fill, whole, CPU against GPU. k = %u, odds 256, height %u\n",
            RESEED_K, HEIGHT);
@@ -509,6 +656,8 @@ int main(int argc, char **argv)
         return 1;
     }
     cl_kernel k = cl.CreateKernel(prog, "fill", &err);
+    cl_kernel kb = cl.CreateKernel(prog, "fill_buf", &err);
+    if (!kb || err != CL_SUCCESS) { printf("  fill_buf missing\n"); return 1; }
     cl_mem dcache = cl.CreateBuffer(ctx, CL_MEM_READ_ONLY, (size_t)HEIGHT * 56, NULL, &err);
     if (err != CL_SUCCESS) { printf("  cache alloc failed\n"); return 1; }
     cl.EnqueueWriteBuffer(q, dcache, 1, 0, (size_t)HEIGHT * 56, g_cache.data(), 0, NULL, NULL);
@@ -517,17 +666,19 @@ int main(int argc, char **argv)
     auto run = [&](size_t gsz, size_t wg, int draw, cl_uint rounds, cl_mem dsalt, cl_mem dseeds,
                    cl_mem dout) -> double {
         cl_uint dr = (cl_uint)draw;
-        cl.SetKernelArg(k, 0, sizeof(dcache), &dcache);
-        cl.SetKernelArg(k, 1, sizeof(height), &height);
-        cl.SetKernelArg(k, 2, sizeof(dsalt), &dsalt);
-        cl.SetKernelArg(k, 3, wg * 4096, NULL);
-        cl.SetKernelArg(k, 4, sizeof(dr), &dr);
-        cl.SetKernelArg(k, 5, sizeof(rounds), &rounds);
-        cl.SetKernelArg(k, 6, sizeof(dseeds), &dseeds);
-        cl.SetKernelArg(k, 7, sizeof(dout), &dout);
+        cl_kernel kk_ = (draw >= 3) ? kb : k;
+        const size_t per = (draw >= 3) ? (1024 + 16 * 16) * 4 : 4096;
+        cl.SetKernelArg(kk_, 0, sizeof(dcache), &dcache);
+        cl.SetKernelArg(kk_, 1, sizeof(height), &height);
+        cl.SetKernelArg(kk_, 2, sizeof(dsalt), &dsalt);
+        cl.SetKernelArg(kk_, 3, wg * per, NULL);
+        cl.SetKernelArg(kk_, 4, sizeof(dr), &dr);
+        cl.SetKernelArg(kk_, 5, sizeof(rounds), &rounds);
+        cl.SetKernelArg(kk_, 6, sizeof(dseeds), &dseeds);
+        cl.SetKernelArg(kk_, 7, sizeof(dout), &dout);
         cl.Finish(q);
         const double t0 = now_s();
-        cl_int e = cl.EnqueueNDRangeKernel(q, k, 1, NULL, &gsz, &wg, 0, NULL, NULL);
+        cl_int e = cl.EnqueueNDRangeKernel(q, kk_, 1, NULL, &gsz, &wg, 0, NULL, NULL);
         cl.Finish(q);
         return (e == CL_SUCCESS) ? now_s() - t0 : -1.0;
     };
@@ -549,7 +700,7 @@ int main(int argc, char **argv)
         cl_mem dseeds = make_seeds(gsz, 1);
         std::vector<unsigned char> g(gsz * SALT_BYTES), c(SALT_BYTES);
         std::vector<uint32_t> gf(gsz);
-        for (int d = 0; d < 2; d++) {
+        for (int d = 0; d < 4; d++) {
             if (run(gsz, wg, draws[d], 1, dsalt, dseeds, dout) < 0) { printf("  gate launch failed\n"); return 1; }
             cl.EnqueueReadBuffer(q, dsalt, 1, 0, g.size(), g.data(), 0, NULL, NULL);
             cl.EnqueueReadBuffer(q, dout, 1, 0, gsz * 4, gf.data(), 0, NULL, NULL);
@@ -574,10 +725,10 @@ int main(int argc, char **argv)
 
     /* ---- timing: S B B S on both sides ---- */
     const size_t wg_cap = (size_t)(lmem / 4096);
-    double gpu_best[2] = {0, 0}, cpu_best[2] = {0, 0}, cpu1[2] = {0, 0};
-    size_t at_items[2] = {0, 0}, at_wg[2] = {0, 0};
-    const int order[4] = {0, 1, 1, 0};
-    for (int oi = 0; oi < 4; oi++) {
+    double gpu_best[4] = {0, 0, 0, 0}, cpu_best[4] = {0, 0, 0, 0}, cpu1[4] = {0, 0, 0, 0};
+    size_t at_items[4] = {0, 0, 0, 0}, at_wg[4] = {0, 0, 0, 0};
+    const int order[8] = {0, 1, 2, 3, 3, 2, 1, 0};
+    for (int oi = 0; oi < 8; oi++) {
         const int d = order[oi];
         printf("\n  %s\n", dn[d]);
         const double c32 = cpu_fills_per_s(hw, draws[d], seconds, &sink);
@@ -617,12 +768,12 @@ int main(int argc, char **argv)
     }
 
     printf("\n  %-22s %12s %12s %12s %10s\n", "", "CPU fills/s", "GPU fills/s", "CPU better", "1T ms");
-    for (int d = 0; d < 2; d++)
-        printf("  %-22s %12.1f %12.1f %11.3fx %10.4f   (GPU peak wg %zu, %zu items)\n", dn[d],
+    for (int d = 0; d < 4; d++)
+        printf("  %-30s %12.1f %12.1f %11.3fx %10.4f   (GPU peak wg %zu, %zu items)\n", dn[d],
                cpu_best[d], gpu_best[d], cpu_best[d] / gpu_best[d], 1000.0 / cpu1[d], at_wg[d], at_items[d]);
-    printf("\n  FILLGPU S=%.3fx B=%.3fx  CPU B/S %.3fx  GPU B/S %.3fx\n",
-           cpu_best[0] / gpu_best[0], cpu_best[1] / gpu_best[1],
-           cpu_best[1] / cpu_best[0], gpu_best[1] / gpu_best[0]);
+    printf("\n  FILLGPU S=%.3fx B=%.3fx Sbuf=%.3fx Sbuf2=%.3fx  (CPU column S's)  GPU B/S %.3fx  Sbuf/S %.3fx  Sbuf2/S %.3fx\n",
+           cpu_best[0] / gpu_best[0], cpu_best[1] / gpu_best[1], cpu_best[0] / gpu_best[2], cpu_best[0] / gpu_best[3],
+           gpu_best[1] / gpu_best[0], gpu_best[2] / gpu_best[0], gpu_best[3] / gpu_best[0]);
     printf("  sink %08x\n", sink);
     return 0;
 }
