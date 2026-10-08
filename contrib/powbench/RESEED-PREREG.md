@@ -126,4 +126,35 @@ predicted gain has a model too wrong to ship on.
 
 ## Decision record
 
-*Empty until the measurement runs.*
+**2026-10-08: k = 16 ACCEPTED by the user, under the latitude stated at the
+top.** Results are FINDINGS F84.
+
+| | 7950X | 5600X | |
+|---|---|---|---|
+| C-1 host-fed, CPU better by | 3.18x to 4.91x | 1.42x to 2.27x (Vega FE) | pass |
+| C-2 all threads | 1.553x | 1.607x | pass |
+| C-3 card does everything, composed | 4.63x to 5.80x | not composed | pass |
+| C-5 one thread | 1.62x | 1.62x | pass |
+
+**The miss, named.** C-4's one-thread half passes, 2.42x against 2.50x on F70's
+basis. Its all-thread half was mis-specified: it compares a 16-core machine
+with a 4-core one, so the threshold failed at baseline (10.26x) and cannot be
+scored as written. Read as a change, the all-thread spread **widens 23%
+against the i7-7700HQ** (10.26x to 12.60x) and **narrows 3.4% against the
+5600X**. The laptop gains 1.26x where the desktops gain 1.55x and 1.61x, and its
+best thread count falls from 6 to 8 to 4, consistent with a 6 MB L3 that cannot
+hold its threads' 1 MB pads once the core dominates.
+
+**What offsets it.** Every machine measured mines faster. The GPU gap widens on
+two vendors, +54% and +60% host-fed. The ASIC advantage falls about 1.7x, since
+an ASIC pays only for the reads. Verification is about 1.6x faster. And the
+widening is confined to one machine class: the user's ruling is that laptops
+and phones are not realistic mining targets because they lack the cooling for
+sustained load, which F35 already applied to phones.
+
+**Not settled by any measurement:** the batch-sort risk, a model only. The
+interval stops at 16 rather than 256 to keep an attacker's required batch at
+about 4,300 nonces per barrier rather than 540.
+
+**Next:** the v14-only daemon change, a known-answer vector, the
+`NERVA_SALT_SELFCHECK` reference, and the testnet round already owed.

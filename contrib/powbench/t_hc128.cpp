@@ -337,9 +337,10 @@ int main(int argc, char **argv)
     /* The shipped mix runs first AND last. F63 section 4 found this harness
      * family loses 3.8% to heat over a long run, so a sweep that is not
      * bracketed by a repeat of one arm cannot tell a trend from drift. */
-    const uint32_t sweep[] = { NEXT_PER_SHIPPED, 0, 10, 160, 640, NEXT_PER_SHIPPED };
+    /* 620 is RESEED-PREREG's k = 16: ~10,500 NextKeys over 17 key setups */
+    const uint32_t sweep[] = { NEXT_PER_SHIPPED, 0, 10, 160, 620, 640, NEXT_PER_SHIPPED };
     const int NS = (int)(sizeof(sweep)/sizeof(sweep[0]));
-    double gpu_lds_shipped = 0.0;
+    double gpu_lds_shipped = 0.0, gpu_lds_k16 = 0.0;
     double cpu_r[NS], gpu_r[NS];
     size_t gpu_peak_at[NS];
     for (int s = 0; s < NS; s++) { cpu_r[s] = 0.0; gpu_r[s] = 0.0; gpu_peak_at[s] = 0; }
@@ -542,8 +543,8 @@ int main(int argc, char **argv)
                 cl.ReleaseMemObject(vo);
             }
             if (lok) {
-                const uint32_t mixes[] = { NEXT_PER_SHIPPED, 0 };
-                for (int m = 0; m < 2; m++) {
+                const uint32_t mixes[] = { NEXT_PER_SHIPPED, 0, 620 };
+                for (int m = 0; m < (int)(sizeof(mixes) / sizeof(mixes[0])); m++) {
                     double best = 0.0; size_t best_wg = 0, best_items = 0;
                     for (size_t wg = 1; wg <= wg_cap && wg <= maxwg; wg *= 2) {
                         const size_t groups[] = { 64, 256, 1024, 4096, 16384, 65536, 262144 };
@@ -584,11 +585,12 @@ int main(int argc, char **argv)
                         }
                     }
                     /* gpu_r[0] is the shipped mix on the __global kernel, gpu_r[1] is
-                     * nextper 0, matching sweep[] above. */
-                    const double ref = (m == 0) ? gpu_r[0] : gpu_r[1];
+                     * nextper 0 and gpu_r[4] is 620, matching sweep[] above. */
+                    const double ref = (m == 0) ? gpu_r[0] : (m == 1) ? gpu_r[1] : gpu_r[4];
                     printf("    lds  nextper %-4u peak %14.3e  wg %zu, %zu items   vs __global %.2fx\n",
                            mixes[m], best, best_wg, best_items, ref > 0.0 ? best / ref : 0.0);
                     if (m == 0) gpu_lds_shipped = best;
+                    if (m == 2) gpu_lds_k16 = best;
                 }
             }
             cl.ReleaseKernel(kl);
@@ -619,6 +621,9 @@ int main(int argc, char **argv)
     if (gpu_lds_shipped > 0.0 && cpu_r[0] > 0.0)
         printf("\n  shipped mix, state in __local: GPU is %.2fx worse (against %.2fx in __global)\n",
                cpu_r[0] / gpu_lds_shipped, cpu_r[0] / gpu_r[0]);
+    if (gpu_lds_k16 > 0.0 && cpu_r[4] > 0.0 && gpu_lds_shipped > 0.0)
+        printf("  RESEED k=16 mix (620), state in __local: GPU is %.2fx worse, shipped %.2fx\n",
+               cpu_r[4] / gpu_lds_k16, cpu_r[0] / gpu_lds_shipped);
     printf("\n  sink %x\n", sink);
     return 0;
 }

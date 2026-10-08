@@ -5699,6 +5699,183 @@ cannot be identified by the pool.
 solo-mine. The write-up ends with three kill criteria (proof latency, the
 scratch loop's GPU ratio, statistical detection) for a spike if it is revisited.
 
+### F84. Reseeding every 16th block instead of every block makes a nonce 1.55x cheaper to mine and widens the GPU gap; four of five pre-registered criteria pass on the 7950X
+
+*2026-10-07, against [RESEED-PREREG.md](RESEED-PREREG.md), which was committed
+before any of this ran. 7950X and RTX 3050, the user's miner stopped, load 2 to
+8%. Transcripts: `results/reseed-fill-7950X-2026-10-07.txt`,
+`results/reseed-gpubench-run1-2026-10-07.txt` and `-run2-`,
+`results/reseed-hc128-2026-10-07.txt`. C-4 needs the i7-7700HQ and is not yet
+run.*
+
+#### 1. The fill, single thread, odds 256
+
+Two 30 s runs, arms interleaved, agreeing to 0.4%:
+
+| k | key setups | ms/fill | vs k = 1 | model |
+|---|---|---|---|---|
+| 1, shipped | 257 | 0.891 | 1.000x | 0.851 |
+| 4 | 65 | 0.484 | 0.544x | 0.477 |
+| 8 | 33 | 0.409 | 0.460x | |
+| **16** | **17** | **0.369** | **0.414x** | **0.383** |
+| 256 | 2 | 0.328 | 0.368x | 0.354 |
+
+The model was built entirely from earlier findings and lands within 5% at every
+point it predicted.
+
+#### 2. The criteria
+
+| | measured | threshold | |
+|---|---|---|---|
+| **C-1** host-fed, CPU better by | **3.18x to 4.91x**, repeat 3.10x to 4.79x | must not fall | **pass** |
+| **C-2** all-thread CPU, whole nonce | **1.558x**, repeat 1.547x | 1.30x | **pass** |
+| C-3 card does everything, composed | **4.63x to 5.80x** | must not fall | **pass** |
+| C-4 fairness, 7950X against i7-7700HQ | 1 thread **1.83x to 1.90x**; all threads **10.3x to 12.6x** | 2.50x | see section 5 |
+| C-5 single-thread verify, whole nonce | **1.617x**, repeat 1.625x | 1.30x | **pass** |
+
+C-1 and C-2 are from `nerva-gpubench`, where the k = 16 row runs the identical
+GPU kernel as the shipped `v8 LDS-AES` row and only the host's fill changes. The
+two GPU columns agree to 0.7% and 0.2%, which is the check that the CPU column
+is the only thing that moved. Control drift 0.69% and 1.02%.
+
+**C-2 came in under the model's 1.72x, as section "What could make the model
+wrong" item 1 predicted:** at 32 threads the faster nonce asks for more random
+reads and the memory system takes back about a quarter of the gain. It is a
+quarter, not most of it.
+
+#### 3. HC-128 is not quite flat, and the model's one wrong input
+
+F80 found HC-128's GPU disadvantage flat across the reseed mix. In `__global`
+that still holds and even rises (7.68x shipped, 8.22x at the k = 16 mix). In
+`__local`, the placement that matters, it falls: **3.07x shipped, 2.80x at the
+k = 16 mix.** Key setup and keystream are not equally GPU-hostile once the state
+is in shared memory. The grid is flat at the top (work-group 4 holds from 65,536
+to 1,048,576 items), so the peak is real.
+
+C-3 uses the measured 2.80x, not the model's 3.11x: core 0.266 ms at 10.7x
+(F72, F78), fill cipher at the measured ratio per mix, memory 0.09 ms at the
+card's 1.64x advantage (F62, F82). That gives 4.63x shipped and 5.80x at
+k = 16. With the flat 3.11x the model assumed it would have been 5.9x; the
+correction costs it little because the cipher is a much smaller share of a
+k = 16 nonce.
+
+`t_hc128` itself had a defect, fixed before this run counted: its `__local`
+loop was hard-coded to two mixes and silently skipped the third.
+
+#### 4. What it means so far
+
+**On the 7950X the lever does what the pre-registration predicted, in
+direction and roughly in size.** A miner's nonce is 1.55x cheaper, a verifier's
+1.62x, and a card's position worsens whether the host feeds it (+54%) or it
+does everything (+25%). That is goals 1 and 4 improving together, which F60
+section 7 named as the shape worth looking for, and it does it by removing work.
+
+Still owed before a decision: C-4 on the i7-7700HQ, then the daemon change with
+a known-answer vector. The batch-sort risk in the pre-registration is a model
+and is not addressed by any of these numbers; k = 16 was chosen with it in mind.
+
+#### 5. C-4 on the i7-7700HQ, and a criterion that was written badly
+
+*2026-10-08. `nerva-gpubench 90 15 25` twice on the laptop, load 0%.
+Transcripts `results/reseed-gpubench-laptop-run1-2026-10-08.txt` and `-run2-`.
+The GPU rows failed with CL -4 on the 4 GB GTX 1050 Ti at 90% VRAM, which does not touch the CPU columns C-4 uses. The laptop's
+fill sweep is `results/reseed-fill-laptop-2026-10-08.txt`, two runs agreeing to
+0.3%.*
+
+| | 7950X | i7-7700HQ | spread |
+|---|---|---|---|
+| 1 thread, shipped | 1.270 ms | 2.325 ms | 1.831x |
+| 1 thread, k = 16 | 0.784 ms | 1.488 ms | **1.899x, +3.7%** |
+| all threads, shipped | 15,467 H/s | 1,508 H/s | 10.26x |
+| all threads, k = 16 | 24,013 H/s | 1,905 H/s | **12.60x, +22.8%** |
+
+Each figure is the mean of the two runs. The 7950X gains 1.553x at all
+threads, **the laptop 1.264x**.
+
+**Single thread passes.** This harness reads the shipped spread as 1.83x where
+F70's method reads 2.338x; carrying the +3.7% over to F70's basis gives
+**2.42x against 2.50x**.
+
+**The all-thread half of C-4 cannot be applied as written.** It compares a
+16-core machine with a 4-core one, so the spread was already 10.26x before
+anything changed and the 2.50x threshold fails at baseline. That is a defect
+in the pre-registration, not a result. What the measurement does say is plain:
+**the lever widens all-thread fairness by 23%**, because the laptop gains much
+less than the desktop.
+
+**The likely mechanism is L3 capacity, not chain memory.** The harness picks
+each row's best thread count from 8, 6, 4 and 2: the laptop's shipped rows run
+best at 6 to 8 threads, its k = 16 row at **4**. With the fill cheaper, a larger
+share of each nonce is the core, whose 1 MB pad has to stay in cache, and the
+laptop's 6 MB L3 holds about four. The 7950X's 64 MB holds all 32. This is the
+small-L3 case the V6-MINER-LOG lessons left untested, and it is an inference
+from the thread choice, not yet measured directly.
+
+**The single-thread widening has a second cause: the key setups were an
+equaliser.** The fill alone, one thread, mean of two runs on each machine:
+
+| k | 7950X | i7-7700HQ | spread |
+|---|---|---|---|
+| 1, shipped | 0.891 ms | 1.718 ms | 1.93x |
+| 4 | 0.485 | 1.023 | 2.11x |
+| 8 | 0.409 | 0.904 | 2.21x |
+| 16 | 0.369 | 0.833 | 2.26x |
+| 256 | 0.328 | 0.762 | 2.32x |
+
+The work k = 16 removes costs the laptop only **1.70x** what it costs the
+desktop (0.885 against 0.522 ms), while what it keeps, keystream and memory,
+costs **2.26x**. `HC128_Init` is a 4 KB table expansion that runs about as well
+on a 2017 core as on a 2022 one, so cutting it removes the most uniform part of
+the fill. The trade is smooth across `k`: every step that saves time also
+widens the fill's spread, and there is no interval that buys one without the
+other. In a whole nonce the core dilutes this to the +3.7% above.
+
+#### 6. The 5600X: the widening is the laptop's, not the lever's
+
+*2026-10-08. Ryzen 5 5600X (6 cores, 32 MB L3) with a Vega FE, the same
+package run twice, each pass being two fill sweeps and two `nerva-gpubench`
+runs. Pass a at 90% VRAM (the v5 and FP rows were starved, the rows used here
+were not), pass b at 50%. One run (b2) read 8% load and is flagged in its
+header; it agrees with the other three. Transcripts
+`results/reseed-*-5600X-*-2026-10-08.txt`.*
+
+| 5600X | shipped | k = 16 | |
+|---|---|---|---|
+| all threads, mean of 4 | 4,579 H/s | 7,358 H/s | **1.607x**, runs 1.593x to 1.614x |
+| threads chosen | 12 | **12** | no drop |
+| 1 thread, whole nonce | 1.441 ms | 0.887 ms | 1.624x |
+| 1 thread, fill | 0.999 ms | 0.412 ms | 0.412x, as the 7950X's 0.414x |
+
+Against the 7950X:
+
+| spread | shipped | k = 16 | |
+|---|---|---|---|
+| all threads | 3.378x | 3.263x | **narrows 3.4%** |
+| 1 thread, whole nonce | 1.135x | 1.132x | flat |
+| 1 thread, fill | 1.122x | 1.116x | flat |
+
+**The 5600X gains more than the 7950X, 1.61x against 1.55x, and keeps all 12
+threads.** So the all-thread widening in section 5 is not a property of the
+lever on CPUs below the top. It is a property of a machine whose L3 cannot hold
+its own threads' pads once the core dominates: 6 MB against 32 MB, and the
+5600X never had to drop a thread. The key-setup equaliser of section 5 does not
+appear here either; Zen 3 and Zen 4 run `HC128_Init` and keystream in the same
+proportion, so it is a Skylake-against-Zen effect.
+
+**C-1 reproduces on a second vendor.** Host-fed, the Vega FE pairing goes from
+the CPU being 1.42x better to **2.27x, +60%**, mean of four runs, against the
+RTX 3050's +54%. GPU columns of the two identical-kernel rows agree within each
+run.
+
+#### 7. Where the criteria stand
+
+C-1, C-2, C-3 and C-5 pass on the 7950X, and C-1, C-2 and C-5 pass again on the
+5600X. C-4 passes at one thread (2.42x on F70's basis). Its all-thread half was
+mis-specified and cannot be scored as written; read as a change, it widens 23%
+against the i7-7700HQ and narrows 3.4% against the 5600X. The decision is the
+user's, under the pre-registration's stated latitude, and goes in its decision
+record.
+
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
 `contrib/hf14checks/CMakeLists.txt` names the resized translation units

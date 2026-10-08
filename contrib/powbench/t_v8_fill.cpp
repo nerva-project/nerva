@@ -54,6 +54,7 @@
  * and the real reads go to exactly this kind of resident array.
  *
  *   t_v8_fill [height] [seconds]
+ *   t_v8_fill [height] [seconds] reseed    RESEED-PREREG.md step 1 only
  *
  * Build: sh contrib/powbench/build-v8-fill.sh
  */
@@ -298,6 +299,60 @@ int main(int argc, char **argv)
 
     cache_init(height);
     hz = tsc_hz();
+
+    /* ---- RESEED-PREREG.md step 1 ----
+     *
+     * The reseed interval at the shipped odds, 256 of 256, which the sweep
+     * further down predates (it runs at 13). Arms are interleaved the same way
+     * as the main loop, k = 1 first and last, one seed per group, so drift
+     * lands on every arm alike. The run-ahead stays at one sixteen-count block
+     * whatever k is, which is the form the daemon change would take. */
+    if (argc > 3 && strcmp(argv[3], "reseed") == 0)
+    {
+        static const int ks_[] = {1, 4, 8, 16, 256};
+        enum { NK = sizeof(ks_) / sizeof(ks_[0]) };
+        uint64_t rc[NK] = {0}, rn[NK] = {0};
+        const double deadline = now_s() + seconds;
+        int i;
+
+        printf("reseed interval at odds 256, interleaved, %.0f s\n", seconds);
+        while (now_s() < deadline)
+        {
+            unsigned char seed[32];
+            uint64_t x = gid++ * 0x9e3779b97f4a7c15ULL + 0xBEEFULL;
+            for (i = 0; i < 4; i++) {
+                x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+                memcpy(seed + i * 8, &x, 8);
+            }
+            for (i = 0; i < 2 * NK; i++)
+            {
+                const int r = (i < NK) ? i : (2 * NK - 1 - i);
+                HC128_State rng;
+                uint64_t t0, t1;
+                HC128_Init(&rng, seed, seed + 16);
+                HC128_NextKeys(&rng);
+                t0 = __rdtsc();
+                fill(salt.data(), &rng, height, ARM_ALL, ks_[r]);
+                t1 = __rdtsc();
+                rc[r] += t1 - t0;
+                rn[r]++;
+            }
+        }
+        printf("\n  %-6s %8s %10s %12s\n", "k", "inits", "ms/fill", "vs k=1");
+        {
+            const double base = (double)rc[0] / (double)rn[0] / hz * 1000.0;
+            for (i = 0; i < NK; i++)
+            {
+                const double m = (double)rc[i] / (double)rn[i] / hz * 1000.0;
+                printf("  %-6d %8d %10.4f %11.3fx\n", ks_[i], 256 / ks_[i] + 1, m, m / base);
+            }
+            printf("\n  RESEED height=%u", height);
+            for (i = 0; i < NK; i++)
+                printf(" k%d=%.4f", ks_[i], (double)rc[i] / (double)rn[i] / hz * 1000.0);
+            printf("\n  %llu fills per arm\n", (unsigned long long)rn[0]);
+        }
+        return 0;
+    }
 
     /* A-B-C-D-D-C-B-A within one process, one seed per group of eight, so a
      * drift in clock or temperature cancels for every arm rather than landing
