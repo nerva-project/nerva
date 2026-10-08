@@ -37,7 +37,7 @@ include_directories(
   "${NERVA_ROOT}/external"
   "${NERVA_ROOT}/external/rapidjson/include")
 
-find_package(Boost REQUIRED COMPONENTS serialization thread chrono system filesystem regex)
+find_package(Boost REQUIRED COMPONENTS serialization thread chrono system filesystem regex program_options)
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 
@@ -70,6 +70,29 @@ hf14check(t_fee_weight t_fee_weight.cpp)
 hf14check(t_ring_size t_ring_size.cpp)
 # v8's consensus entry, cn_slow_hash_v14_chain
 hf14check(t_v8_chain t_v8_chain.c)
+# get_block_longhash_v14 end to end over a fake chain; needs cryptonote_core,
+# which also pulls in the device layer (hidapi) and, on Windows, sockets
+find_library(HIDAPI_LIB NAMES hidapi hidapi-libusb hidapi-hidraw)
+if (NOT HIDAPI_LIB)
+  set(HIDAPI_LIB "")
+endif ()
+if (WIN32)
+  set(V14_SYS_LIBS ws2_32 setupapi)
+endif ()
+add_executable(t_v14_longhash t_v14_longhash.cpp)
+target_link_libraries(t_v14_longhash
+  -Wl,--start-group
+  "${NERVA_BUILD}/src/cryptonote_core/libcryptonote_core.a"
+  "${NERVA_BUILD}/src/blockchain_db/libblockchain_db.a"
+  "${NERVA_BUILD}/src/checkpoints/libcheckpoints.a"
+  "${NERVA_BUILD}/src/multisig/libmultisig.a"
+  "${NERVA_BUILD}/src/libversion.a"
+  "${NERVA_BUILD}/external/db_drivers/liblmdb/liblmdb.a"
+  ${NERVA_LIBS}
+  -Wl,--end-group
+  ${Boost_LIBRARIES} OpenSSL::SSL OpenSSL::Crypto
+  sodium unbound ${HIDAPI_LIB} ${V14_SYS_LIBS} Threads::Threads ${CMAKE_DL_LIBS})
+add_test(NAME t_v14_longhash COMMAND t_v14_longhash)
 # The resized compilations are only comparable to the shipped hashes in
 # libcncrypto.a if they are built the same way. These are the crypto flags the
 # main build uses for slow-hash-hw.c, taken from its flags.make.

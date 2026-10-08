@@ -6367,7 +6367,7 @@ Split at 1527, A 64 past and B 162 past. n1 logged `REORGANIZE on height: 1527`
 and `REORGANIZE SUCCESS`, n4 followed through n1, and all four nodes report 1688
 as `7c40da8b...`. The limit does not touch reorganisations within 256.
 
-### F92. An independent review of the `src/` changes found nothing that splits the chain, and three smaller issues, two fixed
+### F92. An independent review of the `src/` changes found nothing that splits the chain, and three smaller issues, all fixed
 
 *2026-10-08. A separate session with none of this project's context reviewed
 `git diff master...pow/cna-v8 -- src` at `13f53b2`, told to trust no comment or
@@ -6400,13 +6400,24 @@ can make an invalid block look valid.
   of work before hashing. No consensus change: the block was rejected either
   way.
 
-**Not fixed, a coverage gap:** nothing at startup pins `v14_fetch_salt`'s own
-logic (keying HC-128 from the seed, the three draws and their ranges, the
-`iters` formula, the 1 MB `random_values` bound). The hash vectors supply salt
-and draws through a test callback, and the chain-fill test stops at the fill.
-The code is correct today; a regression there would pass every startup check
-and be caught only by a testnet. Closing it needs a fake `BlockchainDB` for an
-end-to-end vector through `get_block_longhash_v14`.
+- **A coverage gap: nothing pinned `v14_fetch_salt`'s own logic** (keying
+  HC-128 from the seed, the three draws and their ranges, the `iters` formula,
+  the 1 MB `random_values` bound). The hash vectors supply salt and draws
+  through a test callback, and the chain-fill test stops at the fill, so a
+  regression there would have passed every check. `contrib/hf14checks/
+  t_v14_longhash.cpp` now runs `get_block_longhash_v14` end to end over a fake
+  database whose answers are derived from every argument it receives, checks
+  those arguments directly, and pins five hashes plus a digest over 64 more
+  cases. `src/blockchain_db/testdb.h`, the stub it builds on, had drifted from
+  the database interface and is brought up to date; nothing in the daemon
+  compiles it. **Checked by mutation:** nine deliberate breaks, one at a time,
+  each rebuilt into `cryptonote_core` (key and IV swapped, the xx range and the
+  yy range narrowed, `iters` off by one, the `random_values` bound set to v13's
+  8 MB, v13's odds and reseed interval passed, the keystream step before the
+  draws dropped, the stable height off by one). The test fails on all nine and
+  passes on the original. The 8 MB bound at first crashed the test, writing
+  past the pad exactly as it would in the daemon; the fake now keeps its
+  indices in range so that case fails cleanly.
 
 **Pre-existing, not this PR:** the `random_values` cache keyed on height alone,
 reachable on testnet and stagenet; handled by PR #163. The v14 path refetches on
