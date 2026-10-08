@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -73,7 +73,15 @@
 namespace cryptonote
 {
 
-
+  // How much a refused block counts against the peer that sent it.
+  inline unsigned block_fail_score(const block_verification_context &bvc)
+  {
+    if (bvc.m_bad_pow)
+      return P2P_IP_FAILS_BEFORE_BLOCK;
+    if (bvc.m_alt_chain_too_deep)
+      return 0;
+    return 1;
+  }
 
   //-----------------------------------------------------------------------------------------------------------------------
   template<class t_core>
@@ -494,7 +502,7 @@ namespace cryptonote
     if(bvc.m_verifivation_failed)
     {
       LOG_PRINT_CCONTEXT_L0("Block verification failed, dropping connection");
-      drop_connection_with_score(context, bvc.m_bad_pow ? P2P_IP_FAILS_BEFORE_BLOCK : 1, false);
+      drop_connection_with_score(context, block_fail_score(bvc), false);
       return 1;
     }
     if(bvc.m_added_to_main_chain)
@@ -785,7 +793,7 @@ namespace cryptonote
         if( bvc.m_verifivation_failed )
         {
           LOG_PRINT_CCONTEXT_L0("Block verification failed, dropping connection");
-          drop_connection_with_score(context, bvc.m_bad_pow ? P2P_IP_FAILS_BEFORE_BLOCK : 1, false);
+          drop_connection_with_score(context, block_fail_score(bvc), false);
           return 1;
         }
         if( bvc.m_added_to_main_chain )
@@ -1408,7 +1416,7 @@ namespace cryptonote
             {
               if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
                 LOG_PRINT_CCONTEXT_L1("Block verification failed, dropping connection");
-                drop_connection_with_score(context, bvc.m_bad_pow ? P2P_IP_FAILS_BEFORE_BLOCK : 1, true);
+                drop_connection_with_score(context, block_fail_score(bvc), true);
                 return 1;
               }))
                 LOG_ERROR_CCONTEXT("span connection id not found");

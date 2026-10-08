@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -1093,6 +1093,17 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
     //pushing old chain as alternative chain
     for (auto& old_ch_ent : disconnected_chain)
     {
+      // Blocks this far past the split cannot be hashed from the new main
+      // chain's history, so they could never be checked as alternatives.
+      // Stop here rather than let handle_alternative_block refuse them and
+      // tell the operator to pop blocks after a reorganisation that worked.
+      const uint64_t depth_limit = get_longhash_alt_chain_depth_limit(old_ch_ent.major_version);
+      if (depth_limit && get_block_height(old_ch_ent) - split_height >= depth_limit)
+      {
+        MINFO("Not keeping the last " << (split_height + disconnected_chain.size() - get_block_height(old_ch_ent))
+            << " disconnected blocks as alternatives: they are past the depth the proof of work can check");
+        break;
+      }
       block_verification_context bvc = {};
       bool r = handle_alternative_block(old_ch_ent, get_block_hash(old_ch_ent), bvc);
       if(!r)
@@ -1723,6 +1734,38 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     bei.height = prev_height + 1;
     uint64_t block_reward = get_outs_money_amount(b.miner_tx);
     bei.already_generated_coins = compute_generated_coins(block_reward, (alt_chain.size() ? prev_data.already_generated_coins : m_db->get_block_already_generated_coins(prev_height)));
+
+    // The proof of work reads chain data a fixed depth below each block, from
+    // the main chain. Once a block is that far past the split, the history it
+    // needs differs between the two branches and the block cannot be checked
+    // against ours, so it is refused before hashing rather than hashed wrong.
+    // This bounds how deep this node will reorganise. The peer may be honest
+    // and on the other branch, so the refusal carries no fail score; reaching
+    // here at all needs that many alternative blocks with valid proof of work.
+    const uint64_t split_height = alt_chain.empty() ? bei.height : alt_chain.front().height;
+    const uint64_t depth_limit = get_longhash_alt_chain_depth_limit(b.major_version);
+    if (depth_limit && bei.height - split_height >= depth_limit)
+    {
+      static uint64_t last_reported_split = std::numeric_limits<uint64_t>::max();
+      const uint64_t to_pop = m_db->height() - split_height;
+      if (split_height != last_reported_split)
+      {
+        last_reported_split = split_height;
+        MERROR("Alternative chain that split from ours at height " << split_height << " is now "
+            << (bei.height - split_height) << " blocks past the split. Proof of work reads chain data "
+            << depth_limit << " blocks below each block, so blocks this deep cannot be verified against "
+            << "this node's chain and are not accepted. If this node is the one on the wrong chain, "
+            << "run pop_blocks " << to_pop << " and let it resync.");
+      }
+      else
+      {
+        MDEBUG("Block " << id << " at height " << bei.height << " refused: " << (bei.height - split_height)
+            << " blocks past the split at " << split_height);
+      }
+      bvc.m_verifivation_failed = true;
+      bvc.m_alt_chain_too_deep = true;
+      return false;
+    }
 
     // verify that the block's timestamp is within the acceptable range
     // (not earlier than the median of the last X blocks)
