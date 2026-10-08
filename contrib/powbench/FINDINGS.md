@@ -6033,6 +6033,58 @@ storing the salt through a `char` pointer. Copied verbatim into a harness
 output is unchanged by construction and both loops are pinned by the startup
 known-answer test (F85). Not yet measured in the daemon itself or at v13's
 parameters; the next step.
+
+*Done the same day: F87.*
+
+### F87. The daemon's chain fill rewritten as plain loops: 1.87x faster at v14's parameters, 1.10x at v13's, identical output
+
+*2026-10-08. Not a consensus change. Verified as listed in section 2.*
+
+#### 1. The change
+
+`cna_v6_data_run_ahead` lost both of its lambdas. `run_block` became the body
+of one `while (count < 4096)` loop with the midpoint reseed inside it at
+`count == 2048`, after that block's own reseed, which is the order the two-loop
+form ran them in. `pick_index` became `cna_v6_pick`, a `static inline` function
+taking its state explicitly. Nothing else moved: same draws in the same order,
+same prefetches, same keystream copy, same reseed.
+
+#### 2. How it was checked
+
+- **Old against new, extracted verbatim from `db_lmdb.cpp` at HEAD and in the
+  working tree, in one binary:** identical 256 KB salt and identical final
+  `HC128_State` for 50 seeds at each of v13's and v14's parameters.
+- Timed in the same binary, the two arms alternating order across four
+  repetitions, 1,500 fills each with a fresh seed per fill, 4.5M synthetic
+  cache:
+
+| | old, lambda | new, plain loops | |
+|---|---|---|---|
+| v13: odds 13, k = 1 | 0.803 ms | 0.733 ms | **1.10x** |
+| v14: odds 256, k = 16 | 0.721 ms | 0.386 ms | **1.87x** |
+
+- The daemon builds, and its startup known-answer test (F85), which runs both
+  loops against vectors from the independent generator, passes.
+- **v13 still validates mainnet through the new loop.** The mainnet copy from
+  F85, 400 blocks popped, resynced from 4,432,767 to 4,433,223 with
+  `NERVA_SALT_SELFCHECK=1`: 456 real v13 blocks accepted with proof of work
+  checked, 64 of 64 self-checks of the new loop against the reference passed,
+  no errors, and the startup known-answer test passed on open.
+
+#### 3. Why v13 gains less
+
+v13 sends 95% of its reads to a window that sits in cache, and the penalty
+falls mostly on the reads that go to DRAM: the closure kept the fill's state in
+memory, and the stores into the salt, through a `char` pointer, forced it to be
+reloaded between the prefetches and the reads they were meant to overlap.
+
+#### 4. What it changes
+
+Every node's v14 verification and every stock-daemon miner's v14 fill, by about
+0.33 ms a nonce against a nonce of about 1 ms. Live v13 verification and mining
+gain about 0.07 ms a nonce today. No hash changes, so no fork and no vectors
+move. It also narrows the gap between the daemon's own miner and an optimised
+one, which is a fairness gain for people mining with the stock software.
  `hf14checks` inverts its own results if a TU misses its flags
 
 `contrib/hf14checks/CMakeLists.txt` names the resized translation units

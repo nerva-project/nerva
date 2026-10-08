@@ -2828,60 +2828,58 @@ static void cna_v6_data_reference(const block_cache_data *cache, uint64_t height
   }
 }
 
+/* One pick of the chain fill. A dedicated selector draw precedes each index;
+ * consecutive HC128 outputs are independent, so selector and index are
+ * uncorrelated. At odds 256 the selector is always true but is still drawn,
+ * because its keystream word is part of consensus. */
+static inline uint64_t cna_v6_pick(HC128_State *rng_state, size_t *rng_key_idx, uint32_t odds,
+                                   uint64_t height, uint64_t window_size, uint64_t window_base)
+{
+  if (HC128_U32(rng_state, rng_key_idx, 256) < odds)
+    return HC128_U32(rng_state, rng_key_idx, height);
+  return window_base + HC128_U32(rng_state, rng_key_idx, window_size);
+}
+
 /* The run-ahead form of the fill, which is what consensus runs. A free
  * function over the cache so cna_v6_data_known_answer_test can drive it
- * without a database; moved out of get_cna_v6_data unchanged apart from the
- * reseed interval. */
+ * without a database.
+ *
+ * Run-ahead over a sixteen-count block. HC128_NextKeys advances the cipher
+ * independently of the message being encrypted, and the keystream HC128_U32
+ * consumes is likewise data-independent, so every pick index and every
+ * encrypting keystream for a block can be produced before a single
+ * block-cache entry is read. The reads then carry no dependency on each other
+ * and issue together. Only the reseed depends on data already fetched, because
+ * it keys HC128_Init from the output buffer, which is what limits the run-ahead
+ * to a block.
+ *
+ * Written as plain loops on purpose. It used to be a lambda capturing every
+ * local by reference, called from two loops: the compiler kept it out of line,
+ * so the fill's state lived behind the closure and every byte stored into the
+ * salt forced it to be reloaded. Same output, about 1.75x slower at v14's
+ * parameters. FINDINGS F86, F87. Byte-for-byte identical to
+ * cna_v6_data_reference, which the known-answer test and NERVA_SALT_SELFCHECK
+ * both check. */
 static void cna_v6_data_run_ahead(const block_cache_data *cache, uint64_t height,
                                   uint64_t window_size, uint64_t window_base,
                                   HC128_State *rng_state, char *out, uint32_t odds,
                                   uint32_t reseed_blocks)
 {
   size_t rng_key_idx = 0;
-
-  // A dedicated selector byte precedes each index pick; consecutive HC128
-  // outputs are cryptographically independent so selector and index are uncorrelated.
-  auto pick_index = [&]() -> uint64_t {
-    if (HC128_U32(rng_state, &rng_key_idx, 256) < odds)
-      return HC128_U32(rng_state, &rng_key_idx, height);
-    return window_base + HC128_U32(rng_state, &rng_key_idx, window_size);
-  };
-
   unsigned char msg[64];
-  size_t msgpos;
   unsigned char *optr = (unsigned char*)out;
   uint64_t count = 0;
-
-  /* Run-ahead over a sixteen-count block.
-   *
-   * HC128_NextKeys advances the cipher independently of the message being
-   * encrypted, and the keystream HC128_U32 consumes is likewise
-   * data-independent, so every pick index and every encrypting keystream for a
-   * block can be produced before a single block-cache entry is read. The reads
-   * then carry no dependency on each other and issue together, instead of one
-   * at a time as they did when this loop interleaved them with the cipher.
-   * That interleaving also evicted P and Q from L1 on every message, which is
-   * why HC128_EncryptMessage used to cost several times what the same sixteen
-   * steps cost inside HC128_Init.
-   *
-   * Only the reseed depends on data that was fetched, because it keys
-   * HC128_Init from the output buffer. That is what sets the block as the
-   * limit of the run-ahead.
-   *
-   * Byte-for-byte identical to the loop it replaces; contrib/powbench has the
-   * harness that shows it, and NERVA_SALT_SELFCHECK below re-checks it here
-   * against real chain data. Measured 1.57x on the salt. Almost all of that is
-   * the restructuring: with prefetching removed entirely it is still 1.53x. */
   uint64_t idx[16][4];
   uint32_t ks[16][16];
 
-  auto run_block = [&]() {
+  while (count < 4096)
+  {
     HC128_NextKeys(rng_state);
     for (size_t k = 0; k < 16; k++)
     {
       for (size_t j = 0; j < 4; j++)
       {
-        idx[k][j] = pick_index();
+        idx[k][j] = cna_v6_pick(rng_state, &rng_key_idx, odds, height, window_size, window_base);
 #if defined(__GNUC__)
         __builtin_prefetch(&cache[idx[k][j]]);
 #endif
@@ -2891,19 +2889,11 @@ static void cna_v6_data_run_ahead(const block_cache_data *cache, uint64_t height
     }
     for (size_t k = 0; k < 16; k++)
     {
-      const block_cache_data *b0 = &cache[idx[k][0]];
-      const block_cache_data *b1 = &cache[idx[k][1]];
-      const block_cache_data *b2 = &cache[idx[k][2]];
-      const block_cache_data *b3 = &cache[idx[k][3]];
-      std::memcpy(msg, b0->hash.data, sizeof(crypto::hash));
-      msgpos = sizeof(crypto::hash);
-      std::memcpy(msg + msgpos, &(b1->timestamp), sizeof(uint64_t));
-      msgpos += sizeof(uint64_t);
-      std::memcpy(msg + msgpos, &(b2->diff_lo), sizeof(uint64_t));
-      msgpos += sizeof(uint64_t);
-      std::memcpy(msg + msgpos, &(b3->coins), sizeof(uint64_t));
-      msgpos += sizeof(uint64_t);
-      std::memcpy(msg + msgpos, &count, sizeof(uint64_t));
+      std::memcpy(msg,      cache[idx[k][0]].hash.data, sizeof(crypto::hash));
+      std::memcpy(msg + 32, &cache[idx[k][1]].timestamp, sizeof(uint64_t));
+      std::memcpy(msg + 40, &cache[idx[k][2]].diff_lo,   sizeof(uint64_t));
+      std::memcpy(msg + 48, &cache[idx[k][3]].coins,     sizeof(uint64_t));
+      std::memcpy(msg + 56, &count, sizeof(uint64_t));
 
       /* what HC128_EncryptMessage does for a 64-byte message, with the
        * keystream taken from the run-ahead instead of generated here */
@@ -2920,25 +2910,24 @@ static void cna_v6_data_run_ahead(const block_cache_data *cache, uint64_t height
 
     // Reseed, but don't reset the RNG key index, making the next used key
     // effectively random at the start of each loop iteration (except the first)
-    if (((count / 16) % reseed_blocks) != 0)
-      return;
-    unsigned char *iv = optr - (8 * 16 * sizeof(uint32_t)) + HC128_U32(rng_state, &rng_key_idx, (8 * 16 * sizeof(uint32_t)) - 16);
-    unsigned char *key = optr - (16 * 16 * sizeof(uint32_t)) + HC128_U32(rng_state, &rng_key_idx, (8 * 16 * sizeof(uint32_t)) - 16);
-    HC128_Init(rng_state, key, iv);
-  };
+    if (((count / 16) % reseed_blocks) == 0)
+    {
+      unsigned char *iv = optr - (8 * 16 * sizeof(uint32_t)) + HC128_U32(rng_state, &rng_key_idx, (8 * 16 * sizeof(uint32_t)) - 16);
+      unsigned char *key = optr - (16 * 16 * sizeof(uint32_t)) + HC128_U32(rng_state, &rng_key_idx, (8 * 16 * sizeof(uint32_t)) - 16);
+      HC128_Init(rng_state, key, iv);
+    }
 
-  while (count < 2048)
-    run_block();
-
-  std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
-  std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
-  std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
-  std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
-  HC128_EncryptMessage(rng_state, msg, optr, sizeof(msg));
-  HC128_Init(rng_state, optr, optr+16);
-
-  while (count < 4096)
-    run_block();
+    // The midpoint reseed, after the first half's last block has reseeded
+    if (count == 2048)
+    {
+      std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
+      std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
+      std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
+      std::memcpy(msg, optr - 131072 + HC128_U32(rng_state, &rng_key_idx, 131072U - 16U), 16);
+      HC128_EncryptMessage(rng_state, msg, optr, sizeof(msg));
+      HC128_Init(rng_state, optr, optr+16);
+    }
+  }
 }
 
 /* Known-answer test for the chain fill, run when a database is opened.
