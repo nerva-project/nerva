@@ -1,0 +1,30 @@
+##### height 4500000  (cache 240 MB) #####
+                        ms/fill   vs floor
+  shipped, 13/256        0.7374      1.02x
+  window only            0.7201      1.00x
+  one hot entry          0.7233      1.00x
+  all full history       0.8700      1.20x
+  odds 32/256            0.7568      1.05x
+  odds 64/256            0.7845      1.08x
+  odds 128/256           0.8291      1.15x
+
+##### height 6078000  (cache 324 MB) #####
+                        ms/fill   vs floor
+  shipped, 13/256        0.7434      1.02x
+  window only            0.7278      1.00x
+  one hot entry          0.7309      1.00x
+  all full history       0.8378      1.15x
+  odds 32/256            0.7597      1.04x
+  odds 64/256            0.7852      1.07x
+  odds 128/256           0.8180      1.12x
+
+##### height 7128000  (cache 380 MB) #####
+                        ms/fill   vs floor
+  shipped, 13/256        0.7254      1.02x
+  window only            0.7115      1.00x
+  one hot entry          0.7145      1.00x
+  all full history       0.8002      1.12x
+  odds 32/256            0.7414      1.04x
+  odds 64/256            0.7650      1.07x
+  odds 128/256           0.7887      1.10x
+

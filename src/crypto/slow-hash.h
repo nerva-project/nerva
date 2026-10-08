@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -136,6 +136,31 @@ static BOOL SetLockPagesPrivilege(HANDLE hProcess, BOOL bEnable)
     offset_2 = ((temp_1 * offset_1) % 125) + 4;        \
     for (j = offset_1; j < CN_SCRATCHPAD_MEMORY; j += offset_2)      \
         hp_state[j] ^= (salt)[x++];
+
+/* v8's pad init steps the salt once per CN_V8_SALT_STEP pad bytes, so it
+ * consumes exactly CN_SALT_MEMORY bytes at any pad that is a whole multiple of
+ * the salt: a step of 4 at 1 MB. */
+#define CN_V8_SALT_STEP  (CN_SCRATCHPAD_MEMORY / CN_SALT_MEMORY)
+
+/* A pad that breaks any of these produces an out-of-bounds salt read or an
+ * unwritten pad tail, not a slower hash, so it must not be reachable by
+ * editing a constant. */
+_Static_assert(CN_SCRATCHPAD_MEMORY % CN_SALT_MEMORY == 0,
+               "v8 pad must be a whole multiple of the salt");
+_Static_assert(CN_V8_SALT_STEP >= 1,
+               "v8 pad must be at least as large as the salt");
+_Static_assert(CN_SCRATCHPAD_MEMORY % 128 == 0,
+               "v8 pad must be a multiple of 128, or the AES fill leaves an unwritten tail");
+_Static_assert(CN_SCRATCHPAD_MEMORY != 1048576 || CN_V8_SALT_STEP == 4,
+               "at a 1 MB pad the derived salt step must be exactly the shipped 4");
+
+/* v8's pad init: XOR the whole salt into the pad, one byte every
+ * CN_V8_SALT_STEP bytes, then apply the random values. */
+#define randomize_scratchpad_256k_v8(r, salt, scratchpad)                   \
+    uint32_t x = 0;                                                         \
+    for (uint32_t i = 0; i < CN_SCRATCHPAD_MEMORY; i += CN_V8_SALT_STEP)    \
+        scratchpad[i] ^= salt[x++];                                         \
+    randomize_scratchpad(r, scratchpad);
 
 #define randomize_scratchpad(r, scratchpad)            \
     for (int i = 0; i < CN_RANDOM_VALUES; i++)         \
@@ -327,6 +352,35 @@ static inline uint8x16_t cn_arm_aesenc(uint8x16_t a, uint8x16_t k)
     U64(b)[0] = U64(&state.k[16])[0] ^ U64(&state.k[48])[0]; \
     U64(b)[1] = U64(&state.k[16])[1] ^ U64(&state.k[48])[1];
 
+/* Store one filled block into the pad: streaming stores when this thread
+ * enabled cn_nt_fill, otherwise a plain memcpy. dst is 16-byte aligned, as
+ * _mm_stream_si128 requires: the pad is page aligned and the offset is a
+ * multiple of init_size_byte. The software-AES expand_key does not use this. */
+STATIC INLINE void cn_fill_store(uint8_t *dst, const uint8_t *src, uint32_t nbytes)
+{
+#if defined(__x86_64__) || defined(__i386__)
+    if (cn_nt_fill())
+    {
+        uint32_t k;
+        for (k = 0; k < nbytes; k += AES_BLOCK_SIZE)
+            _mm_stream_si128((__m128i *)(void *)(dst + k),
+                             _mm_loadu_si128((const __m128i *)(const void *)(src + k)));
+        return;
+    }
+#endif
+    memcpy(dst, src, nbytes);
+}
+
+/* Streaming stores are weakly ordered and the pad is read right after the
+ * fill, so the fill has to fence before anyone looks at it. */
+STATIC INLINE void cn_fill_fence(void)
+{
+#if defined(__x86_64__) || defined(__i386__)
+    if (cn_nt_fill())
+        _mm_sfence();
+#endif
+}
+
 #define expand_key()                                                                   \
     hash_process(&state.hs, data, length);                                             \
     memcpy(text, state.init, init_size_byte);                                          \
@@ -335,8 +389,9 @@ static inline uint8x16_t cn_arm_aesenc(uint8x16_t a, uint8x16_t k)
     for (i = 0; i < CN_SCRATCHPAD_MEMORY / init_size_byte; i++)                        \
     {                                                                                  \
         aes_pseudo_round(text, text, expandedKey, init_size_blk);                      \
-        memcpy(&hp_state[i * init_size_byte], text, init_size_byte);                   \
-    }
+        cn_fill_store(&hp_state[i * init_size_byte], text, init_size_byte);            \
+    }                                                                                  \
+    cn_fill_fence();
 
 #define finalize_hash()                                                                              \
     memcpy(text, state.init, init_size_byte);                                                        \

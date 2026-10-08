@@ -686,7 +686,9 @@ namespace cryptonote
     HC128_State rng_state;
     HC128_Init(&rng_state, (unsigned char *)blob_hash.data, (unsigned char *)blob_hash.data + 16);
 
-    db.get_cna_v6_data(context->salt, &rng_state, stable_height);
+    // v13's odds and reseed interval validate mainnet and must not change.
+    db.get_cna_v6_data(context->salt, &rng_state, stable_height,
+                       (uint32_t)CNA_V6_FULL_HISTORY_ODDS, (uint32_t)CNA_V6_RESEED_BLOCKS);
 
     // Build 32-byte program seed: blob_hash XOR first 32 bytes of chain salt.
     // This seed is unique per (height, nonce) and requires the blockchain DB,
@@ -701,44 +703,105 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------
+  //---------------------------------------------------------------
+  namespace
+  {
+    struct v14_salt_ctx
+    {
+      BlockchainDB *db;
+      uint64_t stable_height;
+      uint64_t height;
+      bool failed;
+    };
+
+    // Called from inside cn_slow_hash_v14_chain, after the AES fill and before
+    // anything reads the salt. `seed` is the fill's final state with all eight
+    // AES lanes folded in. The per-nonce draws are taken here, after the fill,
+    // so they depend on the salt's content.
+    void v14_fetch_salt(void *user, const unsigned char seed[32], char *salt_out, cn_v8_draw_t *draw)
+    {
+      v14_salt_ctx *c = static_cast<v14_salt_ctx *>(user);
+
+      // Called from a C frame (cn_v8_core), so no exception may escape: record
+      // the failure and let get_block_longhash_v14 return false.
+      try
+      {
+      HC128_State rng_state;
+      HC128_Init(&rng_state, const_cast<unsigned char *>(seed), const_cast<unsigned char *>(seed) + 16);
+
+      // v6's chain fill with every pick drawn from full history and a reseed
+      // after every 16th block.
+      c->db->get_cna_v6_data(salt_out, &rng_state, c->stable_height,
+                             (uint32_t)CNA_V6_FULL_HISTORY_ODDS_V14,
+                             (uint32_t)CNA_V6_RESEED_BLOCKS_V14);
+
+      HC128_NextKeys(&rng_state);
+      size_t rng_key_idx = 0;
+      // These three reach the hash only through (xx-1)*yy + iters. They stay
+      // three draws because that fixes how much keystream is consumed.
+      // xx: [4, 8]
+      draw->xx = (uint16_t)((uint32_t)4U + HC128_U32(&rng_state, &rng_key_idx, 5U));
+      // yy: [4, 8]
+      draw->yy = (uint16_t)((uint32_t)4U + HC128_U32(&rng_state, &rng_key_idx, 5U));
+      // iters_divisor: [1, 64]
+      const uint32_t iters_divisor = (uint32_t)1U + HC128_U32(&rng_state, &rng_key_idx, 64U);
+      draw->iters = (size_t)((c->height + 1) % iters_divisor);
+      }
+      catch (const std::exception &e)
+      {
+        MERROR("v14 salt fetch failed: " << e.what());
+        c->failed = true;
+      }
+      catch (...)
+      {
+        MERROR("v14 salt fetch failed with an unknown exception");
+        c->failed = true;
+      }
+
+      // The hash runs to completion either way and reads the whole salt, so
+      // never leave it uninitialized.
+      if (c->failed)
+        memset(salt_out, 0, CN_SALT_MEMORY);
+    }
+  }
+  //---------------------------------------------------------------
   bool get_block_longhash_v14(crypto::cn_hash_context_t *context, BlockchainDB &db, const blobdata &blob, crypto::hash &res, uint64_t height)
   {
+    // CryptoNight-Adaptive v8: v5's core at a 1 MB pad with no salt_pad, over
+    // v6's chain fill with every pick drawn from full history. The salt is
+    // fetched from inside the hash, after the AES fill.
     if (height < CN_SEED_MIN_HEIGHT)
       return false;
     const uint64_t stable_height = height - 256;
 
-    // random_values must land inside the 256 KB v14 pad, so fetch them with
-    // the v14 bound on every call and never through context->cached_height.
-    // That cache is shared with the v13 path whose bound is 8 MB, and around
-    // the fork one context can hash both versions at the same height
-    // (competing chains): a stale v13-bounded set served here would index
-    // past the pad and fork the chain. Invalidate the cache too, so a v13
-    // hash following on this context refetches with its own bound. The
-    // fetch is five block-cache lookups, noise next to the hash itself.
-    db.get_cna_v2_data(&context->random_values, stable_height, CN_SCRATCHPAD_MEMORY_V14);
+    // Fetch with v8's bound every call, never via cached_height: that cache is
+    // shared with v13, whose bound is 8 MB, and around the fork one context can
+    // hash both versions at the same height on competing chains. A stale
+    // v13-bounded set would index past this pad and split the chain. Invalidate
+    // it too, so a following v13 hash refetches with its own bound.
+    db.get_cna_v2_data(&context->random_values, stable_height, CN_SCRATCHPAD_MEMORY_V8);
     context->cached_height = (uint64_t)-1;
 
-    // Per-nonce program seed built exactly as v13: HC128 seeded from the blob
-    // hash fills the chain salt, and the seed is blob_hash XOR salt[0..32).
-    // Unique per (height, nonce) and requires the blockchain DB, so pool
-    // resistance is unchanged.
-    crypto::hash blob_hash;
-    get_blob_hash(blob, blob_hash);
+    // The salt is fetched from inside the hash (v14_fetch_salt), so its seed
+    // can be the AES fill's final state. init_size_blk is fixed, so it is
+    // known before the fill.
+    v14_salt_ctx sctx;
+    sctx.db = &db;
+    sctx.stable_height = stable_height;
+    sctx.height = height;
+    sctx.failed = false;
 
-    HC128_State rng_state;
-    HC128_Init(&rng_state, (unsigned char *)blob_hash.data, (unsigned char *)blob_hash.data + 16);
+    crypto::cn_slow_hash_v14_chain(context, blob.data(), blob.size(), res,
+                                   CN_V8_INIT_SIZE_BLK, v14_fetch_salt, &sctx);
 
-    db.get_cna_v6_data(context->salt, &rng_state, stable_height);
+    // res is meaningless if the salt fetch failed. Stamp it so a caller that
+    // ignores the return value still fails the difficulty check.
+    if (sctx.failed)
+    {
+      memset(res.data, 0xff, sizeof(res.data));
+      return false;
+    }
 
-    uint8_t seed[32];
-    const uint8_t *salt_bytes = reinterpret_cast<const uint8_t *>(context->salt);
-    const uint8_t *hash_bytes = reinterpret_cast<const uint8_t *>(blob_hash.data);
-    for (int i = 0; i < 32; i++)
-      seed[i] = hash_bytes[i] ^ salt_bytes[i];
-
-    // No external dataset: cn_slow_hash_v14 fills its own 24 MB per-nonce
-    // buffer from the seed and walks it (mutating as it goes).
-    cn_slow_hash_v14(context, blob.data(), blob.size(), res.data, seed);
     return true;
   }
   //---------------------------------------------------------------
@@ -768,9 +831,23 @@ namespace cryptonote
       case 13:
         return get_block_longhash_v13(context, db, blob, res, height);
       default:
-        // >= 14: CNA v7, per-nonce mutable-buffer chase
+        // >= 14: CryptoNight-Adaptive v8
         return get_block_longhash_v14(context, db, blob, res, height);
     }
+  }
+  //---------------------------------------------------------------
+  // Whether a block of this version can be hashed at this height at all. The
+  // same guards as the get_block_longhash_v* functions: below these heights
+  // they return false, and no valid block of that version can sit there.
+  bool get_longhash_height_supported(const uint8_t major_version, const uint64_t height)
+  {
+    if (major_version < 7)
+      return true;
+    if (major_version == 7)
+      return height >= 1 + CN_SEED_BACKREACH;
+    if (major_version == 8)
+      return height >= 256 + CN_SEED_BACKREACH;
+    return height >= CN_SEED_MIN_HEIGHT;
   }
   //---------------------------------------------------------------
   crypto::hash get_block_longhash(crypto::cn_hash_context_t *context, Blockchain *bc, const block& b, const uint64_t height)

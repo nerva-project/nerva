@@ -1,0 +1,82 @@
+Measurement tools for CNA v8. None of this is part of the daemon build.
+
+Every tool that links the real hash needs -DSLOW_HASH_HW_AES_BUILT=1 and -maes,
+or it silently times software AES and reads about 5x slow. The build scripts
+set both. Stop miners and close the browser before any timing run.
+
+TOOLS AND HOW TO BUILD THEM (run from the repository root)
+
+  sh contrib/powbench/build-v8bench.sh    v8bench: v8 against v5, single thread,
+                                          pad sweep and thread scaling. Static,
+                                          carries to machines with no toolchain.
+  sh contrib/powbench/build-v8-grid.sh    t_v8_grid: hardware against software AES
+                                          over all 1,600 consensus draws.
+  sh contrib/powbench/build-kat.sh        t_kat: the startup known-answer vectors
+                                          and the HW/SW self-test.
+  sh contrib/powbench/build-fill-kat.sh   t_fill_kat: independent vectors for the
+                                          chain fill's known-answer test.
+  sh contrib/powbench/build-v8-fill.sh    t_v8_fill: chain fill cost on the CPU,
+                                          reseed interval and draw variants.
+  sh contrib/powbench/build-fill-gpu.sh   t_fill_gpu: the whole v14 fill on a GPU
+                                          against the CPU, gated bit for bit.
+  sh contrib/powbench/build-hc128.sh      t_hc128: HC-128 throughput, CPU and GPU.
+  sh contrib/powbench/build-aes.sh        t_aes: AES throughput, AES-NI and GPU
+                                          table placements.
+  sh contrib/powbench/build-v8-aes.sh     t_v8_aes: v8 with AES-NI against T-tables.
+  sh contrib/powbench/build-gather.sh     t_gather: random reads into the block
+                                          cache, CPU and GPU.
+  sh contrib/powbench/build-v8-nt.sh      t_v8_nt: ordinary against streaming
+                                          stores in the pad fill, by pad size.
+  sh contrib/powbench/build-probes.sh     t_fp_determinism, t_fp_cost: the
+                                          floating-point probes (the FP stage
+                                          itself is archived at tag
+                                          archive/cna-v8-fp-stage).
+
+  screen.c, screen_time.c, t_iters.c, t_gen_kat.c: build lines in their headers
+  and in FINDINGS.md "Reproducing".
+
+  The GPU tools need no OpenCL SDK: clmin.h binds OpenCL.dll at run time.
+
+NERVA-GPUBENCH (main.cpp)
+
+  g++ -O2 -std=c++14 -maes -msse4.1 -ffp-contract=off -static \
+      -o nerva-gpubench.exe main.cpp hc128.c
+
+  -ffp-contract=off is required: the CPU reference for the FP rows must agree
+  bit for bit with the OpenCL kernel, and a fused multiply-add changes the
+  result.
+
+  nerva-gpubench.exe [vram%] [cooldown_s] [launch_cap_s] [all] [nofill]
+                     [serialfill] [fpxN]
+
+    defaults 50 15 25
+    vram%         share of VRAM to use; 0 skips the GPU (CPU columns only)
+    cooldown_s    idle between GPU variants, to let a display-attached card
+                  shed heat
+    launch_cap_s  max seconds for one kernel launch. Too low starves the rows,
+                  too high and a display GPU trips TDR.
+    all           also run the pad curves and the v6 and v7 rows
+    nofill        drop the chain fill from the CPU arm, so both sides are
+                  core-only (FINDINGS F77)
+    serialfill    use the reference chain fill instead of the run-ahead
+    fpxN          run the FP rows at N times their round count and divide the
+                  cost back out (FINDINGS F37)
+
+  COMPARE MACHINES ONLY AT THE SAME vram%, launch cap and arguments. The header
+  records them, and the system load before the run (it warns above 8%).
+
+  Default rows:
+    v5 1MB, v5 1MB end   the control, before and after the other rows; identical
+                         GPU work, so their gap is the run's noise floor
+    v8 pre-D1, v8 D1     historical forms of v8, kept for comparison
+    v8 D1+D3             v8 before the reseed change
+    v8 LDS-AES           the same algorithm with the AES tables in local memory,
+                         the competent GPU placement (FINDINGS F78 to F80)
+    v8 LDS k16           v8 as shipped: the fill reseeding every 16th block
+    v8 k16 B             the rejected rejection-free draw (FINDINGS F86)
+    v8+fp rne, v8+fp     the archived FP stage
+
+  ok=yes on a row means the GPU and CPU produced identical hashes; a row without
+  it gets no ratio. Thread and launch sizing for each machine are mirrored in
+  sizecheck.cpp. It allocates a ~247 MB block cache at startup; budget about
+  1.5 GB of RAM.

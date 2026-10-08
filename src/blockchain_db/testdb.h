@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 // 
 // All rights reserved.
@@ -43,8 +43,9 @@ namespace cryptonote
 class BaseTestDB: public cryptonote::BlockchainDB {
 public:
   BaseTestDB() {}
-  virtual void open(const std::string& filename, const int db_flags = 0) override { }
+  virtual void open(const std::string& filename, const int db_flags = 0, uint32_t db_readers = 0) override { }
   virtual void close() override {}
+  virtual void set_expected_min_height(uint64_t height) override {}
   virtual void sync() override {}
   virtual void safesyncmode(const bool onoff) override {}
   virtual void reset() override {}
@@ -66,7 +67,7 @@ public:
 
   virtual void drop_hard_fork_info() override {}
   virtual bool block_exists(const crypto::hash& h, uint64_t *height) const override { return false; }
-  virtual cryptonote::blobdata get_block_blob_from_height(const uint64_t& height) const override { return cryptonote::t_serializable_object_to_blob(get_block_from_height(height)); }
+  virtual cryptonote::blobdata get_block_blob_from_height(const uint64_t& height) const override { return cryptonote::blobdata(); }
   virtual cryptonote::blobdata get_block_blob(const crypto::hash& h) const override { return cryptonote::blobdata(); }
   virtual bool get_tx_blob(const crypto::hash& h, cryptonote::blobdata &tx) const override { return false; }
   virtual bool get_pruned_tx_blob(const crypto::hash& h, cryptonote::blobdata &tx) const override { return false; }
@@ -100,11 +101,11 @@ public:
   virtual uint64_t get_tx_block_height(const crypto::hash& h) const override { return 0; }
   virtual uint64_t get_num_outputs(const uint64_t& amount) const override { return 1; }
   virtual uint64_t get_indexing_base() const override { return 0; }
-  virtual cryptonote::output_data_t get_output_key(const uint64_t& amount, const uint64_t& index, bool include_commitmemt) const override { return cryptonote::output_data_t(); }
+  virtual cryptonote::output_data_t get_output_key_only(const uint64_t& amount, const uint64_t& index) const override { return cryptonote::output_data_t(); }
   virtual cryptonote::tx_out_index get_output_tx_and_index_from_global(const uint64_t& index) const override { return cryptonote::tx_out_index(); }
   virtual cryptonote::tx_out_index get_output_tx_and_index(const uint64_t& amount, const uint64_t& index) const override { return cryptonote::tx_out_index(); }
   virtual void get_output_tx_and_index(const uint64_t& amount, const std::vector<uint64_t> &offsets, std::vector<cryptonote::tx_out_index> &indices) const override {}
-  virtual void get_output_key(const epee::span<const uint64_t> &amounts, const std::vector<uint64_t> &offsets, std::vector<cryptonote::output_data_t> &outputs, bool allow_partial = false) const override {}
+  virtual void get_output_key(const epee::span<const uint64_t> &amounts, const std::vector<uint64_t> &offsets, std::vector<cryptonote::output_data_t> &outputs, bool v2, bool allow_partial = false) const override {}
   virtual bool can_thread_bulk_indices() const override { return false; }
   virtual std::vector<std::vector<uint64_t>> get_tx_amount_output_indices(const uint64_t tx_index, size_t n_txes) const override { return std::vector<std::vector<uint64_t>>(); }
   virtual bool has_key_image(const crypto::key_image& img) const override { return false; }
@@ -164,6 +165,11 @@ public:
   virtual uint64_t get_alt_block_count() override { return 0; }
   virtual void drop_alt_blocks() override {}
   virtual bool for_all_alt_blocks(std::function<bool(const crypto::hash &blkid, const alt_block_data_t &data, const cryptonote::blobdata *blob)> f, bool include_blob = false) const override { return true; }
+  virtual void get_cna_v2_data(crypto::cn_random_values_t *rv, uint64_t height, uint32_t seed) override {}
+  virtual void get_cna_v3_data(char *out, uint64_t height, uint32_t seed) override {}
+  virtual void get_cna_v4_data(char *out, uint64_t height, uint32_t seed) override {}
+  virtual void get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t height) override {}
+  virtual void get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t height, uint32_t odds, uint32_t reseed_blocks) override {}
 };
 
 }
