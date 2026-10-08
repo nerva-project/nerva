@@ -6427,8 +6427,9 @@ can make an invalid block look valid.
   one valid block in 74. The aggregate went from 64 cases to 1,024, where it
   escapes about once in a million runs; it is now caught, by the aggregate
   alone. The cache-invalidation check came from the same pass. The whole test
-  runs in under two seconds. It is not run by CI: hf14checks builds against a
-  finished daemon build and is run by hand.
+  runs in under two seconds. The reviewer also noted that nothing ran
+  hf14checks automatically; CI's Linux job now builds and runs `t_v8_chain` and
+  `t_v14_longhash` after the daemon build, which adds about 7 seconds.
 
 **Pre-existing, not this PR:** the `random_values` cache keyed on height alone,
 reachable on testnet and stagenet; handled by PR #163. The v14 path refetches on

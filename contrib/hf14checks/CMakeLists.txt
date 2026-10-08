@@ -68,8 +68,10 @@ hf14check(t_clsag t_clsag.cpp)
 hf14check(t_serialization t_serialization.cpp)
 hf14check(t_fee_weight t_fee_weight.cpp)
 hf14check(t_ring_size t_ring_size.cpp)
-# v8's consensus entry, cn_slow_hash_v14_chain
+# v8's consensus entry, cn_slow_hash_v14_chain. A C file, but libcncrypto
+# carries C++ objects, so link it as C++ to get the C++ runtime.
 hf14check(t_v8_chain t_v8_chain.c)
+set_target_properties(t_v8_chain PROPERTIES LINKER_LANGUAGE CXX)
 # get_block_longhash_v14 end to end over a fake chain; needs cryptonote_core,
 # which also pulls in the device layer (hidapi) and, on Windows, sockets
 find_library(HIDAPI_LIB NAMES hidapi hidapi-libusb hidapi-hidraw)
