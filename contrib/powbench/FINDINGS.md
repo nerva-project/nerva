@@ -6867,12 +6867,24 @@ remote peer, is the intended anti-Sybil behaviour and is unchanged.
     count and so should not move it. v13's tuned miner reached 5.27x
     ([V6-MINER-LOG.md](V6-MINER-LOG.md)). *F94 and F95 have since put most
     of its sections 1 to 3 into stock.*
-11. **What thread count NervaOne should default to for v14.** F95 found the
-    7950X peaks at 18 to 24 of its 32 threads and loses about a quarter of
-    the peak at 30. Unexplained in the same table: 16 threads run far below
-    18 in both builds, possibly Windows placing 16 unpinned threads on one
-    CCD; `t_v14_bench` does not pin, and the daemon's `--mining-affinity`
-    does. Needs a run with pinning, and on other CPUs.
+11. **What thread count NervaOne should default to for v14.** *Answered for
+    the 7950X, open for other CPUs.* With threads placed as the miner's
+    `--mining-affinity` places them (`t_v14_bench ... pin`: one per physical
+    core, inside one L3 group when they fit), F95's build gives, median H/s
+    of two runs each:
+
+    | threads | 8 | 12 | 14 | 16 | 18 | 20 | 24 |
+    |---|---|---|---|---|---|---|---|
+    | H/s | 16,560 | 24,890 | 28,680 | **32,180** | 32,430 | 32,040 | 30,600 |
+
+    **One thread per physical core is the optimum: 16.** It scales almost
+    linearly to there (8 to 16 threads is 1.94x); the two extra threads at 18,
+    which the miner leaves unpinned, add under 1%, and SMT costs from 20 on.
+    Pinned 16 also beats the best unpinned count (31,512 at 18) by 2%, so
+    F95's low unpinned 16-thread row was placement. v13's stock optimum on
+    the same machine was 12 (V6-MINER-LOG.md), set by its 8 MB pad's
+    bandwidth; v14's 1 MB pad lets it use every core. 14 threads, a common
+    v13 setting, would leave 11% on the table under v14.
 
 ## Reproducing
 
