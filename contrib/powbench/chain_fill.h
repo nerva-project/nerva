@@ -46,6 +46,14 @@ static int g_fill_reseed_k = 1;
  * candidate B, one keystream word per pick through a multiply-high and no
  * selector at odds 256. gen 15 sets it. */
 static bool g_fill_draw_b = false;
+/* 1: picks 1 to 3 read hash word (j + count) % 4 of the picked block instead
+ * of timestamp, diff_lo and coins. gen 14 (v8 as shipped) and 15 set it. */
+static uint32_t g_fill_hash_words = 0;
+static inline const void *fill_field(const blk_cache_ent &e, int j, uint64_t count)
+{
+    if (g_fill_hash_words) return e.hash + 8 * ((j + count) & 3);
+    return j == 1 ? (const void *)&e.timestamp : j == 2 ? (const void *)&e.diff_lo : (const void *)&e.coins;
+}
 static inline uint32_t fill_word(HC128_State *rng, size_t *ki)
 {
     if (*ki > 15) { HC128_NextKeys(rng); *ki = 0; }
@@ -137,10 +145,9 @@ static void chain_fill_v6(unsigned char *out, HC128_State *rng)
     while (count < 4096) {
         HC128_NextKeys(rng);
         for (size_t k = 0; k < 16; k++) {
-            memcpy(msg,      C[PICK()].hash, 32);
-            memcpy(msg + 32, &C[PICK()].timestamp, 8);
-            memcpy(msg + 40, &C[PICK()].diff_lo,   8);
-            memcpy(msg + 48, &C[PICK()].coins,     8);
+            memcpy(msg, C[PICK()].hash, 32);
+            for (int j = 1; j < 4; j++)
+                memcpy(msg + 24 + 8 * j, fill_field(C[PICK()], j, count), 8);
             memcpy(msg + 56, &count, 8);
             HC128_EncryptMessage(rng, msg, optr, 64);
             optr += 64;
@@ -190,18 +197,21 @@ static void chain_fill_v6_run(unsigned char *out, HC128_State *rng)
                     idx[k][j] = (HC128_U32(rng, &ki, 256) < g_fill_odds)
                               ? HC128_U32(rng, &ki, height)
                               : (wbase + HC128_U32(rng, &ki, wsz));
-#if defined(__GNUC__)
-                __builtin_prefetch(&C[idx[k][j]]);
-#endif
             }
+#if defined(__GNUC__)
+            /* the field each pick reads, as the daemon does */
+            __builtin_prefetch(C[idx[k][0]].hash);
+            __builtin_prefetch(C[idx[k][0]].hash + 31);
+            for (int j = 1; j < 4; j++)
+                __builtin_prefetch(fill_field(C[idx[k][j]], j, count + k));
+#endif
             HC128_NextKeys(rng);
             memcpy(ks[k], rng->keystream, sizeof(ks[k]));
         }
         for (size_t k = 0; k < 16; k++) {
-            memcpy(msg,      C[idx[k][0]].hash, 32);
-            memcpy(msg + 32, &C[idx[k][1]].timestamp, 8);
-            memcpy(msg + 40, &C[idx[k][2]].diff_lo,   8);
-            memcpy(msg + 48, &C[idx[k][3]].coins,     8);
+            memcpy(msg, C[idx[k][0]].hash, 32);
+            for (int j = 1; j < 4; j++)
+                memcpy(msg + 24 + 8 * j, fill_field(C[idx[k][j]], j, count), 8);
             memcpy(msg + 56, &count, 8);
             for (size_t j = 0; j < 16; j++) {
                 uint32_t w;
@@ -233,12 +243,13 @@ static bool chain_fill_self_check(void)
 {
     unsigned char a[SALT_BYTES], b[SALT_BYTES], seed[32];
     for (int i = 0; i < 32; i++) seed[i] = (unsigned char)(i * 7 + 3);
-    /* pass 2 is RESEED-PREREG's k = 16 and pass 3 DRAW-PREREG's B, so both
-     * rows are gated too */
-    for (int pass = 0; pass < 4; pass++) {
+    /* pass 2 is RESEED-PREREG's k = 16, pass 3 DRAW-PREREG's B and pass 4
+     * the hash words, so those rows are gated too */
+    for (int pass = 0; pass < 5; pass++) {
         g_fill_odds = pass ? 256u : CNA_V6_FULL_HISTORY_ODDS;
         g_fill_reseed_k = (pass >= 2) ? 16 : 1;
         g_fill_draw_b = (pass == 3);
+        g_fill_hash_words = (pass == 4);
         HC128_State r1, r2;
         HC128_Init(&r1, seed, seed + 16); HC128_NextKeys(&r1);
         HC128_Init(&r2, seed, seed + 16); HC128_NextKeys(&r2);
@@ -249,6 +260,7 @@ static bool chain_fill_self_check(void)
     g_fill_odds = CNA_V6_FULL_HISTORY_ODDS;
     g_fill_reseed_k = 1;
     g_fill_draw_b = false;
+    g_fill_hash_words = 0;
     return true;
 }
 
@@ -268,6 +280,7 @@ static void chain_fill(unsigned char *salt, int gen, uint64_t gid)
     g_fill_odds = (gen == 11 || gen == 13 || gen == 14 || gen == 15) ? 256u : CNA_V6_FULL_HISTORY_ODDS;  /* 12 = D1 alone */
     g_fill_reseed_k = (gen == 14 || gen == 15) ? 16 : 1;
     g_fill_draw_b = (gen == 15);
+    g_fill_hash_words = (gen == 14 || gen == 15) ? 1u : 0u;
     if (gen == 5) chain_fill_v5(salt, &rng);
     else if (g_fill_runahead) chain_fill_v6_run(salt, &rng);
     else          chain_fill_v6(salt, &rng);

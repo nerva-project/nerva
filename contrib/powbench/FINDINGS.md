@@ -10,7 +10,7 @@ the code next to them does not have, and commit messages carry figures nobody
 has reproduced. Every entry below names how it was checked. Entries that rest
 on an unreproduced claim live in "Open questions", not here.
 
-## Current state, 2026-10-08: read this first
+## Current state, 2026-10-13: read this first
 
 Findings are kept in the order they were made, and many later ones correct
 earlier ones; the later finding wins and the correction is noted where it
@@ -26,7 +26,10 @@ superseded.** This section is the summary of what holds now.
 - v6's chain fill, with every pick drawn from full history (D3, F73) and
   HC-128 reseeded every 16th block instead of every block (F84, F85),
   written as plain loops (F87) and pinned by a known-answer test run whenever
-  a database is opened (F85).
+  a database is opened (F85). All four picks of each message read the picked
+  block's hash: the first all 32 bytes, the other three an 8-byte word that
+  rotates with the message count (F93). v13 still reads timestamp, cumulative
+  difficulty and coins.
 - The per-nonce draws reach the hash only through one step count,
   `(xx-1)*yy + iters`, in [12, 119] (F58), so cost per nonce is close to
   uniform and there is nothing to screen for.
@@ -40,8 +43,9 @@ superseded.** This section is the summary of what holds now.
 | GPU, RTX 3050 against 7950X | CPU better by 4.9x when the CPU feeds the card, 6.7x when the card does everything (measured) | F84, F86 |
 | GPU, by component | core about 10.7x, AES about 4.2x, chain fill 1.7x to 2.6x against a competent kernel | F78 to F80, F88 |
 | cross-CPU spread, one thread, real nonce | about 2.42x against a 2.50x limit; the i7-7700HQ gains only 1.26x from the reseed change | F84 |
-| ASIC | bound by the 16,384 random reads per nonce, not by the cipher | F65 |
-| pool resistance | a miner needs the 237 MB block cache, not a full node | F71 |
+| chain fill prefetch | v14 fill 1.38x faster on all threads, 1.11x on one; v13 unchanged | F93 |
+| ASIC | bound by the 16,384 random reads per nonce, all into the incompressible hash table, not by the cipher | F65, F93 |
+| pool resistance | a miner needs the block hashes, 142 MB at 4.44M blocks, not a full node | F71, F93 |
 
 **Closed, each by measurement or analysis:** the floating-point stage (F37
 to F41; removed, archived at tag `archive/cna-v8-fp-stage`), a different pad
@@ -55,9 +59,10 @@ full load) suggests it would favour a card.
 
 **Validation:** known-answer vectors for v10, v11, v13 and v14 at every
 startup, a known-answer test for the chain fill at every database open,
-`t_v8_grid` over all 1,600 draws, two local testnet rounds across the fork
-(F49, and F90 for v8 as it now stands), and an independent review of the
-`src/` changes (F92). Alternative chains more than 256
+`t_v8_grid` over all 1,600 draws, local testnet rounds across the fork (F49,
+F90, and F93 for v8 as it now stands), an independent review of the `src/`
+changes (F92), and 0xROOTPLS's second review, whose two changes are F93. Alternative
+chains more than 256
 blocks past a split cannot be checked by this PoW (F90); that limit is now a
 deliberate rule, in a separate PR (F91).
 
@@ -139,7 +144,8 @@ loops. So the post-fill state depends on the salt's *content*.
 A screener cannot fast-forward the keystream to learn the parameters. It has to
 produce the salt, which needs the block cache, which needs a full node.
 *Corrected 2026-10-07, F71: it needs the block cache, which is 237 MB of
-derived data and NOT a full node. The screening conclusion is unaffected.*
+derived data and NOT a full node. The screening conclusion is unaffected. For
+v14 it is the 142 MB of block hashes, F93.*
 
 *Consequence:* v5's 4.7x cost variance is safe because of this feedback, not
 because of luck. Any v8 change that widens `xx`/`yy` or moves parameter
@@ -1484,7 +1490,8 @@ a random-access storage bandwidth problem, which is a server rather than a chip,
 and the economics stop being ASIC economics. It is the same mechanism as the
 pool resistance: you cannot mine without holding the block cache, and the
 requirement scales linearly with hashrate. *Corrected 2026-10-07, F71: that is
-237 MB of derived data, not a full node, so a thin client is possible.*
+237 MB of derived data, not a full node, so a thin client is possible. For v14
+it is the 142 MB of block hashes, F93.*
 
 **Note which way v15 moves it: 1.6x to 1.8x, in the attacker's favour**, because
 it adds work to the half they can specialise and leaves the half they cannot
@@ -4286,6 +4293,12 @@ database that grows**, which is F38's original claim, now the only one standing.
 The reseeds remain load-bearing against GPUs for F64's amortisation reason, but
 that is a different machine and a different argument.
 
+*Corrected 2026-10-13, F93: as this was written, three of each message's four
+reads were timestamp, cumulative difficulty and coins, which compress to side
+tables small enough to sit on an ASIC's die, leaving 4,096 DRAM reads per
+nonce. v14 now reads the block hash for all four, so all 16,384 go to the
+incompressible hash table and this conclusion holds as stated.*
+
 ### F66. The window is a GPU gift too, F62's gather figures were truncated, and P5 was wrong without moving the criterion it was written for
 
 *2026-10-07, the first measurement under [D3-ODDS-PREREG.md](D3-ODDS-PREREG.md),
@@ -4696,6 +4709,11 @@ argument rather than a measurement.
 *2026-10-07, from the code and arithmetic rather than a bench. It corrects a
 premise this file states in two places and that the project's roadmap was built
 on.*
+
+*Corrected 2026-10-13, F93: v14 no longer reads timestamp, diff_lo or coins.
+All four picks read the block hash, so a v14 miner needs the 142 MB of hashes,
+which do not compress, and v13 still needs the 237 MB below. The barrier is now
+set by what the algorithm must read.*
 
 #### 1. The claim, and why it is wrong
 
@@ -6454,6 +6472,117 @@ can make an invalid block look valid.
 reachable on testnet and stagenet; handled by PR #163. The v14 path refetches on
 every call and is not affected.
 
+### F93. 0xROOTPLS's second review: prefetch the field each pick reads, and make every pick read the hash
+
+*2026-10-13. [0xROOTPLS](https://github.com/0xROOTPLS) re-reviewed PR #162 at
+`4ac0516` on the same Ryzen 5 5600G as the first review (6 cores, 16 MB L3,
+DDR4-3200), wrote a tuned v14 miner bit-exact against
+`cn_slow_hash_v14_chain` and reported where stock code leaves speed and where
+the design leaks. Two of its items changed the code, each checked here as
+described. Its miner figures were not reproduced and are Open question 10.*
+
+#### 1. The fill prefetched the wrong cache line
+
+`cna_v6_data_run_ahead` prefetched `&cache[idx]`, the first line of a 56-byte
+`block_cache_data` entry, then read one field of it. Entries start at every
+multiple of 8 within a 64-byte line, so the field read sits on the next line
+for 4 of the 8 starting offsets for the timestamp, 5 for diff_lo and 6 for
+coins, and the 32-byte hash spans two lines for 3 of 8. Those reads missed.
+The loop now prefetches the field each pick reads, and both ends of the hash.
+A prefetch cannot change a result.
+
+Measured here: the daemon's own function, extracted verbatim from the old and
+new trees into one benchmark, over a 4.435M-entry cache on the 7950X, five
+interleaved rounds per row.
+
+| | old fills/s | new fills/s | |
+|---|---|---|---|
+| v14, 32 threads | 36,652 | 50,422 | **1.376x** |
+| v14, 16 threads | 27,302 | 30,801 | 1.13x |
+| v14, 1 thread | 2,528 | 2,796 | 1.11x |
+| v13, 32 threads | 23,839 | 23,773 | 1.00x |
+
+The review reported 1.38x on the fill and 1.24x on a whole nonce on its machine;
+the whole nonce was not timed here. v13 does not move because 95% of its picks
+land in the 100,000-block window, which stays in L3. Old and new produced the
+same salt and cipher state on every seed compared, the startup known-answer
+test passed, and a copy of the live mainnet database resynced 6,400 blocks
+(to 4,441,009) with `NERVA_SALT_SELFCHECK=1`, passing all 64 self-checks.
+`chain_fill.h`, `t_v8_fill.cpp` and `t_fill_gpu.cpp` prefetch the same way, so
+their CPU columns describe the daemon.
+
+#### 2. Three of the four picks read data that compresses
+
+Each 64-byte message took the hash of pick 0 and, from picks 1 to 3, the
+timestamp, the low 64 bits of cumulative difficulty and the generated coins.
+Only the hash is incompressible. The review measured the other three over the
+real chain in 16-block groups: timestamp deltas fit 16 bits in every group,
+diff_lo deltas fit 32 bits in 98.9%, and coins is constant in 62% of groups.
+The last has a cause in the code: `coins` is `already_generated_coins`, which
+`compute_generated_coins` (`blockchain.h`) saturates at `MONEY_SUPPLY`,
+2^64 - 1. Nerva's supply has passed that value, so every block since then
+stores the same number. The saturation was checked here; the group statistics
+are the review's.
+
+So the three small picks fit in side tables of roughly 30 to 40 MB, the
+review's estimate, which an ASIC can hold on die. It would then make one DRAM
+read per message, 4,096 per nonce, not the 16,384 F65 rests on. F71 had already
+noted that those 24 bytes delta-code; it had not drawn the ASIC consequence.
+
+**The change, v14 only.** Picks 1 to 3 read an 8-byte word of the picked
+block's hash, word `(j + count) % 4` for pick j of message `count`. Pick 0
+already needs whole hashes, so a v14 miner's whole working set is the hash
+table, 142 MB at 4.44M blocks, and none of it compresses. Rotating the word
+means an on-die copy of one word (35 MB) serves a quarter of the small picks,
+not every read of one pick. `CNA_V6_HASH_WORDS_V14` is 1; `CNA_V6_HASH_WORDS`
+is 0 and a `static_assert` holds it there, because v13 validates mainnet.
+
+**Checked:**
+
+- The independent generator `t_fill_kat.cpp` carries the change. Its v13 row
+  reproduces the shipped `want_v13`, and a control row (v14's odds and reseed,
+  reading block fields) reproduces the previous `want_v14`, so the new rule is
+  the only difference. The new `want_v14` is pinned in `db_lmdb.cpp` and both
+  daemon loops match it at startup.
+- v13 is unchanged: on the mainnet copy, 400 popped blocks resynced to
+  4,441,032 with 64 of 64 self-checks and no errors, and the log names the fill
+  (`picks read block fields`).
+- `t_v14_longhash` passes the new argument to its fake database, which folds
+  it into the salt and checks it directly. The pinned hashes were regenerated
+  with `--print`; the four corner cases keep their draws, because the fake's
+  generator state does not depend on the arguments, and `--search` finds the
+  same seeds. 1,092 checks pass on both AES arms.
+- A third local testnet from genesis: two nodes mined to 1,136 across the fork
+  at 1,000, both logged the switch to hash words at the fork, and a third node
+  synced from scratch and agreed on every v14 block compared and on the tip.
+- Cost: the daemon's function with the rule off and on runs at 1.004x at 32
+  threads and 0.98x on one thread, which is noise. `t_fill_gpu` checks the GPU
+  kernel against the CPU bit for bit in both modes; the RTX 3050 fills at the
+  same rate either way (12,827 against 12,764 fills/s), and the CPU stays about
+  3.6x ahead on the fill.
+
+#### 3. What it changes in F65 and F71
+
+F65's conclusion now holds as written: all 16,384 reads go to the hash table.
+F71's barrier becomes 142 MB for v14, set by what the algorithm must read
+rather than by a struct, and it grows 32 bytes a block, about 17 MB a year.
+Growing it further for pool resistance stays declined, for F71's reasons in
+section 4.
+
+#### 4. The rest of the review, not taken
+
+- **A 256-message run-ahead with the cache split by field onto 2 MB pages.**
+  The review reports the fill at 1.53x stock against 1.38x for the prefetch
+  alone. That is about 11% more for restructuring the consensus loop, so it is
+  a candidate for a later verification change, not this PR.
+- **Folding the `s4` salt pass into finalize, and VAES.** Miner-side, and it
+  would change the v8 core the hash vectors pin.
+- **Reported negative results:** the 8-nonce SIMD fill, the review's biggest
+  win in round 1, loses with the real cache (12.5K against 17.3K fills/s at
+  12 threads); 1 GB pages could not be allocated on Windows 10 19045.
+- **MSVC builds get no prefetch.** Nerva does not build with MSVC, and clang
+  defines `__GNUC__`.
+
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
 `contrib/hf14checks/CMakeLists.txt` names the resized translation units
@@ -6543,6 +6672,16 @@ remote peer, is the intended anti-Sybil behaviour and is unchanged.
    Step 1 measured +0.67 ms at 64K against a pre-registered +0.5 ms ceiling,
    and the 9.4 ns/step slope shows the chase stays in L2 at a 1 MB pad.
    Steps 2 and 3 were not run.
+10. **How far a tuned miner beats stock v14.** 0xROOTPLS built one for F93's review (the
+    prefetch fix, a 256-message run-ahead, the cache split by field on 2 MB
+    pages, the `s4` pass folded into finalize, VAES) and reports 11,537 H/s
+    against 8,484 for stock with the prefetch fix, 1.36x, on a 5600G at 12
+    threads, bit-exact against `cn_slow_hash_v14_chain`. It also puts that
+    machine's DRAM ceiling near 366M random reads/s, about 22K H/s, so the
+    tuned miner sits at about half and the rest is compute. Not reproduced
+    here, and measured before F93's hash-words change, which keeps the read
+    count and so should not move it. v13's tuned miner reached 5.27x
+    ([V6-MINER-LOG.md](V6-MINER-LOG.md)).
 
 ## Reproducing
 
@@ -6583,6 +6722,16 @@ remote peer, is the intended anti-Sybil behaviour and is unchanged.
     # exist to catch. Generate those from master, in a worktree if need be.
     gcc ... contrib/powbench/t_gen_kat.c <same sources> -o t_gen_kat
     ./t_gen_kat
+
+    # regenerate the chain-fill vectors in cna_v6_data_known_answer_test
+    # (db_lmdb.cpp). The same rule applies, and the v13 row must not change.
+    # The control row is v14's odds and reseed reading block fields; it
+    # isolates what the hash-words rule changes.
+    sh contrib/powbench/build-fill-kat.sh && ./t_fill_kat
+
+    # regenerate t_v14_longhash's pinned vectors, and re-find its corner seeds
+    ./hf14checks-build/t_v14_longhash --print
+    ./hf14checks-build/t_v14_longhash --search
 
 Stop mining and close browsers before running any timing tool. F41's method
 notes apply: a contaminated run reads as an effect of whatever is being varied.

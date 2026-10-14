@@ -58,7 +58,7 @@ static void build_cache(std::vector<ent> &c)
 }
 
 static void fill(const std::vector<ent> &C, HC128_State *rng, unsigned char *out,
-                 uint32_t odds, uint32_t reseed_blocks)
+                 uint32_t odds, uint32_t reseed_blocks, uint32_t hash_words)
 {
     const uint64_t height = KAT_HEIGHT;
     const uint64_t wsz = height > KAT_WINDOW ? KAT_WINDOW : height;
@@ -75,10 +75,18 @@ static void fill(const std::vector<ent> &C, HC128_State *rng, unsigned char *out
     auto block = [&]() {
         HC128_NextKeys(rng);
         for (int k = 0; k < 16; k++) {
-            memcpy(msg,      C[pick()].hash, 32);
-            memcpy(msg + 32, &C[pick()].timestamp, 8);
-            memcpy(msg + 40, &C[pick()].diff_lo,   8);
-            memcpy(msg + 48, &C[pick()].coins,     8);
+            memcpy(msg, C[pick()].hash, 32);
+            if (hash_words) {
+                /* pick p (1 to 3) takes hash bytes 8 * ((p + count) % 4) onward */
+                const unsigned r = (unsigned)(count % 4);
+                memcpy(msg + 32, C[pick()].hash + 8 * ((1 + r) % 4), 8);
+                memcpy(msg + 40, C[pick()].hash + 8 * ((2 + r) % 4), 8);
+                memcpy(msg + 48, C[pick()].hash + 8 * ((3 + r) % 4), 8);
+            } else {
+                memcpy(msg + 32, &C[pick()].timestamp, 8);
+                memcpy(msg + 40, &C[pick()].diff_lo,   8);
+                memcpy(msg + 48, &C[pick()].coins,     8);
+            }
             memcpy(msg + 56, &count, 8);
             HC128_EncryptMessage(rng, msg, optr, 64);
             optr += 64;
@@ -104,9 +112,12 @@ int main()
     std::vector<ent> C;
     build_cache(C);
 
-    static const struct { const char *name; uint32_t odds, reseed; } cases[] = {
-        { "v13", 13u, 1u },
-        { "v14", 256u, 16u },
+    /* The control row is v14's odds and reseed reading block fields, which no
+     * fork runs; it isolates what hash_words changes. */
+    static const struct { const char *name; uint32_t odds, reseed, hash_words; } cases[] = {
+        { "v13", 13u, 1u, 0u },
+        { "v14", 256u, 16u, 1u },
+        { "control", 256u, 16u, 0u },
     };
     for (const auto &cs : cases) {
         std::vector<unsigned char> buf(262144 + 64);
@@ -116,11 +127,11 @@ int main()
         for (int i = 0; i < 32; i++) seed[i] = (unsigned char)(i * 7 + 3);
         HC128_Init(&rng, seed, seed + 16);
         HC128_NextKeys(&rng);
-        fill(C, &rng, buf.data(), cs.odds, cs.reseed);
+        fill(C, &rng, buf.data(), cs.odds, cs.reseed, cs.hash_words);
         HC128_NextKeys(&rng);
         memcpy(buf.data() + 262144, rng.keystream, 64);
         cn_fast_hash(buf.data(), buf.size(), h);
-        printf("%s odds %u reseed %u: ", cs.name, cs.odds, cs.reseed);
+        printf("%s odds %u reseed %u hash_words %u: ", cs.name, cs.odds, cs.reseed, cs.hash_words);
         for (int i = 0; i < 32; i++) printf("0x%02x%s", (unsigned char)h[i], i < 31 ? "," : "\n");
     }
     return 0;

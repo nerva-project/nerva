@@ -934,7 +934,7 @@ public:
   virtual void get_cna_v3_data(char *out, uint64_t height, uint32_t seed) = 0;
   virtual void get_cna_v4_data(char *out, uint64_t height, uint32_t seed)  = 0;
   virtual void get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t height) = 0;
-  virtual void get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t height, uint32_t odds, uint32_t reseed_blocks) = 0;
+  virtual void get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t height, uint32_t odds, uint32_t reseed_blocks, uint32_t hash_words) = 0;
 
   /**
    * @brief fetch a block by height

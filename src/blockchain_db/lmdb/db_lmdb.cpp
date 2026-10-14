@@ -2757,10 +2757,21 @@ void BlockchainLMDB::get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t
   }
 }
 
+/* The 8 bytes pick j (1 to 3) of message `count` reads from entry e. With
+ * hash_words, a word of e's hash that rotates with the count; otherwise
+ * timestamp, diff_lo or coins. */
+static inline const void *cna_v6_field(const block_cache_data &e, size_t j, uint64_t count,
+                                       uint32_t hash_words)
+{
+  if (hash_words)
+    return e.hash.data + sizeof(uint64_t) * ((j + count) & 3);
+  return j == 1 ? (const void *)&e.timestamp : j == 2 ? (const void *)&e.diff_lo : (const void *)&e.coins;
+}
+
 static void cna_v6_data_reference(const block_cache_data *cache, uint64_t height,
                                   uint64_t window_size, uint64_t window_base,
                                   HC128_State *rng_state, char *out, uint32_t odds,
-                                  uint32_t reseed_blocks)
+                                  uint32_t reseed_blocks, uint32_t hash_words)
 {
   size_t rng_key_idx = 0;
   /* The selector draw happens whether or not its branch is taken, so odds
@@ -2781,15 +2792,12 @@ static void cna_v6_data_reference(const block_cache_data *cache, uint64_t height
     bi = &cache[pick_index()];
     std::memcpy(msg, bi->hash.data, sizeof(crypto::hash));
     msgpos = sizeof(crypto::hash);
-    bi = &cache[pick_index()];
-    std::memcpy(msg + msgpos, &(bi->timestamp), sizeof(uint64_t));
-    msgpos += sizeof(uint64_t);
-    bi = &cache[pick_index()];
-    std::memcpy(msg + msgpos, &(bi->diff_lo), sizeof(uint64_t));
-    msgpos += sizeof(uint64_t);
-    bi = &cache[pick_index()];
-    std::memcpy(msg + msgpos, &(bi->coins), sizeof(uint64_t));
-    msgpos += sizeof(uint64_t);
+    for (size_t j = 1; j < 4; j++)
+    {
+      bi = &cache[pick_index()];
+      std::memcpy(msg + msgpos, cna_v6_field(*bi, j, count, hash_words), sizeof(uint64_t));
+      msgpos += sizeof(uint64_t);
+    }
     std::memcpy(msg + msgpos, &count, sizeof(uint64_t));
     HC128_EncryptMessage(rng_state, msg, optr, sizeof(msg));
     optr += 16 * sizeof(uint32_t);
@@ -2855,7 +2863,7 @@ static inline uint64_t cna_v6_pick(HC128_State *rng_state, size_t *rng_key_idx, 
 static void cna_v6_data_run_ahead(const block_cache_data *cache, uint64_t height,
                                   uint64_t window_size, uint64_t window_base,
                                   HC128_State *rng_state, char *out, uint32_t odds,
-                                  uint32_t reseed_blocks)
+                                  uint32_t reseed_blocks, uint32_t hash_words)
 {
   size_t rng_key_idx = 0;
   unsigned char msg[64];
@@ -2870,21 +2878,24 @@ static void cna_v6_data_run_ahead(const block_cache_data *cache, uint64_t height
     for (size_t k = 0; k < 16; k++)
     {
       for (size_t j = 0; j < 4; j++)
-      {
         idx[k][j] = cna_v6_pick(rng_state, &rng_key_idx, odds, height, window_size, window_base);
 #if defined(__GNUC__)
-        __builtin_prefetch(&cache[idx[k][j]]);
+      /* Prefetch the field each pick reads, not the entry's first line: a
+       * 56-byte entry puts the field on the next line for most offsets, and
+       * the hash can span two lines. */
+      __builtin_prefetch(cache[idx[k][0]].hash.data);
+      __builtin_prefetch(cache[idx[k][0]].hash.data + sizeof(crypto::hash) - 1);
+      for (size_t j = 1; j < 4; j++)
+        __builtin_prefetch(cna_v6_field(cache[idx[k][j]], j, count + k, hash_words));
 #endif
-      }
       HC128_NextKeys(rng_state);
       std::memcpy(ks[k], rng_state->keystream, sizeof(ks[k]));
     }
     for (size_t k = 0; k < 16; k++)
     {
-      std::memcpy(msg,      cache[idx[k][0]].hash.data, sizeof(crypto::hash));
-      std::memcpy(msg + 32, &cache[idx[k][1]].timestamp, sizeof(uint64_t));
-      std::memcpy(msg + 40, &cache[idx[k][2]].diff_lo,   sizeof(uint64_t));
-      std::memcpy(msg + 48, &cache[idx[k][3]].coins,     sizeof(uint64_t));
+      std::memcpy(msg, cache[idx[k][0]].hash.data, sizeof(crypto::hash));
+      for (size_t j = 1; j < 4; j++)
+        std::memcpy(msg + 24 + 8 * j, cna_v6_field(cache[idx[k][j]], j, count, hash_words), sizeof(uint64_t));
       std::memcpy(msg + 56, &count, sizeof(uint64_t));
 
       /* what HC128_EncryptMessage does for a 64-byte message, with the
@@ -2938,11 +2949,11 @@ static bool cna_v6_data_known_answer_test()
     0x4a,0x47,0x93,0xe9,0x0c,0xf7,0x24,0x1b,0x93,0x8f,0xf4,0xcb,0xdb,0x6d,0xd3,0xf5,
     0x04,0x49,0x45,0x25,0xa5,0x68,0x26,0x86,0xa0,0xcd,0xb8,0x2b,0x66,0x3f,0xdf,0x11};
   static const unsigned char want_v14[32] = {
-    0xa6,0x50,0xa3,0x2c,0xd8,0xa2,0x4d,0x5b,0x90,0x07,0xaa,0xbf,0x40,0xaa,0x51,0xbe,
-    0xa9,0x7a,0x04,0x7f,0xc0,0xf4,0xa3,0x45,0x66,0x00,0xde,0x13,0xac,0x9f,0x73,0x94};
-  static const struct { const char *name; uint32_t odds, reseed; const unsigned char *want; } cases[] = {
-    { "v13", CNA_V6_FULL_HISTORY_ODDS,     CNA_V6_RESEED_BLOCKS,     want_v13 },
-    { "v14", CNA_V6_FULL_HISTORY_ODDS_V14, CNA_V6_RESEED_BLOCKS_V14, want_v14 },
+    0xd5,0xc3,0xac,0xbd,0x22,0xf8,0x41,0x92,0xff,0x8f,0xff,0x71,0x68,0xb6,0x14,0x67,
+    0x4e,0xe5,0x02,0x0e,0x5f,0xff,0xce,0x14,0x96,0x63,0xec,0x4c,0x26,0x5c,0x27,0x61};
+  static const struct { const char *name; uint32_t odds, reseed, hash_words; const unsigned char *want; } cases[] = {
+    { "v13", CNA_V6_FULL_HISTORY_ODDS,     CNA_V6_RESEED_BLOCKS,     CNA_V6_HASH_WORDS,     want_v13 },
+    { "v14", CNA_V6_FULL_HISTORY_ODDS_V14, CNA_V6_RESEED_BLOCKS_V14, CNA_V6_HASH_WORDS_V14, want_v14 },
   };
 
   /* Must match build_cache in t_fill_kat.cpp: splitmix64 from "Nerva", hash
@@ -2981,9 +2992,9 @@ static bool cna_v6_data_known_answer_test()
       HC128_Init(&rng, seed, seed + 16);
       HC128_NextKeys(&rng);
       if (arm == 0)
-        cna_v6_data_reference(cache.data(), height, window_size, window_base, &rng, buf.data(), c.odds, c.reseed);
+        cna_v6_data_reference(cache.data(), height, window_size, window_base, &rng, buf.data(), c.odds, c.reseed, c.hash_words);
       else
-        cna_v6_data_run_ahead(cache.data(), height, window_size, window_base, &rng, buf.data(), c.odds, c.reseed);
+        cna_v6_data_run_ahead(cache.data(), height, window_size, window_base, &rng, buf.data(), c.odds, c.reseed, c.hash_words);
       HC128_NextKeys(&rng);
       std::memcpy(buf.data() + CN_SALT_MEMORY, rng.keystream, 64);
       const crypto::hash h = crypto::cn_fast_hash(buf.data(), buf.size());
@@ -3000,7 +3011,7 @@ static bool cna_v6_data_known_answer_test()
 }
 
 void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t height, uint32_t odds,
-                                     uint32_t reseed_blocks)
+                                     uint32_t reseed_blocks, uint32_t hash_words)
 {
   CHECK_AND_ASSERT_MES(height > 0, , "get_cna_v6_data called with height == 0");
   /* Zero would divide by zero; a value not dividing 256 would skip the final
@@ -3023,6 +3034,8 @@ void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t
                 "v13 reseeds after every block; it validates mainnet");
   static_assert(CNA_V6_RESEED_BLOCKS_V14 >= 1 && 256 % CNA_V6_RESEED_BLOCKS_V14 == 0,
                 "the last block must still reseed: see CNA_V6_RESEED_BLOCKS_V14");
+  static_assert(CNA_V6_HASH_WORDS == 0,
+                "v13 reads timestamp, diff_lo and coins; it validates mainnet");
 
   /* Log each distinct odds value once, so the log shows which fill is
    * running. Logs again when a fork changes it. */
@@ -3032,7 +3045,8 @@ void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t
     if (prev != odds && announced.compare_exchange_strong(prev, odds, std::memory_order_relaxed))
       MGINFO("chain fill: full-history odds " << odds << " of 256"
              << (odds >= 256 ? ", window unused" : ", windowed")
-             << ", reseed every " << reseed_blocks << " block(s)");
+             << ", reseed every " << reseed_blocks << " block(s)"
+             << (hash_words ? ", picks read hash words" : ", picks read block fields"));
   }
   const uint64_t window_size = (height > (uint64_t)CNA_V6_WINDOW_BLOCKS_V13) ? (uint64_t)CNA_V6_WINDOW_BLOCKS_V13 : height;
   const uint64_t window_base = height - window_size;
@@ -3051,13 +3065,13 @@ void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t
     rng_before = *rng_state;
     ref_out.resize(CN_SALT_MEMORY);
     cna_v6_data_reference(m_block_cache.data(), height, window_size, window_base,
-                          rng_state, ref_out.data(), odds, reseed_blocks);
+                          rng_state, ref_out.data(), odds, reseed_blocks, hash_words);
     rng_after_ref = *rng_state;
     *rng_state = rng_before;
   }
 
   cna_v6_data_run_ahead(m_block_cache.data(), height, window_size, window_base,
-                        rng_state, out, odds, reseed_blocks);
+                        rng_state, out, odds, reseed_blocks, hash_words);
 
   if (do_check)
   {

@@ -56,6 +56,8 @@
  *   t_v8_fill [height] [seconds]
  *   t_v8_fill [height] [seconds] reseed    RESEED-PREREG.md step 1 only
  *   t_v8_fill [height] [seconds] draw      DRAW-PREREG.md step 1 only
+ *   ... words                              any mode: picks 1 to 3 read hash
+ *                                          words, as v14 does
  *
  * Build: sh contrib/powbench/build-v8-fill.sh
  */
@@ -105,6 +107,15 @@ static const uint32_t g_odds[NARMS] = {
 };
 
 static std::vector<blk_ent> g_cache;
+
+/* argv "words": picks 1 to 3 read hash word (j + count) % 4 of the picked
+ * block, as v14 does, instead of timestamp, diff_lo and coins. */
+static uint32_t g_hash_words = 0;
+static inline const void *field(const blk_ent &e, int j, uint64_t count)
+{
+    if (g_hash_words) return e.hash + 8 * ((j + count) & 3);
+    return j == 1 ? (const void *)&e.timestamp : j == 2 ? (const void *)&e.diff_lo : (const void *)&e.coins;
+}
 
 static double now_s(void)
 {
@@ -160,10 +171,9 @@ static void fill_serial(unsigned char *out, HC128_State *rng, uint32_t height, i
         HC128_NextKeys(rng);
         for (size_t k = 0; k < 16; k++)
         {
-            memcpy(msg,      C[PICK_S()].hash, 32);
-            memcpy(msg + 32, &C[PICK_S()].timestamp, 8);
-            memcpy(msg + 40, &C[PICK_S()].diff_lo,   8);
-            memcpy(msg + 48, &C[PICK_S()].coins,     8);
+            memcpy(msg, C[PICK_S()].hash, 32);
+            for (int j = 1; j < 4; j++)
+                memcpy(msg + 24 + 8 * j, field(C[PICK_S()], j, count), 8);
             memcpy(msg + 56, &count, 8);
             HC128_EncryptMessage(rng, msg, optr, 64);
             optr += 64;
@@ -242,19 +252,20 @@ static void fill(unsigned char *out, HC128_State *rng, uint32_t height, int arm,
         for (size_t k = 0; k < 16; k++)
         {
             for (size_t j = 0; j < 4; j++)
-            {
                 idx[k][j] = PICK();
-                __builtin_prefetch(&C[idx[k][j]]);
-            }
+            /* the field each pick reads, as the daemon does */
+            __builtin_prefetch(C[idx[k][0]].hash);
+            __builtin_prefetch(C[idx[k][0]].hash + 31);
+            for (int j = 1; j < 4; j++)
+                __builtin_prefetch(field(C[idx[k][j]], j, count + k));
             HC128_NextKeys(rng);
             memcpy(ks[k], rng->keystream, sizeof(ks[k]));
         }
         for (size_t k = 0; k < 16; k++)
         {
-            memcpy(msg,      C[idx[k][0]].hash, 32);
-            memcpy(msg + 32, &C[idx[k][1]].timestamp, 8);
-            memcpy(msg + 40, &C[idx[k][2]].diff_lo,   8);
-            memcpy(msg + 48, &C[idx[k][3]].coins,     8);
+            memcpy(msg, C[idx[k][0]].hash, 32);
+            for (int j = 1; j < 4; j++)
+                memcpy(msg + 24 + 8 * j, field(C[idx[k][j]], j, count), 8);
             memcpy(msg + 56, &count, 8);
             for (size_t j = 0; j < 16; j++)
             {
@@ -305,6 +316,8 @@ int main(int argc, char **argv)
 {
     uint32_t height = (argc > 1) ? (uint32_t)strtoul(argv[1], NULL, 10) : 4500000u;
     double seconds  = (argc > 2) ? atof(argv[2]) : 6.0;
+    for (int a = 3; a < argc; a++)
+        if (strcmp(argv[a], "words") == 0) g_hash_words = 1;
     std::vector<unsigned char> salt(SALT_BYTES);
     uint64_t cyc[NARMS] = {0}, n[NARMS] = {0};
     double ms[NARMS], hz;
@@ -313,9 +326,10 @@ int main(int argc, char **argv)
 
     if (height < CNA_V6_WINDOW_BLOCKS + 1) height = CNA_V6_WINDOW_BLOCKS + 1;
     printf("v8 chain fill: is it memory bound or HC-128 bound?\n");
-    printf("height %u, cache %.0f MB, window %.1f MB, %.0f s total\n",
+    printf("height %u, cache %.0f MB, window %.1f MB, %.0f s total, picks read %s\n",
            height, (double)height * sizeof(blk_ent) / 1048576.0,
-           (double)CNA_V6_WINDOW_BLOCKS * sizeof(blk_ent) / 1048576.0, seconds);
+           (double)CNA_V6_WINDOW_BLOCKS * sizeof(blk_ent) / 1048576.0, seconds,
+           g_hash_words ? "hash words" : "block fields");
     fflush(stdout);
 
     cache_init(height);

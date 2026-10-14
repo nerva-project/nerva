@@ -7,7 +7,8 @@
  * lives in neither part. So this runs the fill itself.
  *
  * WHAT. One work-item computes one complete fill exactly as v14 does:
- * odds 256, a reseed after every 16th block (F85), the midpoint reseed, the
+ * odds 256, a reseed after every 16th block (F85), picks 1 to 3 reading a
+ * rotating 8-byte word of the picked block's hash, the midpoint reseed, the
  * 256 KB salt written to global memory, the final keystream folded into the
  * result. HC-128's state is in __local, the placement F78 and F80 found best.
  * The block cache is 4.5M synthetic 56-byte entries in VRAM.
@@ -21,6 +22,7 @@
  * is stored to global memory, so no part of the fill is dead (F79, F80).
  *
  *   t_fill_gpu [seconds]
+ *   t_fill_gpu [seconds] fields     picks 1 to 3 read timestamp, diff_lo, coins
  *
  * Build: sh contrib/powbench/build-fill-gpu.sh
  */
@@ -119,6 +121,15 @@ static inline uint64_t pick(HC128_State *rng, size_t *ki, int draw)
     return g_hot ? 0 : i_;
 }
 
+/* 1 is v14: pick j (1 to 3) of message `count` reads hash word (j + count) % 4.
+ * argv "fields" sets 0, the block fields. */
+static uint32_t g_hash_words = 1;
+static inline const void *field(const blk_ent &e, int j, uint64_t count)
+{
+    if (g_hash_words) return e.hash + 8 * ((j + count) & 3);
+    return j == 1 ? (const void *)&e.timestamp : j == 2 ? (const void *)&e.diff_lo : (const void *)&e.coins;
+}
+
 /* ---- CPU serial reference: the form the GPU kernel follows ---- */
 static uint32_t fill_serial(unsigned char *out, const uint32_t seed[8], int draw)
 {
@@ -133,10 +144,9 @@ static uint32_t fill_serial(unsigned char *out, const uint32_t seed[8], int draw
     auto block = [&]() {
         HC128_NextKeys(&rng);
         for (int k = 0; k < 16; k++) {
-            memcpy(msg,      C[pick(&rng, &ki, draw)].hash, 32);
-            memcpy(msg + 32, &C[pick(&rng, &ki, draw)].timestamp, 8);
-            memcpy(msg + 40, &C[pick(&rng, &ki, draw)].diff_lo,   8);
-            memcpy(msg + 48, &C[pick(&rng, &ki, draw)].coins,     8);
+            memcpy(msg, C[pick(&rng, &ki, draw)].hash, 32);
+            for (int j = 1; j < 4; j++)
+                memcpy(msg + 24 + 8 * j, field(C[pick(&rng, &ki, draw)], j, count), 8);
             memcpy(msg + 56, &count, 8);
             HC128_EncryptMessage(&rng, msg, optr, 64);
             optr += 64;
@@ -187,19 +197,20 @@ static uint32_t fill_runahead(unsigned char *out, const uint32_t seed[8], int dr
         for (size_t k = 0; k < 16; k++)
         {
             for (size_t j = 0; j < 4; j++)
-            {
                 idx[k][j] = pick(&rng, &ki, draw);
-                __builtin_prefetch(&C[idx[k][j]]);
-            }
+            /* the field each pick reads, as the daemon does */
+            __builtin_prefetch(C[idx[k][0]].hash);
+            __builtin_prefetch(C[idx[k][0]].hash + 31);
+            for (int j = 1; j < 4; j++)
+                __builtin_prefetch(field(C[idx[k][j]], j, count + k));
             HC128_NextKeys(&rng);
             memcpy(ks[k], rng.keystream, sizeof(ks[k]));
         }
         for (size_t k = 0; k < 16; k++)
         {
-            memcpy(msg,      C[idx[k][0]].hash, 32);
-            memcpy(msg + 32, &C[idx[k][1]].timestamp, 8);
-            memcpy(msg + 40, &C[idx[k][2]].diff_lo,   8);
-            memcpy(msg + 48, &C[idx[k][3]].coins,     8);
+            memcpy(msg, C[idx[k][0]].hash, 32);
+            for (int j = 1; j < 4; j++)
+                memcpy(msg + 24 + 8 * j, field(C[idx[k][j]], j, count), 8);
             memcpy(msg + 56, &count, 8);
             for (size_t j = 0; j < 16; j++)
             {
@@ -376,11 +387,11 @@ static const char *K_SRC =
 "                    __global const uint *e0 = cache + (size_t)pick(P, Q, &counter, ks, &ki, draw, height) * 14;\n"
 "                    for (i = 0; i < 8; i++) msg[i] = e0[i];\n"
 "                    __global const uint *e1 = cache + (size_t)pick(P, Q, &counter, ks, &ki, draw, height) * 14;\n"
-"                    msg[8] = e1[8]; msg[9] = e1[9];\n"
+"                    { const uint w = HASH_WORDS ? 2u * ((1u + count) & 3u) : 8u; msg[8] = e1[w]; msg[9] = e1[w + 1]; }\n"
 "                    __global const uint *e2 = cache + (size_t)pick(P, Q, &counter, ks, &ki, draw, height) * 14;\n"
-"                    msg[10] = e2[10]; msg[11] = e2[11];\n"
+"                    { const uint w = HASH_WORDS ? 2u * ((2u + count) & 3u) : 10u; msg[10] = e2[w]; msg[11] = e2[w + 1]; }\n"
 "                    __global const uint *e3 = cache + (size_t)pick(P, Q, &counter, ks, &ki, draw, height) * 14;\n"
-"                    msg[12] = e3[12]; msg[13] = e3[13];\n"
+"                    { const uint w = HASH_WORDS ? 2u * ((3u + count) & 3u) : 12u; msg[12] = e3[w]; msg[13] = e3[w + 1]; }\n"
 "                    msg[14] = count; msg[15] = 0;\n"
 "                    NEXTK();\n"
 "                    for (i = 0; i < 16; i++) salt[o / 4 + i] = msg[i] ^ ks[i];\n"
@@ -516,11 +527,11 @@ static const char *K_SRC =
 "                    __global const uint *e0 = cache + (size_t)SB_PICK() * 14;\n"
 "                    for (i = 0; i < 8; i++) msg[i] = e0[i];\n"
 "                    __global const uint *e1 = cache + (size_t)SB_PICK() * 14;\n"
-"                    msg[8] = e1[8]; msg[9] = e1[9];\n"
+"                    { const uint w = HASH_WORDS ? 2u * ((1u + count) & 3u) : 8u; msg[8] = e1[w]; msg[9] = e1[w + 1]; }\n"
 "                    __global const uint *e2 = cache + (size_t)SB_PICK() * 14;\n"
-"                    msg[10] = e2[10]; msg[11] = e2[11];\n"
+"                    { const uint w = HASH_WORDS ? 2u * ((2u + count) & 3u) : 10u; msg[10] = e2[w]; msg[11] = e2[w + 1]; }\n"
 "                    __global const uint *e3 = cache + (size_t)SB_PICK() * 14;\n"
-"                    msg[12] = e3[12]; msg[13] = e3[13];\n"
+"                    { const uint w = HASH_WORDS ? 2u * ((3u + count) & 3u) : 12u; msg[12] = e3[w]; msg[13] = e3[w + 1]; }\n"
 "                    msg[14] = count; msg[15] = 0;\n"
 "                    SB_ADV();\n"
 "                    for (i = 0; i < 16; i++) salt[o / 4 + i] = msg[i] ^ cur[i];\n"
@@ -562,7 +573,8 @@ int main(int argc, char **argv)
         if (strncmp(argv[i], "k=", 2) == 0) {
             const unsigned kk = (unsigned)atoi(argv[i] + 2);
             if (kk >= 1 && 256 % kk == 0) g_reseed_k = kk;
-        }
+        } else if (strcmp(argv[i], "fields") == 0)
+            g_hash_words = 0;
     uint32_t sink = 0;
     const int hw = 32;
     /* draw 3 is S computed by fill_buf: the CPU side treats it as S */
@@ -570,8 +582,8 @@ int main(int argc, char **argv)
     static const char *const dn[4] = { "S, shipped", "B, mulhi no selector", "S-buf, S kernel buffered",
                                        "S-buf2, buffered branch-free" };
 
-    printf("v14 chain fill, whole, CPU against GPU. k = %u, odds 256, height %u\n",
-           RESEED_K, HEIGHT);
+    printf("v14 chain fill, whole, CPU against GPU. k = %u, odds 256, height %u, picks read %s\n",
+           RESEED_K, HEIGHT, g_hash_words ? "hash words" : "block fields");
     fflush(stdout);
     cache_init();
 
@@ -646,8 +658,8 @@ int main(int argc, char **argv)
     cl_command_queue q = cl.CreateCommandQueue(ctx, dev, 0, &err);
     size_t sl = strlen(K_SRC);
     cl_program prog = cl.CreateProgramWithSource(ctx, 1, &K_SRC, &sl, &err);
-    char bopt[64];
-    snprintf(bopt, sizeof(bopt), "-cl-std=CL1.2 -DRESEED_K=%uu", g_reseed_k);
+    char bopt[96];
+    snprintf(bopt, sizeof(bopt), "-cl-std=CL1.2 -DRESEED_K=%uu -DHASH_WORDS=%uu", g_reseed_k, g_hash_words);
     if (cl.BuildProgram(prog, 1, &dev, bopt, NULL, NULL) != CL_SUCCESS) {
         size_t n = 0; cl.GetProgramBuildInfo(prog, dev, CL_PROGRAM_BUILD_LOG, 0, NULL, &n);
         std::string log(n, 0);

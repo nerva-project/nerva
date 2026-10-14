@@ -129,6 +129,13 @@ typedef void (*cn_v8_salt_fn)(void *user, const unsigned char seed[32],
  * block still reseeds. */
 #define CNA_V6_RESEED_BLOCKS 1U
 #define CNA_V6_RESEED_BLOCKS_V14 16U
+
+/* What picks 1 to 3 of each chain-fill message read. 0: timestamp, diff_lo
+ * and coins, which compress well. 1: an 8-byte word of the picked block's
+ * hash, rotating with the message count, so every pick reads incompressible
+ * data. v13 keeps 0 because it validates mainnet. */
+#define CNA_V6_HASH_WORDS 0U
+#define CNA_V6_HASH_WORDS_V14 1U
 #define CN_RANDOM_VALUES 32
 
 enum {

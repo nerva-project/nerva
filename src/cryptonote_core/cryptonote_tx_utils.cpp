@@ -686,9 +686,10 @@ namespace cryptonote
     HC128_State rng_state;
     HC128_Init(&rng_state, (unsigned char *)blob_hash.data, (unsigned char *)blob_hash.data + 16);
 
-    // v13's odds and reseed interval validate mainnet and must not change.
+    // v13's fill parameters validate mainnet and must not change.
     db.get_cna_v6_data(context->salt, &rng_state, stable_height,
-                       (uint32_t)CNA_V6_FULL_HISTORY_ODDS, (uint32_t)CNA_V6_RESEED_BLOCKS);
+                       (uint32_t)CNA_V6_FULL_HISTORY_ODDS, (uint32_t)CNA_V6_RESEED_BLOCKS,
+                       (uint32_t)CNA_V6_HASH_WORDS);
 
     // Build 32-byte program seed: blob_hash XOR first 32 bytes of chain salt.
     // This seed is unique per (height, nonce) and requires the blockchain DB,
@@ -729,11 +730,12 @@ namespace cryptonote
       HC128_State rng_state;
       HC128_Init(&rng_state, const_cast<unsigned char *>(seed), const_cast<unsigned char *>(seed) + 16);
 
-      // v6's chain fill with every pick drawn from full history and a reseed
-      // after every 16th block.
+      // v6's chain fill with every pick drawn from full history, a reseed
+      // after every 16th block, and every pick read from the hash.
       c->db->get_cna_v6_data(salt_out, &rng_state, c->stable_height,
                              (uint32_t)CNA_V6_FULL_HISTORY_ODDS_V14,
-                             (uint32_t)CNA_V6_RESEED_BLOCKS_V14);
+                             (uint32_t)CNA_V6_RESEED_BLOCKS_V14,
+                             (uint32_t)CNA_V6_HASH_WORDS_V14);
 
       HC128_NextKeys(&rng_state);
       size_t rng_key_idx = 0;

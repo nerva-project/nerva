@@ -17,8 +17,10 @@ TOOLS AND HOW TO BUILD THEM (run from the repository root)
                                           chain fill's known-answer test.
   sh contrib/powbench/build-v8-fill.sh    t_v8_fill: chain fill cost on the CPU,
                                           reseed interval and draw variants.
+                                          Add "words" for v14's hash-word picks.
   sh contrib/powbench/build-fill-gpu.sh   t_fill_gpu: the whole v14 fill on a GPU
                                           against the CPU, gated bit for bit.
+                                          Add "fields" for block-field picks.
   sh contrib/powbench/build-hc128.sh      t_hc128: HC-128 throughput, CPU and GPU.
   sh contrib/powbench/build-aes.sh        t_aes: AES throughput, AES-NI and GPU
                                           table placements.
