@@ -804,10 +804,10 @@ void BlockchainLMDB::remove_block()
   if ((result = mdb_cursor_del(m_cur_block_info, 0)))
       throw1(DB_ERROR(lmdb_error("Failed to add removal of block info to db transaction: ", result).c_str()));
 
-  // m_block_cache feeds the proof of work seed by height (get_cna_v2_data,
+  // The block cache feeds the proof of work seed by height (get_cna_v2_data,
   // get_cna_v6_data). A popped block left in it makes later seeds read a chain
   // that no longer exists, and every block after that fails as bad PoW.
-  // Lower the height, keep the vector: readers resolve a height before taking
+  // Lower the height, keep the arrays: readers resolve a height before taking
   // the shared lock, so shrinking could walk one off the end.
   {
     const uint64_t new_height = m_height - 1;
@@ -1515,7 +1515,8 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags, uint3
   // commit the transaction
   txn.commit();
 
-  m_block_cache.reserve(m_height);
+  m_block_hashes.reserve(m_height);
+  m_block_fields.reserve(m_height);
   m_block_cache_height.store(0, std::memory_order_release);
 
   m_open = true;
@@ -1536,7 +1537,8 @@ void BlockchainLMDB::close()
   // FIXME: not yet thread safe!!!  Use with care.
   mdb_env_close(m_env);
 
-  m_block_cache.clear();
+  m_block_fields.clear();
+  m_block_hashes.release();
   m_block_cache_height.store(0, std::memory_order_release);
 
   m_open = false;
@@ -1612,7 +1614,7 @@ void BlockchainLMDB::reset()
   txn.commit();
   m_cum_size = 0;
   m_cum_count = 0;
-  m_block_cache.clear();
+  m_block_fields.clear();
   m_block_cache_height.store(0, std::memory_order_release);
 }
 
@@ -2418,6 +2420,38 @@ void check_error(int err)
     throw0(DB_ERROR(lmdb_error("LMDB cursor error in PoW cache: ", err).c_str()));
 }
 
+void block_hash_array::reserve(uint64_t n)
+{
+  if (n <= m_cap)
+    return;
+  // Grow ahead of the chain, so a syncing node does not reallocate per block.
+  const uint64_t cap = n + std::max<uint64_t>(65536, n / 16);
+  const size_t bytes = cap * sizeof(crypto::hash) + 63;
+  void *base = nullptr;
+  const int tier = crypto::cn_alloc_pages(bytes, &base);
+  if (!base)
+    throw std::bad_alloc();
+  crypto::hash *data = reinterpret_cast<crypto::hash *>((reinterpret_cast<uintptr_t>(base) + 63) & ~(uintptr_t)63);
+  if (m_cap)
+    std::memcpy(data, m_data, m_cap * sizeof(crypto::hash));
+  release();
+  m_base = base;
+  m_bytes = bytes;
+  m_tier = tier;
+  m_data = data;
+  m_cap = cap;
+}
+
+void block_hash_array::release()
+{
+  crypto::cn_free_pages(m_base, m_bytes, m_tier);
+  m_base = nullptr;
+  m_bytes = 0;
+  m_tier = 0;
+  m_data = nullptr;
+  m_cap = 0;
+}
+
 void BlockchainLMDB::build_block_cache(uint64_t height)
 {
   if (m_block_cache_height.load(std::memory_order_acquire) >= height)
@@ -2431,7 +2465,9 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
   if (have >= height)
     return;
 
-  m_block_cache.reserve(height);
+  m_block_hashes.reserve(height);
+  if (m_block_fields.size() < height)
+    m_block_fields.resize(height);
 
   // Read block_info via the standard batch-aware cursor pattern. During batch
   // sync, block_rtxn_start returns the active write txn and its already-open
@@ -2446,7 +2482,7 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
   TXN_PREFIX_RDONLY();
   RCURSOR(block_info);
 
-  // Start from the cached height, not the vector size: remove_block lowers the
+  // Start from the cached height, not the array size: remove_block lowers the
   // height without shrinking, so these slots may hold popped blocks.
   for (uint64_t index = have; index < height; ++index)
   {
@@ -2454,15 +2490,11 @@ void BlockchainLMDB::build_block_cache(uint64_t height)
     if (auto r = mdb_cursor_get(m_cur_block_info, (MDB_val*)&zerokval, &query, MDB_GET_BOTH))
       throw0(DB_ERROR(lmdb_error("Failed to read block_info record for block cache: ", r).c_str()));
     const mdb_block_info *bi = (const mdb_block_info*)query.mv_data;
-    block_cache_data entry;
-    entry.hash      = bi->bi_hash;
-    entry.timestamp = bi->bi_timestamp;
-    entry.diff_lo   = bi->bi_diff_lo;
-    entry.coins     = bi->bi_coins;
-    if (index < m_block_cache.size())
-      m_block_cache[static_cast<size_t>(index)] = entry;
-    else
-      m_block_cache.push_back(entry);
+    m_block_hashes[index] = bi->bi_hash;
+    block_cache_fields &f = m_block_fields[static_cast<size_t>(index)];
+    f.timestamp = bi->bi_timestamp;
+    f.diff_lo   = bi->bi_diff_lo;
+    f.coins     = bi->bi_coins;
   }
 
   m_block_cache_height.store(height, std::memory_order_release);
@@ -2474,11 +2506,11 @@ void BlockchainLMDB::get_cna_v2_data(cn_random_values_t *rv, uint64_t height, ui
   // build_block_cache is a no-op if the cache is already current (called by get_cna_v5_data too).
   build_block_cache(height + 1);
   boost::shared_lock<boost::shared_mutex> cache_lock(m_block_cache_lock);
-  const crypto::hash &h0 = m_block_cache[height].hash;
-  const crypto::hash h1 = m_block_cache[height - (uint64_t)((uint8_t)h0.data[0] ^ (uint8_t)h0.data[16])].hash;
-  const crypto::hash h2 = m_block_cache[height - (uint64_t)((uint8_t)h0.data[4] ^ (uint8_t)h0.data[20])].hash;
-  const crypto::hash h3 = m_block_cache[height - (uint64_t)((uint8_t)h0.data[8] ^ (uint8_t)h0.data[24])].hash;
-  const crypto::hash h4 = m_block_cache[height - (uint64_t)((uint8_t)h0.data[12] ^ (uint8_t)h0.data[28])].hash;
+  const crypto::hash &h0 = m_block_hashes[height];
+  const crypto::hash h1 = m_block_hashes[height - (uint64_t)((uint8_t)h0.data[0] ^ (uint8_t)h0.data[16])];
+  const crypto::hash h2 = m_block_hashes[height - (uint64_t)((uint8_t)h0.data[4] ^ (uint8_t)h0.data[20])];
+  const crypto::hash h3 = m_block_hashes[height - (uint64_t)((uint8_t)h0.data[8] ^ (uint8_t)h0.data[24])];
+  const crypto::hash h4 = m_block_hashes[height - (uint64_t)((uint8_t)h0.data[12] ^ (uint8_t)h0.data[28])];
 
   uint8_t buffer[16];
   for (size_t i = 0; i < 32; i += 4)
@@ -2622,13 +2654,12 @@ void BlockchainLMDB::get_cna_v4_data(char *salt, uint64_t height, uint32_t seed)
   boost::shared_lock<boost::shared_mutex> cache_lock(m_block_cache_lock);
   std::array<uint32_t, 36864> rand_seq = mt.generate_v4_sequence(seed, (uint32_t)height);
   uint32_t i_config = 0;
-  const block_cache_data *bi;
+  const block_cache_fields *bi;
 
   for (uint32_t i = 0; i < 2048; i++)
   {
     r = rand_seq[i_config++];
-    bi = &m_block_cache[r];
-    std::memcpy(salt + (i * 128), bi->hash.data, 32);
+    std::memcpy(salt + (i * 128), m_block_hashes[r].data, 32);
 
     a = 32;
     b = 64;
@@ -2639,30 +2670,29 @@ void BlockchainLMDB::get_cna_v4_data(char *salt, uint64_t height, uint32_t seed)
       z = rand_seq[i_config++];
       w = rand_seq[i_config++];
 
-      bi = &m_block_cache[x];
+      bi = &m_block_fields[x];
       t = (uint32_t)bi->timestamp;
       std::memcpy(salt + (i * 128) + a, &t, 4);
       a += 4;
 
-      bi = &m_block_cache[y];
+      bi = &m_block_fields[y];
       t = (uint32_t)bi->diff_lo;
       std::memcpy(salt + (i * 128) + a, &t, 4);
       a += 4;
 
-      bi = &m_block_cache[z];
+      bi = &m_block_fields[z];
       t = (uint32_t)(bi->coins >> 32U);
       std::memcpy(salt + (i * 128) + b, &t, 4);
       b += 4;
 
-      bi = &m_block_cache[w];
+      bi = &m_block_fields[w];
       t = (uint32_t)bi->coins;
       std::memcpy(salt + (i * 128) + b, &t, 4);
       b += 4;
     }
 
     r = rand_seq[i_config++];
-    bi = &m_block_cache[r];
-    std::memcpy(salt + (i * 128) + 96, bi->hash.data, 32);
+    std::memcpy(salt + (i * 128) + 96, m_block_hashes[r].data, 32);
   }
 }
 
@@ -2671,7 +2701,7 @@ void BlockchainLMDB::get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t
   // TODO: Do not assume little-endian architecture
   build_block_cache(height);
   boost::shared_lock<boost::shared_mutex> cache_lock(m_block_cache_lock);
-  const block_cache_data *bi;
+  const block_cache_fields *bi;
   size_t rng_key_idx = 0;
   unsigned char msg[64];
   size_t msgpos;
@@ -2682,19 +2712,18 @@ void BlockchainLMDB::get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t
     HC128_NextKeys(rng_state);
  
     for (size_t k = 0; k < 16; k++) {
-        bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
-        std::memcpy(msg, bi->hash.data, sizeof(crypto::hash));
+        std::memcpy(msg, m_block_hashes[HC128_U32(rng_state, &rng_key_idx, height)].data, sizeof(crypto::hash));
         msgpos = sizeof(crypto::hash);
 
-        bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
+        bi = &m_block_fields[HC128_U32(rng_state, &rng_key_idx, height)];
         std::memcpy(msg + msgpos, &(bi->timestamp), sizeof(uint64_t));
         msgpos += sizeof(uint64_t);
 
-        bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
+        bi = &m_block_fields[HC128_U32(rng_state, &rng_key_idx, height)];
         std::memcpy(msg + msgpos, &(bi->diff_lo), sizeof(uint64_t));
         msgpos += sizeof(uint64_t);
 
-        bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
+        bi = &m_block_fields[HC128_U32(rng_state, &rng_key_idx, height)];
         std::memcpy(msg + msgpos, &(bi->coins), sizeof(uint64_t));
         msgpos += sizeof(uint64_t);
 
@@ -2725,19 +2754,18 @@ void BlockchainLMDB::get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t
     HC128_NextKeys(rng_state);
 
     for (size_t k = 0; k < 16; k++) {
-        bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
-        std::memcpy(msg, bi->hash.data, sizeof(crypto::hash));
+        std::memcpy(msg, m_block_hashes[HC128_U32(rng_state, &rng_key_idx, height)].data, sizeof(crypto::hash));
         msgpos = sizeof(crypto::hash);
 
-        bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
+        bi = &m_block_fields[HC128_U32(rng_state, &rng_key_idx, height)];
         std::memcpy(msg + msgpos, &(bi->timestamp), sizeof(uint64_t));
         msgpos += sizeof(uint64_t);
 
-        bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
+        bi = &m_block_fields[HC128_U32(rng_state, &rng_key_idx, height)];
         std::memcpy(msg + msgpos, &(bi->diff_lo), sizeof(uint64_t));
         msgpos += sizeof(uint64_t);
 
-        bi = &m_block_cache[HC128_U32(rng_state, &rng_key_idx, height)];
+        bi = &m_block_fields[HC128_U32(rng_state, &rng_key_idx, height)];
         std::memcpy(msg + msgpos, &(bi->coins), sizeof(uint64_t));
         msgpos += sizeof(uint64_t);
 
@@ -2757,18 +2785,19 @@ void BlockchainLMDB::get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t
   }
 }
 
-/* The 8 bytes pick j (1 to 3) of message `count` reads from entry e. With
- * hash_words, a word of e's hash that rotates with the count; otherwise
+/* The 8 bytes pick j (1 to 3) of message `count` reads from block i. With
+ * hash_words, a word of i's hash that rotates with the count; otherwise
  * timestamp, diff_lo or coins. */
-static inline const void *cna_v6_field(const block_cache_data &e, size_t j, uint64_t count,
-                                       uint32_t hash_words)
+static inline const void *cna_v6_field(const crypto::hash *hashes, const block_cache_fields *fields,
+                                       uint64_t i, size_t j, uint64_t count, uint32_t hash_words)
 {
   if (hash_words)
-    return e.hash.data + sizeof(uint64_t) * ((j + count) & 3);
-  return j == 1 ? (const void *)&e.timestamp : j == 2 ? (const void *)&e.diff_lo : (const void *)&e.coins;
+    return hashes[i].data + sizeof(uint64_t) * ((j + count) & 3);
+  const block_cache_fields &f = fields[i];
+  return j == 1 ? (const void *)&f.timestamp : j == 2 ? (const void *)&f.diff_lo : (const void *)&f.coins;
 }
 
-static void cna_v6_data_reference(const block_cache_data *cache, uint64_t height,
+static void cna_v6_data_reference(const crypto::hash *hashes, const block_cache_fields *fields, uint64_t height,
                                   uint64_t window_size, uint64_t window_base,
                                   HC128_State *rng_state, char *out, uint32_t odds,
                                   uint32_t reseed_blocks, uint32_t hash_words)
@@ -2782,20 +2811,17 @@ static void cna_v6_data_reference(const block_cache_data *cache, uint64_t height
       return HC128_U32(rng_state, &rng_key_idx, height);
     return window_base + HC128_U32(rng_state, &rng_key_idx, window_size);
   };
-  const block_cache_data *bi;
   unsigned char msg[64];
   size_t msgpos;
   unsigned char *optr = (unsigned char*)out;
   uint64_t count = 0;
 
   auto body = [&]() {
-    bi = &cache[pick_index()];
-    std::memcpy(msg, bi->hash.data, sizeof(crypto::hash));
+    std::memcpy(msg, hashes[pick_index()].data, sizeof(crypto::hash));
     msgpos = sizeof(crypto::hash);
     for (size_t j = 1; j < 4; j++)
     {
-      bi = &cache[pick_index()];
-      std::memcpy(msg + msgpos, cna_v6_field(*bi, j, count, hash_words), sizeof(uint64_t));
+      std::memcpy(msg + msgpos, cna_v6_field(hashes, fields, pick_index(), j, count, hash_words), sizeof(uint64_t));
       msgpos += sizeof(uint64_t);
     }
     std::memcpy(msg + msgpos, &count, sizeof(uint64_t));
@@ -2860,7 +2886,7 @@ static inline uint64_t cna_v6_pick(HC128_State *rng_state, size_t *rng_key_idx, 
  * Written as plain loops, not a closure, so the compiler keeps the fill's
  * state in registers. Byte-for-byte identical to cna_v6_data_reference, which
  * the known-answer test and NERVA_SALT_SELFCHECK both check. */
-static void cna_v6_data_run_ahead(const block_cache_data *cache, uint64_t height,
+static void cna_v6_data_run_ahead(const crypto::hash *hashes, const block_cache_fields *fields, uint64_t height,
                                   uint64_t window_size, uint64_t window_base,
                                   HC128_State *rng_state, char *out, uint32_t odds,
                                   uint32_t reseed_blocks, uint32_t hash_words)
@@ -2880,22 +2906,20 @@ static void cna_v6_data_run_ahead(const block_cache_data *cache, uint64_t height
       for (size_t j = 0; j < 4; j++)
         idx[k][j] = cna_v6_pick(rng_state, &rng_key_idx, odds, height, window_size, window_base);
 #if defined(__GNUC__)
-      /* Prefetch the field each pick reads, not the entry's first line: a
-       * 56-byte entry puts the field on the next line for most offsets, and
-       * the hash can span two lines. */
-      __builtin_prefetch(cache[idx[k][0]].hash.data);
-      __builtin_prefetch(cache[idx[k][0]].hash.data + sizeof(crypto::hash) - 1);
+      /* Prefetch exactly what each pick reads. A hash is one line, since the
+       * array is 64-byte aligned. */
+      __builtin_prefetch(hashes[idx[k][0]].data);
       for (size_t j = 1; j < 4; j++)
-        __builtin_prefetch(cna_v6_field(cache[idx[k][j]], j, count + k, hash_words));
+        __builtin_prefetch(cna_v6_field(hashes, fields, idx[k][j], j, count + k, hash_words));
 #endif
       HC128_NextKeys(rng_state);
       std::memcpy(ks[k], rng_state->keystream, sizeof(ks[k]));
     }
     for (size_t k = 0; k < 16; k++)
     {
-      std::memcpy(msg, cache[idx[k][0]].hash.data, sizeof(crypto::hash));
+      std::memcpy(msg, hashes[idx[k][0]].data, sizeof(crypto::hash));
       for (size_t j = 1; j < 4; j++)
-        std::memcpy(msg + 24 + 8 * j, cna_v6_field(cache[idx[k][j]], j, count, hash_words), sizeof(uint64_t));
+        std::memcpy(msg + 24 + 8 * j, cna_v6_field(hashes, fields, idx[k][j], j, count, hash_words), sizeof(uint64_t));
       std::memcpy(msg + 56, &count, sizeof(uint64_t));
 
       /* what HC128_EncryptMessage does for a 64-byte message, with the
@@ -2958,7 +2982,8 @@ static bool cna_v6_data_known_answer_test()
 
   /* Must match build_cache in t_fill_kat.cpp: splitmix64 from "Nerva", hash
    * bytes little-endian, then timestamp, diff_lo and coins. */
-  std::vector<block_cache_data> cache(height);
+  std::vector<crypto::hash> hashes(height);
+  std::vector<block_cache_fields> fields(height);
   uint64_t s = 0x4e65727661ULL;
   auto splitmix = [&s]() -> uint64_t {
     uint64_t z = (s += 0x9e3779b97f4a7c15ULL);
@@ -2972,11 +2997,11 @@ static bool cna_v6_data_known_answer_test()
     {
       const uint64_t z = splitmix();
       for (int b = 0; b < 8; b++)
-        cache[i].hash.data[w * 8 + b] = (char)(uint8_t)(z >> (8 * b));
+        hashes[i].data[w * 8 + b] = (char)(uint8_t)(z >> (8 * b));
     }
-    cache[i].timestamp = splitmix();
-    cache[i].diff_lo   = splitmix();
-    cache[i].coins     = splitmix();
+    fields[i].timestamp = splitmix();
+    fields[i].diff_lo   = splitmix();
+    fields[i].coins     = splitmix();
   }
   const uint64_t window_size = (height > (uint64_t)CNA_V6_WINDOW_BLOCKS_V13) ? (uint64_t)CNA_V6_WINDOW_BLOCKS_V13 : height;
   const uint64_t window_base = height - window_size;
@@ -2992,9 +3017,9 @@ static bool cna_v6_data_known_answer_test()
       HC128_Init(&rng, seed, seed + 16);
       HC128_NextKeys(&rng);
       if (arm == 0)
-        cna_v6_data_reference(cache.data(), height, window_size, window_base, &rng, buf.data(), c.odds, c.reseed, c.hash_words);
+        cna_v6_data_reference(hashes.data(), fields.data(), height, window_size, window_base, &rng, buf.data(), c.odds, c.reseed, c.hash_words);
       else
-        cna_v6_data_run_ahead(cache.data(), height, window_size, window_base, &rng, buf.data(), c.odds, c.reseed, c.hash_words);
+        cna_v6_data_run_ahead(hashes.data(), fields.data(), height, window_size, window_base, &rng, buf.data(), c.odds, c.reseed, c.hash_words);
       HC128_NextKeys(&rng);
       std::memcpy(buf.data() + CN_SALT_MEMORY, rng.keystream, 64);
       const crypto::hash h = crypto::cn_fast_hash(buf.data(), buf.size());
@@ -3064,13 +3089,13 @@ void BlockchainLMDB::get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t
   {
     rng_before = *rng_state;
     ref_out.resize(CN_SALT_MEMORY);
-    cna_v6_data_reference(m_block_cache.data(), height, window_size, window_base,
+    cna_v6_data_reference(m_block_hashes.data(), m_block_fields.data(), height, window_size, window_base,
                           rng_state, ref_out.data(), odds, reseed_blocks, hash_words);
     rng_after_ref = *rng_state;
     *rng_state = rng_before;
   }
 
-  cna_v6_data_run_ahead(m_block_cache.data(), height, window_size, window_base,
+  cna_v6_data_run_ahead(m_block_hashes.data(), m_block_fields.data(), height, window_size, window_base,
                         rng_state, out, odds, reseed_blocks, hash_words);
 
   if (do_check)
@@ -4854,8 +4879,9 @@ void BlockchainLMDB::set_expected_min_height(uint64_t height)
   // readers may be live, so take the unique lock (uncontended in practice)
   const size_t size = static_cast<size_t>(height);
   boost::unique_lock<boost::shared_mutex> cache_lock(m_block_cache_lock);
-  if (m_block_cache.capacity() < size)
-    m_block_cache.reserve(size);
+  m_block_hashes.reserve(size);
+  if (m_block_fields.capacity() < size)
+    m_block_fields.reserve(size);
 }
 
 void BlockchainLMDB::add_alt_block(const crypto::hash &blkid, const cryptonote::alt_block_data_t &data, const cryptonote::blobdata &blob)

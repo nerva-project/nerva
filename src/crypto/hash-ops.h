@@ -172,6 +172,12 @@ const char *cn_page_tier_name(int tier);
  * one that was asked for. Call it after the pages have been faulted in. */
 int cn_page_tier_actual(const void *p, size_t size, int requested_tier);
 
+/* Allocate `size` bytes on the largest pages the OS will give, as the hash
+ * buffers are, and return the CN_PAGES_* tier. *p is NULL on failure. Release
+ * with cn_free_pages, passing the same size and tier. */
+int cn_alloc_pages(size_t size, void **p);
+void cn_free_pages(void *p, size_t size, int tier);
+
 typedef struct cn_hash_context
 {
   /* Software-AES path always has its context allocated so the runtime

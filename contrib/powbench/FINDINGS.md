@@ -44,6 +44,7 @@ superseded.** This section is the summary of what holds now.
 | GPU, by component | core about 10.7x, AES about 4.2x, chain fill 1.7x to 2.6x against a competent kernel | F78 to F80, F88 |
 | cross-CPU spread, one thread, real nonce | about 2.42x against a 2.50x limit; the i7-7700HQ gains only 1.26x from the reseed change | F84 |
 | chain fill prefetch | v14 fill 1.38x faster on all threads, 1.11x on one; v13 unchanged | F93 |
+| block cache split, hashes on large pages | v14 mining 1.13x on all threads, 1.04x on 16 and on one; every older hash unchanged | F94 |
 | ASIC | bound by the 16,384 random reads per nonce, all into the incompressible hash table, not by the cipher | F65, F93 |
 | pool resistance | a miner needs the block hashes, 142 MB at 4.44M blocks, not a full node | F71, F93 |
 
@@ -6579,7 +6580,8 @@ section 4.
 - **A 256-message run-ahead with the cache split by field onto 2 MB pages.**
   The review reports the fill at 1.53x stock against 1.38x for the prefetch
   alone. That is about 11% more for restructuring the consensus loop, so it is
-  a candidate for a later verification change, not this PR.
+  a candidate for a later verification change, not this PR. *F94 measured it:
+  it loses at full load, and the cache split and large pages went in instead.*
 - **Folding the `s4` salt pass into finalize, and VAES.** Miner-side, and it
   would change the v8 core the hash vectors pin.
 - **Reported negative results:** the 8-nonce SIMD fill, the review's biggest
@@ -6587,6 +6589,92 @@ section 4.
   12 threads); 1 GB pages could not be allocated on Windows 10 19045.
 - **MSVC builds get no prefetch.** Nerva does not build with MSVC, and clang
   defines `__GNUC__`.
+
+### F94. The block cache, split into a hash array on large pages: v14 mining 1.13x on all threads, every older hash unchanged
+
+*2026-10-14. The review's section 2 (F93 section 4), measured layer by layer
+before anything was built, then built one layer at a time and measured again in
+the daemon's own code. A layer went in only if the daemon measurement showed it
+paid.*
+
+#### 1. What went in
+
+- **The cache is two arrays.** `block_cache_data` (56 bytes per block) is
+  replaced by `block_hash_array`, the 32-byte hashes 64-byte aligned so none
+  spans two cache lines, and a `block_cache_fields` vector with timestamp,
+  diff_lo and coins. Since F93, v14 reads only the hashes, so its working set
+  is 142 MB of one-line entries instead of 237 MB of 56-byte ones. Memory is
+  the same in total.
+- **The hash array is on large pages when the OS gives them**, through the
+  allocator the hash buffers already use, now exported from `slow-hash.c` as
+  `cn_alloc_pages` and `cn_free_pages`. On Windows that needs the "Lock pages
+  in memory" right; otherwise it falls back to normal pages. It grows ahead of
+  the chain, by the larger of 65,536 blocks and a sixteenth.
+
+#### 2. What it is worth, in the daemon
+
+`contrib/hf14checks/t_v14_bench.cpp` hashes v14 through `get_block_longhash`
+over a copy of the live mainnet database at height 4,441,1xx, so the fill
+reads the real block cache. 7950X, each build run in turn and repeated, medians
+of three to four alternations:
+
+| threads | before | split cache | + large pages | total |
+|---|---|---|---|---|
+| 30 | 20,166 | 21,919 (1.087x) | 22,934 (1.044x over the split) | **1.13x** |
+| 16 | 15,403 | 15,525 (1.01x) | 16,069 | **1.04x** |
+| 1 | 1,565 | 1,570 (1.00x) | 1,632 | **1.04x** (noisy) |
+
+The split pays where every hardware thread is busy, which is how a miner runs;
+large pages add about 4% at every thread count, for accounts that have them.
+
+Two runs of the large-page build, each the first after the testnet and mainnet
+daemons had been running, came in at 17,303 and 18,019 H/s; seven runs after
+that, at 22,516 to 23,058, did not repeat it. A large-page fallback would land
+on the split cache's rate, not below it, so the likely cause is Windows
+assembling contiguous memory for the first large-page allocations, which a
+node pays once at startup. Not confirmed.
+
+#### 3. What was measured and left out
+
+A harness built for this and not kept (the daemon's fill extracted verbatim,
+gated bit for bit against `cna_v6_data_reference`, timed alone and through the
+real `cn_slow_hash_v14_chain`) took the review's layers apart first;
+`t_v14_bench` is the measurement that decided:
+
+- **The review's 256-message run-ahead loses at full load.** With the split
+  cache and large pages it reached 1.13x at 30 threads against 1.17x for the
+  current 16-message run-ahead, and helped only on one thread (1.12x against
+  1.08x). Mining runs every thread, so it is not in. The prefetch distance
+  that served it best was 16 messages, not the review's 32.
+- **A v14-only copy of the fill loop**, with odds 256 and hash words compiled
+  in, measured 1.04x in the harness and nothing in the daemon: 19,557 against
+  19,865 alone, and 22,030 against 21,885 on top of the split. Not in.
+
+#### 4. Every older hash is unchanged
+
+The split touches the readers of v7 to v13, which serve mainnet, and the
+startup known-answer test covers only the v6 fill. So
+`contrib/hf14checks/t_pow_history.cpp` recomputes the proof of work of real
+mainnet blocks for every version that reads the cache and checks each against
+the block's recorded difficulty, which a hash from wrong chain data fails with
+probability about 1 - 1/difficulty. Over 2,800 blocks, 400 per version from v7
+to v13 including each range's first and last, every build in this entry
+printed exactly the baseline's hashes and all 2,800 met their difficulty.
+
+It catches a wrong reader: with v5's reader taking diff_lo where it takes the
+timestamp, in one of its two loops, v11 and v12 failed on 800 of 800 blocks,
+while the known-answer tests and `t_v14_longhash` all still passed.
+
+Also checked on the final build:
+
+- the chain-fill known-answer test, v13 and v14, both loops;
+- `t_v14_longhash`, now also checking that the hash array is 64-byte aligned
+  and keeps its contents when it grows, 1,094 checks on both AES arms;
+- the mainnet copy, 400 blocks popped and resynced to the tip with
+  `NERVA_SALT_SELFCHECK=1`, 64 of 64 self-checks;
+- the local v14 testnet, with one node on this build and one on the build
+  before it, each mining in turn: the other accepted all 114 and all 50 blocks,
+  and both ended on the same tip at 1,300.
 
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
@@ -6733,6 +6821,11 @@ remote peer, is the intended anti-Sybil behaviour and is unchanged.
     # The control row is v14's odds and reseed reading block fields; it
     # isolates what the hash-words rule changes.
     sh contrib/powbench/build-fill-kat.sh && ./t_fill_kat
+
+    # any change to the block cache or its readers: recompute real mainnet
+    # blocks' PoW for v7 to v13 against their difficulty, and diff the hashes
+    # against a build from before the change (needs a mainnet database copy)
+    ./hf14checks-build/t_pow_history <path>/lmdb 400 > after.txt
 
     # regenerate t_v14_longhash's pinned vectors, and re-find its corner seeds
     ./hf14checks-build/t_v14_longhash --print

@@ -432,6 +432,17 @@ static void free_hugepage(void *hp, size_t size, int page_tier)
     }
 }
 
+int cn_alloc_pages(size_t size, void **p)
+{
+    return allocate_hugepage(size, p);
+}
+
+void cn_free_pages(void *p, size_t size, int tier)
+{
+    if (p)
+        free_hugepage(p, size, tier);
+}
+
 /* Allocate a PoW buffer on first use. Contexts are also created for work that
  * never hashes a block (the wallet KDF, key encryption) and a node past HF14
  * never touches the v6 pad, so none of these are worth carrying up front. The

@@ -51,6 +51,7 @@
 #include <stdexcept>
 
 #include "blockchain_db/testdb.h"
+#include "blockchain_db/lmdb/db_lmdb.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 
 extern "C" {
@@ -302,6 +303,41 @@ namespace
   }
 }
 
+namespace
+{
+  // The block cache's hash array: 64-byte aligned, and growing keeps what it
+  // holds, which a syncing node relies on.
+  void test_block_hash_array()
+  {
+    auto value = [](uint64_t i) {
+      crypto::hash h;
+      uint64_t s = i * 0x9e3779b97f4a7c15ULL + 1;
+      for (int w = 0; w < 4; w++) { const uint64_t z = splitmix(s); std::memcpy(h.data + 8 * w, &z, 8); }
+      return h;
+    };
+    cryptonote::block_hash_array a;
+    a.reserve(1000);
+    CHECK_TRUE(a.capacity() >= 1000);
+    CHECK_TRUE((reinterpret_cast<uintptr_t>(a.data()) & 63) == 0);
+    for (uint64_t i = 0; i < 1000; i++) a[i] = value(i);
+
+    const uint64_t before = a.capacity();
+    a.reserve(before + 1);
+    CHECK_TRUE(a.capacity() > before);
+    CHECK_TRUE((reinterpret_cast<uintptr_t>(a.data()) & 63) == 0);
+    bool kept = true;
+    for (uint64_t i = 0; i < 1000; i++) kept &= std::memcmp(a[i].data, value(i).data, 32) == 0;
+    CHECK_TRUE(kept);
+
+    const crypto::hash *p = a.data();
+    a.reserve(10);
+    CHECK_TRUE(a.data() == p);
+
+    a.release();
+    CHECK_TRUE(a.capacity() == 0 && a.data() == nullptr);
+  }
+}
+
 int main(int argc, char **argv)
 {
   g_print = argc > 1 && std::strcmp(argv[1], "--print") == 0;
@@ -315,5 +351,6 @@ int main(int argc, char **argv)
   }
   std::printf("== v14 longhash, end to end over a fake chain ==\n");
   RUN(test_v14_end_to_end);
+  RUN(test_block_hash_array);
   return check_summary("t_v14_longhash");
 }

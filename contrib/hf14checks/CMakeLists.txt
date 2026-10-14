@@ -82,6 +82,7 @@ if (WIN32)
   set(V14_SYS_LIBS ws2_32 setupapi)
 endif ()
 add_executable(t_v14_longhash t_v14_longhash.cpp)
+target_include_directories(t_v14_longhash PRIVATE "${NERVA_ROOT}/external/db_drivers/liblmdb")
 target_link_libraries(t_v14_longhash
   -Wl,--start-group
   "${NERVA_BUILD}/src/cryptonote_core/libcryptonote_core.a"
@@ -95,6 +96,26 @@ target_link_libraries(t_v14_longhash
   ${Boost_LIBRARIES} OpenSSL::SSL OpenSSL::Crypto
   sodium unbound ${HIDAPI_LIB} ${V14_SYS_LIBS} Threads::Threads ${CMAKE_DL_LIBS})
 add_test(NAME t_v14_longhash COMMAND t_v14_longhash)
+
+# Recomputes real mainnet blocks' proof of work for v7 to v13 against their
+# difficulty; needs a copy of the mainnet database, so it is not a ctest
+# and v14 hashrate through the daemon's code over the same database
+foreach (tool t_pow_history t_v14_bench)
+  add_executable(${tool} ${tool}.cpp)
+  target_include_directories(${tool} PRIVATE "${NERVA_ROOT}/external/db_drivers/liblmdb")
+  target_link_libraries(${tool}
+    -Wl,--start-group
+    "${NERVA_BUILD}/src/cryptonote_core/libcryptonote_core.a"
+    "${NERVA_BUILD}/src/blockchain_db/libblockchain_db.a"
+    "${NERVA_BUILD}/src/checkpoints/libcheckpoints.a"
+    "${NERVA_BUILD}/src/multisig/libmultisig.a"
+    "${NERVA_BUILD}/src/libversion.a"
+    "${NERVA_BUILD}/external/db_drivers/liblmdb/liblmdb.a"
+    ${NERVA_LIBS}
+    -Wl,--end-group
+    ${Boost_LIBRARIES} OpenSSL::SSL OpenSSL::Crypto
+    sodium unbound ${HIDAPI_LIB} ${V14_SYS_LIBS} Threads::Threads ${CMAKE_DL_LIBS})
+endforeach ()
 # The resized compilations are only comparable to the shipped hashes in
 # libcncrypto.a if they are built the same way. These are the crypto flags the
 # main build uses for slow-hash-hw.c, taken from its flags.make.
