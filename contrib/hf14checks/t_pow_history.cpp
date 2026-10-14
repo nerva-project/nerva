@@ -35,7 +35,11 @@
 //
 // Needs a copy of the mainnet database; the daemon must not have it open.
 //
-//   t_pow_history <lmdb directory> [blocks per version]
+//   t_pow_history <lmdb directory> [blocks per version] [top height]
+//
+// A fixed top height keeps the v13 samples on the same blocks as the chain
+// grows, so two runs can be diffed.
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -51,14 +55,16 @@ int main(int argc, char **argv)
 {
   if (argc < 2)
   {
-    std::fprintf(stderr, "usage: t_pow_history <lmdb directory> [blocks per version]\n");
+    std::fprintf(stderr, "usage: t_pow_history <lmdb directory> [blocks per version] [top height]\n");
     return 2;
   }
   const uint64_t per = argc > 2 ? std::strtoull(argv[2], NULL, 10) : 40;
 
   cryptonote::BlockchainLMDB db;
   db.open(argv[1], DBF_RDONLY);
-  const uint64_t top = db.height();
+  uint64_t top = db.height();
+  if (argc > 3)
+    top = std::min<uint64_t>(top, std::strtoull(argv[3], NULL, 10));
 
   // mainnet fork heights, cryptonote_config.h
   struct Range { unsigned version; uint64_t from, to; };

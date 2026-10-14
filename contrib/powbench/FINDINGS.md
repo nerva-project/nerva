@@ -45,6 +45,7 @@ superseded.** This section is the summary of what holds now.
 | cross-CPU spread, one thread, real nonce | about 2.42x against a 2.50x limit; the i7-7700HQ gains only 1.26x from the reseed change | F84 |
 | chain fill prefetch | v14 fill 1.38x faster on all threads, 1.11x on one; v13 unchanged | F93 |
 | block cache split, hashes on large pages | v14 mining 1.13x on all threads, 1.04x on 16 and on one; every older hash unchanged | F94 |
+| v8 core fill and finalize as whole passes, salt pass in SSE2 | v14 mining 1.21x at the best thread count, 1.28x on one; v14 peaks at 18 to 24 threads on a 7950X, not 30 | F95 |
 | ASIC | bound by the 16,384 random reads per nonce, all into the incompressible hash table, not by the cipher | F65, F93 |
 | pool resistance | a miner needs the block hashes, 142 MB at 4.44M blocks, not a full node | F71, F93 |
 
@@ -6676,6 +6677,96 @@ Also checked on the final build:
   before it, each mining in turn: the other accepted all 114 and all 50 blocks,
   and both ended on the same tip at 1,300.
 
+### F95. The v8 core's fill and finalize as whole passes, and its salt pass in SSE2: v14 mining 1.21x at the best thread count, 1.28x on one thread
+
+*2026-10-14. The review's section 3 (F93 section 4), measured before it was
+built, then measured again in the daemon's own code. Only what paid went in.*
+
+#### 1. What went in
+
+In `slow-hash-v8-impl.h`, for the x86 hardware-AES arm only:
+
+- **The AES fill and the finalize run as whole passes over the pad,** the
+  eight 16-byte lanes held in registers, instead of one call per 128 bytes
+  with the state stored to memory between calls. Same rounds in the same
+  order, so the same bytes. The streaming-store switch is still honoured,
+  read once per hash.
+- **The salt pass (`s4`) runs in SSE2:** 16 salt bytes widen into four pad
+  cells per step, one byte at each of offsets 0, 4, 8 and 12, instead of
+  262,144 single-byte XORs. SSE2 is the x86-64 baseline, so no new CPU check.
+
+`init_size_blk` other than 8 and resized pads take the generic code. The
+software arm (and so `NO_AES` builds and ARM without crypto extensions), the
+ARM hardware arm, and v9 to v13 are unchanged.
+
+#### 2. The core, layer by layer
+
+A harness built for this and not kept compiled each variant from the real
+`slow-hash-v8-impl.h` with one macro swapped, and refused to time any that
+differed from `cn_slow_hash_v14` on any of the 1,600 draws for two inputs. Core
+only, salt supplied, 7950X, medians:
+
+| variant | 1 thread | 30 threads |
+|---|---|---|
+| salt pass in plain C, 32 bits per salt byte | 1.00x | 0.99x |
+| salt pass in SSE2 | 1.25x | 1.12x |
+| fill and finalize as whole passes | 1.36x | 1.39x |
+| **both (shipped)** | **1.85x** | **1.73x** |
+| both, with 256-bit VAES | 1.84x | 2.42x |
+
+The plain-C salt pass gains nothing: the compiler does not vectorize it. The
+cause of the whole-pass gain was not isolated beyond the structure itself.
+
+#### 3. In the daemon: the thread count that matters moved
+
+`t_v14_bench`, each build in turn, three alternations, median H/s:
+
+| threads | 16 | 18 | 20 | 22 | 24 | 26 | 30 |
+|---|---|---|---|---|---|---|---|
+| before (F94) | 16,104 | 24,107 | 25,060 | 25,181 | **25,400** | 25,309 | 22,745 |
+| after | 20,111 | **30,658** | **30,669** | 30,123 | 29,195 | 27,453 | 22,438 |
+
+**Peak to peak, 1.21x; on one thread, 1.28x (1,688 to 2,158).** Rerun the
+next day on a quiet machine, three alternations: 25,785 at 24 threads before,
+31,512 at 18 after, 1.22x. At 30 threads,
+with both SMT threads of every core busy, it is 0.98x (five alternations),
+and 30 is the worst setting for both builds. On this CPU v14 peaks at 18 to 24
+threads: past that, two threads share a core's 1 MB L2 and its AES units, and
+the hashrate falls. Every full-load figure in F94 was taken at 30 and
+understates both builds. The low 16-thread row in both builds is not
+explained; unpinned threads on one CCD is a guess (Open question 11).
+
+#### 4. Measured and left out
+
+- **The review's fold of `s4` into the finalize.** Timing a core with no salt
+  pass at all, which computes the wrong hash, bounds what any fold could save:
+  1.08x on the core at 30 threads, under 2% of a nonce. A fold would need a
+  bitmap of the cells the CN steps touch first, in consensus code. Not worth
+  it.
+- **VAES.** Built into the v8 unit as an experiment and measured in the
+  daemon on a quiet machine, interleaved with the shipped form: 0.99x at 18
+  threads, 1.00x at 20 and at 24. It gains nothing where v14 runs best, so it
+  does not pay for a third arm, runtime CPU detection, compiler checks and
+  test coverage in consensus hashing. A first run had shown 1.05x at 18 and
+  20 threads and 0.97x on one, in a session where every build's absolute
+  rate had fallen 12 to 20% for a reason not found; the quiet rerun replaces
+  it.
+
+#### 5. Checks
+
+- The harness gate above, and `t_v8_grid`: the hardware and software arms
+  agree on all 1,600 draws, and the digest over them is `09d34831c25f506c`,
+  the value recorded for the shipped hash.
+- `t_v14_longhash`, 1,094 checks on both AES arms; the startup known-answer
+  test and the hardware-against-software self-test (the daemon starts only if
+  both pass).
+- `t_pow_history`, now with a fixed top height so its v13 samples stay on the
+  same blocks as the chain grows: all 2,800 blocks identical to the F94
+  baseline at 4,441,117.
+- The local v14 testnet across builds: a node on this build and a node on the
+  F94 build each mined 54 blocks in turn, the other accepted every one, and
+  both ended on the same tip at 1,408.
+
 ### F15. `hf14checks` inverts its own results if a TU misses its flags
 
 `contrib/hf14checks/CMakeLists.txt` names the resized translation units
@@ -6774,7 +6865,14 @@ remote peer, is the intended anti-Sybil behaviour and is unchanged.
     tuned miner sits at about half and the rest is compute. Not reproduced
     here, and measured before F93's hash-words change, which keeps the read
     count and so should not move it. v13's tuned miner reached 5.27x
-    ([V6-MINER-LOG.md](V6-MINER-LOG.md)).
+    ([V6-MINER-LOG.md](V6-MINER-LOG.md)). *F94 and F95 have since put most
+    of its sections 1 to 3 into stock.*
+11. **What thread count NervaOne should default to for v14.** F95 found the
+    7950X peaks at 18 to 24 of its 32 threads and loses about a quarter of
+    the peak at 30. Unexplained in the same table: 16 threads run far below
+    18 in both builds, possibly Windows placing 16 unpinned threads on one
+    CCD; `t_v14_bench` does not pin, and the daemon's `--mining-affinity`
+    does. Needs a run with pinning, and on other CPUs.
 
 ## Reproducing
 

@@ -77,6 +77,143 @@
         }                                                    \
     } while (0)
 
+#if !defined(CN_USE_SOFTWARE_AES) && (defined(__x86_64__) || defined(__i386__))
+
+/* x86 hardware AES: the fill and the finalize run as whole passes over the
+ * pad with the eight lanes in registers, not as one call per 128 bytes. Same
+ * rounds in the same order, so the same bytes; init_size_blk other than 8
+ * takes the generic loops. */
+#define CN_V8_ROUND(kr)                                                         \
+    d0 = _mm_aesenc_si128(d0, kr); d1 = _mm_aesenc_si128(d1, kr);               \
+    d2 = _mm_aesenc_si128(d2, kr); d3 = _mm_aesenc_si128(d3, kr);               \
+    d4 = _mm_aesenc_si128(d4, kr); d5 = _mm_aesenc_si128(d5, kr);               \
+    d6 = _mm_aesenc_si128(d6, kr); d7 = _mm_aesenc_si128(d7, kr);
+#define CN_V8_ROUNDS(k)                                                         \
+    CN_V8_ROUND(_mm_load_si128(k + 0)) CN_V8_ROUND(_mm_load_si128(k + 1))       \
+    CN_V8_ROUND(_mm_load_si128(k + 2)) CN_V8_ROUND(_mm_load_si128(k + 3))       \
+    CN_V8_ROUND(_mm_load_si128(k + 4)) CN_V8_ROUND(_mm_load_si128(k + 5))       \
+    CN_V8_ROUND(_mm_load_si128(k + 6)) CN_V8_ROUND(_mm_load_si128(k + 7))       \
+    CN_V8_ROUND(_mm_load_si128(k + 8)) CN_V8_ROUND(_mm_load_si128(k + 9))
+#define CN_V8_LOAD_LANES(src)                                                   \
+    __m128i d0 = _mm_loadu_si128((const __m128i *)(src) + 0);                   \
+    __m128i d1 = _mm_loadu_si128((const __m128i *)(src) + 1);                   \
+    __m128i d2 = _mm_loadu_si128((const __m128i *)(src) + 2);                   \
+    __m128i d3 = _mm_loadu_si128((const __m128i *)(src) + 3);                   \
+    __m128i d4 = _mm_loadu_si128((const __m128i *)(src) + 4);                   \
+    __m128i d5 = _mm_loadu_si128((const __m128i *)(src) + 5);                   \
+    __m128i d6 = _mm_loadu_si128((const __m128i *)(src) + 6);                   \
+    __m128i d7 = _mm_loadu_si128((const __m128i *)(src) + 7);
+#define CN_V8_STORE_LANES(dst, store)                                           \
+    store((__m128i *)(dst) + 0, d0); store((__m128i *)(dst) + 1, d1);           \
+    store((__m128i *)(dst) + 2, d2); store((__m128i *)(dst) + 3, d3);           \
+    store((__m128i *)(dst) + 4, d4); store((__m128i *)(dst) + 5, d5);           \
+    store((__m128i *)(dst) + 6, d6); store((__m128i *)(dst) + 7, d7);
+
+/* Fill the pad from text, leaving text as the final state. Streaming stores
+ * when this thread enabled cn_nt_fill. */
+STATIC INLINE void cn_v8_fill_8(uint8_t *text, uint8_t *pad, const uint8_t *expandedKey)
+{
+    const __m128i *k = (const __m128i *)expandedKey;
+    const int nt = cn_nt_fill();
+    uint32_t i;
+    CN_V8_LOAD_LANES(text)
+    for (i = 0; i < CN_SCRATCHPAD_MEMORY / 128; i++)
+    {
+        CN_V8_ROUNDS(k)
+        if (nt)
+        {
+            CN_V8_STORE_LANES(pad + 128 * i, _mm_stream_si128)
+        }
+        else
+        {
+            CN_V8_STORE_LANES(pad + 128 * i, _mm_store_si128)
+        }
+    }
+    if (nt)
+        _mm_sfence();
+    CN_V8_STORE_LANES(text, _mm_storeu_si128)
+}
+
+/* XOR the pad into text block by block, encrypting after each. */
+STATIC INLINE void cn_v8_finalize_8(uint8_t *text, const uint8_t *pad, const uint8_t *expandedKey)
+{
+    const __m128i *k = (const __m128i *)expandedKey;
+    uint32_t i;
+    CN_V8_LOAD_LANES(text)
+    for (i = 0; i < CN_SCRATCHPAD_MEMORY / 128; i++)
+    {
+        const __m128i *q = (const __m128i *)(pad + 128 * i);
+        d0 = _mm_xor_si128(d0, _mm_load_si128(q + 0)); d1 = _mm_xor_si128(d1, _mm_load_si128(q + 1));
+        d2 = _mm_xor_si128(d2, _mm_load_si128(q + 2)); d3 = _mm_xor_si128(d3, _mm_load_si128(q + 3));
+        d4 = _mm_xor_si128(d4, _mm_load_si128(q + 4)); d5 = _mm_xor_si128(d5, _mm_load_si128(q + 5));
+        d6 = _mm_xor_si128(d6, _mm_load_si128(q + 6)); d7 = _mm_xor_si128(d7, _mm_load_si128(q + 7));
+        CN_V8_ROUNDS(k)
+    }
+    CN_V8_STORE_LANES(text, _mm_storeu_si128)
+}
+
+#define CN_V8_EXPAND_KEY()                                                             \
+    hash_process(&state.hs, data, length);                                             \
+    memcpy(text, state.init, init_size_byte);                                          \
+    const uint64_t tweak1_2 = (state.hs.w[24] ^ (*((const uint64_t *)NONCE_POINTER))); \
+    aes_expand_key((OAES_CTX *)context->oaes_ctx, state.hs.b, expandedKey);            \
+    if (init_size_blk == 8)                                                            \
+        cn_v8_fill_8(text, hp_state, expandedKey);                                     \
+    else                                                                               \
+    {                                                                                  \
+        for (i = 0; i < CN_SCRATCHPAD_MEMORY / init_size_byte; i++)                    \
+        {                                                                              \
+            aes_pseudo_round(text, text, expandedKey, init_size_blk);                  \
+            cn_fill_store(&hp_state[i * init_size_byte], text, init_size_byte);        \
+        }                                                                              \
+        cn_fill_fence();                                                               \
+    }
+
+#define CN_V8_FINALIZE_HASH()                                                                            \
+    memcpy(text, state.init, init_size_byte);                                                            \
+    aes_expand_key((OAES_CTX *)context->oaes_ctx, &state.hs.b[32], expandedKey);                         \
+    if (init_size_blk == 8)                                                                              \
+        cn_v8_finalize_8(text, hp_state, expandedKey);                                                   \
+    else                                                                                                 \
+        for (i = 0; i < CN_SCRATCHPAD_MEMORY / init_size_byte; i++)                                      \
+            aes_pseudo_round_xor(text, text, expandedKey, &hp_state[i * init_size_byte], init_size_blk); \
+    memcpy(state.init, text, init_size_byte);                                                            \
+    hash_permutation(&state.hs);                                                                         \
+    extra_hashes[state.hs.b[0] & 3](&state, 200, hash);                                                  \
+    free(text);
+
+#if CN_SCRATCHPAD_MEMORY / CN_SALT_MEMORY == 4
+/* randomize_scratchpad_256k_v8 at a salt step of 4: 16 salt bytes widen into
+ * four pad cells, one byte at each of offsets 0, 4, 8 and 12. */
+#define CN_V8_RANDOMIZE(r, salt, scratchpad)                                    \
+    {                                                                           \
+        const __m128i z_ = _mm_setzero_si128();                                 \
+        uint32_t c_;                                                            \
+        for (c_ = 0; c_ < CN_SCRATCHPAD_MEMORY / 64; c_++)                      \
+        {                                                                       \
+            const __m128i s_ = _mm_loadu_si128((const __m128i *)((salt) + 16 * c_)); \
+            const __m128i lo_ = _mm_unpacklo_epi8(s_, z_);                      \
+            const __m128i hi_ = _mm_unpackhi_epi8(s_, z_);                      \
+            __m128i *q_ = (__m128i *)((scratchpad) + 64 * c_);                  \
+            q_[0] = _mm_xor_si128(q_[0], _mm_unpacklo_epi16(lo_, z_));          \
+            q_[1] = _mm_xor_si128(q_[1], _mm_unpackhi_epi16(lo_, z_));          \
+            q_[2] = _mm_xor_si128(q_[2], _mm_unpacklo_epi16(hi_, z_));          \
+            q_[3] = _mm_xor_si128(q_[3], _mm_unpackhi_epi16(hi_, z_));          \
+        }                                                                       \
+    }                                                                           \
+    randomize_scratchpad(r, scratchpad);
+#else
+#define CN_V8_RANDOMIZE(r, salt, scratchpad) randomize_scratchpad_256k_v8(r, salt, scratchpad)
+#endif
+
+#else
+
+#define CN_V8_EXPAND_KEY() expand_key()
+#define CN_V8_FINALIZE_HASH() finalize_hash()
+#define CN_V8_RANDOMIZE(r, salt, scratchpad) randomize_scratchpad_256k_v8(r, salt, scratchpad)
+
+#endif
+
 #if !defined(CN_USE_SOFTWARE_AES)
 
 /* Hardware-AES arm. cn_slow_hash_v11 with no salt_pad at all, a 1 MB pad, and
@@ -87,9 +224,9 @@ static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t leng
     uint8_t * const hp_state = CN_V8_PAD(context);
     char * const salt = context->salt;
     init_hash();
-    expand_key();
+    CN_V8_EXPAND_KEY();
     CN_V8_FETCH_SALT();
-    randomize_scratchpad_256k_v8(context->random_values, salt, hp_state);
+    CN_V8_RANDOMIZE(context->random_values, salt, hp_state);
     xor_u64();
 
     _b = _mm_load_si128(R128(b));
@@ -117,7 +254,7 @@ static void cn_v8_core(cn_hash_context_t *context, const void *data, size_t leng
         post_aes_variant_v8();
     }
 
-    finalize_hash();
+    CN_V8_FINALIZE_HASH();
 }
 
 #else /* CN_USE_SOFTWARE_AES */
