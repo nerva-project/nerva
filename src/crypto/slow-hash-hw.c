@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -39,7 +39,6 @@
 #define cn_slow_hash_v10   cn_slow_hash_v10_hw
 #define cn_slow_hash_v11   cn_slow_hash_v11_hw
 #define cn_slow_hash_v13   cn_slow_hash_v13_hw
-#define cn_slow_hash_v14   cn_slow_hash_v14_hw
 
 #include "slow-hash.h"
 #include "slow-hash-impl.h"

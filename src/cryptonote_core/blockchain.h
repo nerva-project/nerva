@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -1062,7 +1062,7 @@ namespace cryptonote
     std::vector<precomputed_pow> m_batch_longhashes;
     uint64_t m_batch_longhash_base;
     // Worker hash contexts, made once per batch rather than once per chunk.
-    // Each carries a 24 MB buffer, so building them per chunk meant hundreds of
+    // Each allocates its pads, so building them per chunk meant hundreds of
     // allocations across a sync, and cn_hash_context_create is not thread safe
     // (oaes seeds itself through gmtime), so fewer calls is also safer.
     std::vector<crypto::cn_hash_context_t *> m_longhash_contexts;

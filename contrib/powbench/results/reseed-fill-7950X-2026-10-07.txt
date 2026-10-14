@@ -1,0 +1,32 @@
+RESEED-PREREG step 1. t_v8_fill 4500000 30 reseed, run twice back to back.
+7950X, NervaOne miner stopped, load 2 to 4% before the runs.
+
+v8 chain fill: is it memory bound or HC-128 bound?
+height 4500000, cache 240 MB, window 5.3 MB, 30 s total
+reseed interval at odds 256, interleaved, 30 s
+
+  k         inits    ms/fill       vs k=1
+  1           257     0.8908       1.000x
+  4            65     0.4849       0.544x
+  8            33     0.4102       0.460x
+  16           17     0.3696       0.415x
+  256           2     0.3288       0.369x
+
+  RESEED height=4500000 k1=0.8908 k4=0.4849 k8=0.4102 k16=0.3696 k256=0.3288
+  12024 fills per arm
+v8 chain fill: is it memory bound or HC-128 bound?
+height 4500000, cache 240 MB, window 5.3 MB, 30 s total
+reseed interval at odds 256, interleaved, 30 s
+
+  k         inits    ms/fill       vs k=1
+  1           257     0.8907       1.000x
+  4            65     0.4844       0.544x
+  8            33     0.4085       0.459x
+  16           17     0.3682       0.413x
+  256           2     0.3274       0.368x
+
+  RESEED height=4500000 k1=0.8907 k4=0.4844 k8=0.4085 k16=0.3682 k256=0.3274
+  12048 fills per arm
+
+Discarded: one earlier run the same day at 100% load (the user's miner on 12
+threads) read k1=1.4508 k16=0.5861. Not used.

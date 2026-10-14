@@ -1,0 +1,98 @@
+﻿HC-128 throughput, CPU against GPU, swept over the reseed mix
+state is P[512]+Q[512] = 4 KB per instance; the shipped fill is
+40 NextKeys per Init (257 inits, ~10,500 NextKeys)
+
+  CPU
+    nextper    threads          rounds/s        inits/s     nextkeys/s
+    40         1               3.787e+05      3.787e+05      1.515e+07
+    40         30              6.179e+06      6.179e+06      2.471e+08
+    0          1               5.056e+05      5.056e+05      0.000e+00
+    0          30              8.549e+06      8.549e+06      0.000e+00
+    10         1               4.674e+05      4.674e+05      4.674e+06
+    10         30              7.741e+06      7.741e+06      7.741e+07
+    160        1               2.025e+05      2.025e+05      3.240e+07
+    160        30              3.420e+06      3.420e+06      5.472e+08
+    640        1               6.997e+04      6.997e+04      4.478e+07
+    640        30              1.230e+06      1.230e+06      7.875e+08
+    40         1               3.717e+05      3.717e+05      1.487e+07
+    40         30              6.252e+06      6.252e+06      2.501e+08
+
+  GPU
+    NVIDIA GeForce RTX 3050, 8191 MB, 20 CUs
+    kernel against src/crypto/hc128.c: MATCH (gpu ba5022af, cpu ba5022af)
+    nextper    work items           rounds/s        inits/s     nextkeys/s
+    40         256                 8.853e+04      8.853e+04      3.541e+06
+    40         1024                3.569e+05      3.569e+05      1.428e+07
+    40         2048                7.062e+05      7.062e+05      2.825e+07
+    40         4096                1.041e+06      1.041e+06      4.165e+07
+    40         8192                5.069e+05      5.069e+05      2.027e+07
+    40         16384               2.877e+05      2.877e+05      1.151e+07
+    40         32768               1.883e+05      1.883e+05      7.531e+06
+    40         131072              1.894e+05      1.894e+05      7.576e+06
+    40         PEAK                1.041e+06  at 4096 items
+    0          256                 1.098e+05      1.098e+05      0.000e+00
+    0          1024                4.318e+05      4.318e+05      0.000e+00
+    0          2048                8.620e+05      8.620e+05      0.000e+00
+    0          4096                1.134e+06      1.134e+06      0.000e+00
+    0          8192                5.612e+05      5.612e+05      0.000e+00
+    0          16384               3.422e+05      3.422e+05      0.000e+00
+    0          32768               2.354e+05      2.354e+05      0.000e+00
+    0          131072              2.332e+05      2.332e+05      0.000e+00
+    0          PEAK                1.134e+06  at 4096 items
+    10         256                 1.039e+05      1.039e+05      1.039e+06
+    10         1024                4.109e+05      4.109e+05      4.109e+06
+    10         2048                8.153e+05      8.153e+05      8.153e+06
+    10         4096                1.102e+06      1.102e+06      1.102e+07
+    10         8192                5.472e+05      5.472e+05      5.472e+06
+    10         16384               3.266e+05      3.266e+05      3.266e+06
+    10         32768               2.218e+05      2.218e+05      2.218e+06
+    10         131072              2.204e+05      2.204e+05      2.204e+06
+    10         PEAK                1.102e+06  at 4096 items
+    160        256                 5.792e+04      5.792e+04      9.267e+06
+    160        1024                2.297e+05      2.297e+05      3.675e+07
+    160        2048                4.577e+05      4.577e+05      7.324e+07
+    160        4096                7.723e+05      7.723e+05      1.236e+08
+    160        8192                3.909e+05      3.909e+05      6.254e+07
+    160        16384               1.965e+05      1.965e+05      3.144e+07
+    160        32768               1.298e+05      1.298e+05      2.077e+07
+    160        131072              1.212e+05      1.212e+05      1.940e+07
+    160        PEAK                7.723e+05  at 4096 items
+    640        256                 2.413e+04      2.413e+04      1.544e+07
+    640        1024                9.569e+04      9.569e+04      6.124e+07
+    640        2048                1.908e+05      1.908e+05      1.221e+08
+    640        4096                3.450e+05      3.450e+05      2.208e+08
+    640        8192                2.011e+05      2.011e+05      1.287e+08
+    640        16384               8.782e+04      8.782e+04      5.621e+07
+    640        32768               5.247e+04      5.247e+04      3.358e+07
+    640        131072              4.871e+04      4.871e+04      3.117e+07
+    640        PEAK                3.450e+05  at 4096 items
+    40         256                 8.956e+04      8.956e+04      3.583e+06
+    40         1024                3.533e+05      3.533e+05      1.413e+07
+    40         2048                7.016e+05      7.016e+05      2.807e+07
+    40         4096                1.046e+06      1.046e+06      4.182e+07
+    40         8192                5.070e+05      5.070e+05      2.028e+07
+    40         16384               2.866e+05      2.866e+05      1.146e+07
+    40         32768               1.894e+05      1.894e+05      7.574e+06
+    40         131072              1.896e+05      1.896e+05      7.586e+06
+    40         PEAK                1.046e+06  at 4096 items
+
+  GPU / CPU by reseed mix, and how much disadvantage the reseeds buy
+    nextper      cpu rounds/s   gpu rounds/s       GPU is vs shipped
+    40              6.179e+06      1.041e+06       5.93x     1.000x   (shipped)
+    0               8.549e+06      1.134e+06       7.54x     1.270x
+    10              7.741e+06      1.102e+06       7.03x     1.184x
+    160             3.420e+06      7.723e+05       4.43x     0.746x
+    640             1.230e+06      3.450e+05       3.57x     0.601x
+    40              6.252e+06      1.046e+06       5.98x     1.008x   (shipped)
+
+  drift control, the shipped arm first against last: 0.8%
+
+  What this decides. If the ratio FALLS as nextper rises, F64 is
+  right that the gate is the reseed frequency and not the 4 KB
+  state, and raising the reseed rate buys goal 1 at F67 section 4's
+  measured price. If it is FLAT, the gate is the state size, the
+  reseeds are a dial, and paying 1.65x on the fill for them is a
+  bad trade. F62 put the fill's random gather at 1.64x to 2.73x in
+  the GPU's favour for scale.
+
+  sink b44fec65

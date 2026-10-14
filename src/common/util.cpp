@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 // 
 // All rights reserved.
@@ -806,6 +806,17 @@ std::string get_nix_version_display_string()
 
   bool check_aesni()
   {
+    /* Outside the NO_AES guard: a NO_AES build still hashes through the
+     * software path, and these vectors are its only check. */
+    if (!crypto::cn_slow_hash_known_answer_test())
+    {
+        MGUSER_RED(
+            "Hash known-answer test FAILED: this build does not compute the same "
+            "hashes as the network. Refusing to start; it would reject valid "
+            "blocks or mine invalid ones.");
+        return false;
+    }
+
 #if !defined NO_AES
     if (crypto::cn_hardware_aes_supported())
     {
@@ -827,6 +838,7 @@ std::string get_nix_version_display_string()
             "Falling back to the software AES path; hashing will be substantially slower.");
     }
 #endif // !defined NO_AES
+
     return true;
   }
 

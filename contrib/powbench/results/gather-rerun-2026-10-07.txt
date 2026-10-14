@@ -1,0 +1,112 @@
+########## log2_entries=16 ##########
+random reads into the block cache, CPU against GPU
+table 65536 entries x 56 B = 4 MB, dependent chains, mask indexing
+
+  CPU
+    config                          reads/s       nonces/s
+    1 thread,  1 chain            9.716e+07           5930
+    1 thread,  4 chains           3.852e+08          23512
+    N threads, 1 chain            6.986e+08          42640
+    N threads, 4 chains           3.602e+09         219871
+    N threads, 16 chains          1.359e+10         829738
+    PEAK                          1.359e+10         829738
+    (N = 30, capped at 30 of 32 logical threads)
+
+  GPU
+    NVIDIA GeForce RTX 3050, 8191 MB, 20 CUs, 1807 MHz
+    work items                      reads/s       nonces/s
+    256                           8.361e+08          51029
+    1024                          3.399e+09         207449
+    4096                          1.366e+10         833535
+    32768                         5.295e+10        3231538
+    131072                        7.682e+10        4688586
+    524288                        6.111e+10        3729670
+    2097152                       1.304e+10         795861
+    PEAK                          7.682e+10        4688586
+
+  sink d9bea062e8dd8e42 (ignore; keeps the reads from being optimised away)
+
+########## log2_entries=19 ##########
+random reads into the block cache, CPU against GPU
+table 524288 entries x 56 B = 28 MB, dependent chains, mask indexing
+
+  CPU
+    config                          reads/s       nonces/s
+    1 thread,  1 chain            2.866e+07           1749
+    1 thread,  4 chains           9.823e+07           5995
+    N threads, 1 chain            5.328e+08          32522
+    N threads, 4 chains           2.639e+09         161068
+    N threads, 16 chains          1.070e+10         653021
+    PEAK                          1.070e+10         653021
+    (N = 30, capped at 30 of 32 logical threads)
+
+  GPU
+    NVIDIA GeForce RTX 3050, 8191 MB, 20 CUs, 1807 MHz
+    work items                      reads/s       nonces/s
+    256                           7.477e+08          45638
+    1024                          2.978e+09         181763
+    4096                          1.119e+10         682977
+    32768                         9.496e+09         579618
+    131072                        3.687e+09         225032
+    524288                        2.977e+09         181671
+    2097152                       2.732e+09         166763
+    PEAK                          1.119e+10         682977
+
+  sink 589448c4f144b9e (ignore; keeps the reads from being optimised away)
+
+########## log2_entries=20 ##########
+random reads into the block cache, CPU against GPU
+table 1048576 entries x 56 B = 56 MB, dependent chains, mask indexing
+
+  CPU
+    config                          reads/s       nonces/s
+    1 thread,  1 chain            1.330e+07            812
+    1 thread,  4 chains           5.355e+07           3268
+    N threads, 1 chain            3.499e+08          21358
+    N threads, 4 chains           1.401e+09          85501
+    N threads, 16 chains          4.998e+09         305073
+    PEAK                          4.998e+09         305073
+    (N = 30, capped at 30 of 32 logical threads)
+
+  GPU
+    NVIDIA GeForce RTX 3050, 8191 MB, 20 CUs, 1807 MHz
+    work items                      reads/s       nonces/s
+    256                           6.866e+08          41907
+    1024                          2.814e+09         171743
+    4096                          8.835e+09         539230
+    32768                         4.158e+09         253754
+    131072                        3.062e+09         186890
+    524288                        2.674e+09         163218
+    2097152                       2.537e+09         154863
+    PEAK                          8.835e+09         539230
+
+  sink af36b8418487b41a (ignore; keeps the reads from being optimised away)
+
+########## log2_entries=22 ##########
+random reads into the block cache, CPU against GPU
+table 4194304 entries x 56 B = 224 MB, dependent chains, mask indexing
+
+  CPU
+    config                          reads/s       nonces/s
+    1 thread,  1 chain            9.844e+06            601
+    1 thread,  4 chains           4.052e+07           2473
+    N threads, 1 chain            2.011e+08          12277
+    N threads, 4 chains           7.733e+08          47199
+    N threads, 16 chains          2.319e+09         141534
+    PEAK                          2.319e+09         141534
+    (N = 30, capped at 30 of 32 logical threads)
+
+  GPU
+    NVIDIA GeForce RTX 3050, 8191 MB, 20 CUs, 1807 MHz
+    work items                      reads/s       nonces/s
+    256                           6.300e+08          38453
+    1024                          2.551e+09         155679
+    4096                          4.587e+09         279953
+    32768                         2.806e+09         171293
+    131072                        2.569e+09         156804
+    524288                        2.435e+09         148606
+    2097152                       2.400e+09         146514
+    PEAK                          4.587e+09         279953
+
+  sink a8b3f50ccf4a1cce (ignore; keeps the reads from being optimised away)
+

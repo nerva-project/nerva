@@ -1,0 +1,62 @@
+AES: CPU AES-NI against three GPU table placements.
+Rates are AES ROUNDS/s (8 blocks x 10 rounds per iteration).
+
+  CPU
+    threads          rounds/s
+    1               8.148e+09
+    30              9.723e+10
+
+  GPU
+    NVIDIA GeForce RTX 3050, 20 CUs
+    aes_const  against AES-NI: MATCH
+    aes_const  256           2.116e+08
+    aes_const  512           4.340e+08
+    aes_const  1024          8.658e+08
+    aes_const  2048          9.009e+08
+    aes_const  4096          9.805e+08
+    aes_const  8192          1.097e+09
+    aes_const  16384         1.192e+09
+    aes_const  32768         1.201e+09
+    aes_const  65536         1.205e+09
+    aes_const  131072        1.206e+09
+    aes_const  262144        1.215e+09
+    aes_const  524288        1.218e+09
+    aes_const  1048576       1.216e+09
+    aes_const  peak      1.218e+09  at 524288 items
+    aes_lds    against AES-NI: MATCH
+    aes_lds    256           2.022e+09
+    aes_lds    512           4.042e+09
+    aes_lds    1024          8.085e+09
+    aes_lds    2048          1.585e+10
+    aes_lds    4096          1.883e+10
+    aes_lds    8192          1.988e+10
+    aes_lds    16384         2.221e+10
+    aes_lds    32768         2.310e+10
+    aes_lds    65536         2.312e+10
+    aes_lds    131072        2.303e+10
+    aes_lds    262144        2.316e+10
+    aes_lds    524288        2.336e+10
+    aes_lds    1048576       2.333e+10
+    aes_lds    peak      2.336e+10  at 524288 items
+    aes_lds4   against AES-NI: MATCH
+    aes_lds4   256           1.854e+09
+    aes_lds4   512           3.712e+09
+    aes_lds4   1024          7.422e+09
+    aes_lds4   2048          1.421e+10
+    aes_lds4   4096          1.884e+10
+    aes_lds4   8192          1.964e+10
+    aes_lds4   16384         2.218e+10
+    aes_lds4   32768         2.294e+10
+    aes_lds4   65536         2.298e+10
+    aes_lds4   131072        2.302e+10
+    aes_lds4   262144        2.326e+10
+    aes_lds4   524288        2.339e+10
+    aes_lds4   1048576       2.332e+10
+    aes_lds4   peak      2.339e+10  at 524288 items
+
+  arm              rounds/s   CPU better     vs const
+    aes_const       1.218e+09      79.85x       1.00x
+    aes_lds         2.336e+10       4.16x      19.19x
+    aes_lds4        2.339e+10       4.16x      19.21x
+
+  sink 3a8256f0

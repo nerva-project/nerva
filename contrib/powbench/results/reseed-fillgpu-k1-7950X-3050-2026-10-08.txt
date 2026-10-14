@@ -1,0 +1,61 @@
+v14 chain fill, whole, CPU against GPU. k = 1, odds 256, height 4500000
+  CPU run-ahead against serial, S, shipped             MATCH
+  CPU run-ahead against serial, B, mulhi no selector   MATCH
+  GPU NVIDIA GeForce RTX 3050, 8191 MB, 20 CUs, 48 KB local
+  GPU kernel against CPU serial, S, shipped             MATCH
+  GPU kernel against CPU serial, B, mulhi no selector   MATCH
+
+  S, shipped
+    CPU 32 threads    20169.5 fills/s    1 thread   1176.8 fills/s (0.8498 ms)
+    GPU wg 2 items    512 rounds 4     5171.9 fills/s
+    GPU wg 2 items   1024 rounds 1     6094.3 fills/s
+    GPU wg 2 items   2048 rounds 1     6197.4 fills/s
+    GPU wg 2 items   4096 rounds 1     6407.3 fills/s
+    GPU wg 4 items   1024 rounds 1     5717.5 fills/s
+    GPU wg 4 items   2048 rounds 1     5660.7 fills/s
+    GPU wg 4 items   4096 rounds 1     6195.8 fills/s
+    GPU wg 8 items   2048 rounds 1     5081.8 fills/s
+    GPU wg 8 items   4096 rounds 1     5625.5 fills/s
+
+  B, mulhi no selector
+    CPU 32 threads    24626.2 fills/s    1 thread   1305.9 fills/s (0.7658 ms)
+    GPU wg 2 items    512 rounds 1     1519.5 fills/s
+    GPU wg 2 items   1024 rounds 1     6491.2 fills/s
+    GPU wg 2 items   2048 rounds 1     7020.9 fills/s
+    GPU wg 2 items   4096 rounds 1     7319.2 fills/s
+    GPU wg 4 items   1024 rounds 1     6760.5 fills/s
+    GPU wg 4 items   2048 rounds 1     6832.5 fills/s
+    GPU wg 4 items   4096 rounds 1     7307.3 fills/s
+    GPU wg 8 items   2048 rounds 1     6356.3 fills/s
+    GPU wg 8 items   4096 rounds 1     6909.7 fills/s
+
+  B, mulhi no selector
+    CPU 32 threads    24673.7 fills/s    1 thread   1321.6 fills/s (0.7567 ms)
+    GPU wg 2 items    512 rounds 1     2014.6 fills/s
+    GPU wg 2 items   1024 rounds 1     6520.1 fills/s
+    GPU wg 2 items   2048 rounds 1     7046.6 fills/s
+    GPU wg 2 items   4096 rounds 1     7316.7 fills/s
+    GPU wg 4 items   1024 rounds 1     6752.7 fills/s
+    GPU wg 4 items   2048 rounds 1     6830.5 fills/s
+    GPU wg 4 items   4096 rounds 1     7322.5 fills/s
+    GPU wg 8 items   2048 rounds 1     6253.8 fills/s
+    GPU wg 8 items   4096 rounds 1     6910.8 fills/s
+
+  S, shipped
+    CPU 32 threads    22394.0 fills/s    1 thread   1184.4 fills/s (0.8443 ms)
+    GPU wg 2 items    512 rounds 1     1933.6 fills/s
+    GPU wg 2 items   1024 rounds 1     5795.4 fills/s
+    GPU wg 2 items   2048 rounds 1     6202.7 fills/s
+    GPU wg 2 items   4096 rounds 1     6459.7 fills/s
+    GPU wg 4 items   1024 rounds 1     5766.3 fills/s
+    GPU wg 4 items   2048 rounds 1     5790.4 fills/s
+    GPU wg 4 items   4096 rounds 1     6224.4 fills/s
+    GPU wg 8 items   2048 rounds 1     5081.6 fills/s
+    GPU wg 8 items   4096 rounds 1     5621.8 fills/s
+
+                          CPU fills/s  GPU fills/s   CPU better      1T ms
+  S, shipped                  22394.0       6459.7       3.467x     0.8443   (GPU peak wg 2, 4096 items)
+  B, mulhi no selector        24673.7       7322.5       3.370x     0.7567   (GPU peak wg 4, 4096 items)
+
+  FILLGPU S=3.467x B=3.370x  CPU B/S 1.102x  GPU B/S 1.134x
+  sink bf9b91be

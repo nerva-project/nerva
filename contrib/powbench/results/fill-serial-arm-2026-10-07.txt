@@ -1,0 +1,22 @@
+﻿NERVA PoW BENCH   real VM cores, same work both sides
+CPU  AMD Ryzen 9 7950X 16-Core Processor  (32 thr)
+LOAD 6% CPU busy before the run
+GPU  NVIDIA GeForce RTX 3050 8.0G/2.0G 20CU  vram=90% cap=25s cool=15s
+
+VARIANT       KB  nonces  ok   GPU H/s thr    CPU H/s   GPU:CPU    1T ms
+v5 1MB       1024    5888 yes     527.8   32   10452.9   0.0505x     2.08
+v8 pre-D1    1024    5888 yes     601.6   32   12367.0   0.0486x     1.57
+v8 D1        1024    5888 yes     822.6   32   16329.9   0.0504x     1.24
+v8 D1+D3     1024    5888 yes     811.8   32   12354.7   0.0657x     1.84
+v8+fp rne    1024    5888 yes     606.0   32   12114.7   0.0500x     1.63
+v8+fp        1024    5888 yes     611.1   32   11860.6   0.0515x     1.68
+v5 1MB end   1024    5888 yes     611.0   32   10439.7   0.0585x     2.08
+FP cost x v8 base   rne GPU  0.993x CPU  1.021x | modes GPU  0.984x CPU  1.043x
+GPU:CPU 0.0486x -> 0.0515x, FP HURTS by 6%   spread GPU 0.2% CPU 5.3%
+control: 13.619% drift between rows of identical GPU work, one
+         after the FP rows. Same scale as the costs above
+ok = GPU matched CPU; on v8+fp that proves OpenCL's software rounding is
+bit-exact against a real MXCSR. No ok, no ratio. Lower GPU:CPU is better.
+CPU cost is per whole nonce, chain fill included: that is what a miner
+pays, since the salt is reseeded from the nonce. v5/v8 1MB are the same
+GPU work, so a gap there is the port, not the algorithm.

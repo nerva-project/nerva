@@ -1,0 +1,30 @@
+===== run 1 =====
+v8 chain fill: is it memory bound or HC-128 bound?
+height 4500000, cache 240 MB, window 5.3 MB, 40 s total
+
+                        ms/fill   vs floor
+  shipped, 13/256        0.7050      1.02x
+  window only            0.6897      0.99x
+  one hot entry          0.6943      1.00x
+  all full history       0.8339      1.20x
+  odds 32/256            0.7251      1.04x
+  odds 64/256            0.7527      1.08x
+  odds 128/256           0.7940      1.14x
+
+  HC-128 compute floor      0.6943 ms    98.5% of the shipped fill
+  memory, shipped           0.0107 ms     1.5%
+===== run 2 =====
+v8 chain fill: is it memory bound or HC-128 bound?
+height 4500000, cache 240 MB, window 5.3 MB, 40 s total
+
+                        ms/fill   vs floor
+  shipped, 13/256        0.7069      1.01x
+  window only            0.6918      0.99x
+  one hot entry          0.6973      1.00x
+  all full history       0.8356      1.20x
+  odds 32/256            0.7269      1.04x
+  odds 64/256            0.7548      1.08x
+  odds 128/256           0.7960      1.14x
+
+  HC-128 compute floor      0.6973 ms    98.6% of the shipped fill
+  memory, shipped           0.0097 ms     1.4%

@@ -89,6 +89,21 @@ jobs:
                 run: |
                     ${{env.CCACHE_SETTINGS}}
                     make -j${{env.MAKE_JOB_COUNT}}
+            # v14 proof-of-work checks that need a finished build: the chain
+            # entry point (t_v8_chain) and get_block_longhash_v14 end to end
+            # over a fake chain (t_v14_longhash).
+            -   name: v14 PoW checks
+                run: |
+                    LIB=$(find build -path '*/release/src/crypto/libcncrypto.a' | head -n 1)
+                    test -n "$LIB" || { echo "no release build tree found"; exit 1; }
+                    NERVA_BUILD="$PWD/$(dirname "$(dirname "$(dirname "$LIB")")")"
+                    cmake -S contrib/hf14checks -B hf14checks-build -DNERVA_BUILD="$NERVA_BUILD"
+                    cmake --build hf14checks-build --target t_v8_chain t_v14_longhash -j${{env.MAKE_JOB_COUNT}}
+                    ./hf14checks-build/t_v8_chain
+                    ./hf14checks-build/t_v14_longhash
+                    # again on the software-AES arm, which NO_AES builds and
+                    # ARM without crypto extensions run
+                    NERVA_FORCE_SOFTWARE_AES=1 ./hf14checks-build/t_v14_longhash
 
     build-windows:
         runs-on: windows-latest

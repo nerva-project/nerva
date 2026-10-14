@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -879,15 +879,9 @@ namespace cryptonote
         continue;
       }
 
-      // Report which pages the mining buffers landed on. The allocation used to
-      // fall back to normal pages silently and mining just looked slow until
-      // the next reboot, with nothing in the log explaining why. Read the
-      // buffer that actually carries the hashrate for this fork version: from
-      // v14 that is the 24 MB chase buffer, at v13 the 8 MB pad, before that
-      // the 1 MB one.
-      // re-report when the fork version moves: a miner that started before the
-      // fork reported a different buffer, and the one that carries the hashrate
-      // from v14 on is the 24 MB chase buffer
+      // Report which pages the mining buffer for this fork version landed on: the
+      // 8 MB pad at v13, the 1 MB pad otherwise. Re-report when the fork version
+      // moves, since the buffer changes with it.
       if (tier_reported_version != b.major_version)
       {
         tier_reported_version = b.major_version;
@@ -904,11 +898,9 @@ namespace cryptonote
 #else
         const int good_tier = CN_PAGES_THP;
 #endif
-        // no point nagging pre-v13 miners, but from v13 on the page tier is
-        // real hashrate: the v13 8 MB pad, and even more the v14 24 MB
-        // per-nonce chase, where every hop on 4 KB pages likely eats a TLB
-        // miss and a page walk on top of the DRAM load
-        if (tier < good_tier && b.major_version >= 13 && !m_slow_pages_warned.exchange(true))
+        // Warn only at v13: its 8 MB pad is where the page tier costs hashrate.
+        // v9 to v12 and v14 use the 1 MB pad.
+        if (tier < good_tier && b.major_version == 13 && !m_slow_pages_warned.exchange(true))
           MGUSER_YELLOW("Mining is running on normal memory pages, hashrate will be lower. "
               "Windows: run 'nervad --setup-large-pages' once as administrator, then log out and back in. "
               "Linux: set vm.nr_hugepages or leave transparent hugepages enabled. "

@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -2754,8 +2754,10 @@ namespace nodetool
     if (address.get_zone() != epee::net_utils::zone::public_)
       return false; // Unable to determine how many connections from host
 
-    // for testing networks we allow more than 1 connection
-    const size_t max_connections = m_nettype == cryptonote::STAGENET ? 3 : 1;
+    // Testing networks allow several connections per host, so local multi-node
+    // testnets can peer. Mainnet allows one, so a single host cannot take
+    // several of a node's inbound slots.
+    const size_t max_connections = m_nettype == cryptonote::MAINNET ? 1 : 3;
     size_t count = 0;
 
     m_network_zones.at(epee::net_utils::zone::public_).m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)

@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 // All rights reserved.
 //
@@ -69,14 +69,40 @@ typedef struct mdb_block_info_4
 
 typedef mdb_block_info_4 mdb_block_info;
 
-// Compact struct for the in-memory block cache used by get_cna_v4_data and
-// get_cna_v5_data. Stores only the four fields those functions access, cutting
-// per-entry size from 96 to 56 bytes and reducing L3 cache pressure during sync.
-struct block_cache_data {
-  crypto::hash hash;
-  uint64_t     timestamp;
-  uint64_t     diff_lo;
-  uint64_t     coins;
+// The in-memory block cache the PoW seeds read, kept as two arrays: the block
+// hashes, and the three fields v13 and older also read. v14 reads only the
+// hashes, so they are packed on their own.
+struct block_cache_fields {
+  uint64_t timestamp;
+  uint64_t diff_lo;
+  uint64_t coins;
+};
+
+// Block hashes, 64-byte aligned so no entry spans two cache lines, on large
+// pages when the OS gives them.
+class block_hash_array
+{
+public:
+  block_hash_array() = default;
+  block_hash_array(const block_hash_array &) = delete;
+  block_hash_array &operator=(const block_hash_array &) = delete;
+  ~block_hash_array() { release(); }
+
+  // Room for at least n entries, keeping the existing ones.
+  void reserve(uint64_t n);
+  void release();
+  uint64_t capacity() const { return m_cap; }
+
+  crypto::hash &operator[](uint64_t i) { return m_data[i]; }
+  const crypto::hash &operator[](uint64_t i) const { return m_data[i]; }
+  const crypto::hash *data() const { return m_data; }
+
+private:
+  void *m_base = nullptr;
+  size_t m_bytes = 0;
+  int m_tier = 0;
+  crypto::hash *m_data = nullptr;
+  uint64_t m_cap = 0;
 };
 
 typedef struct txindex {
@@ -261,7 +287,7 @@ public:
   virtual void get_cna_v3_data(char *out, uint64_t height, uint32_t seed);
   virtual void get_cna_v4_data(char *out, uint64_t height, uint32_t seed);
   virtual void get_cna_v5_data(char *out, HC128_State *rng_state, uint64_t height);
-  virtual void get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t height);
+  virtual void get_cna_v6_data(char *out, HC128_State *rng_state, uint64_t height, uint32_t odds, uint32_t reseed_blocks, uint32_t hash_words);
 
   virtual std::vector<uint64_t> get_block_cumulative_rct_outputs(const std::vector<uint64_t> &heights) const;
 
@@ -521,14 +547,15 @@ private:
   mdb_txn_cursors m_wcursors;
   mutable boost::thread_specific_ptr<mdb_threadinfo> m_tinfo;
 
-  std::vector<block_cache_data> m_block_cache;
+  block_hash_array m_block_hashes;
+  std::vector<block_cache_fields> m_block_fields;
   std::atomic<uint64_t> m_block_cache_height;
   // shared_mutex: get_cna_v*_data readers take a shared lock for their hot
-  // lookups; build_block_cache takes a unique lock for the reserve/push_back
-  // that can reallocate the vector. A plain mutex was effectively absent on
+  // lookups; build_block_cache takes a unique lock for the reserve/resize
+  // that can reallocate either array. A plain mutex was effectively absent on
   // the read side, so a reallocation from one thread freed the buffer another
   // thread was mid-read - a use-after-free crash.
-  // open/close and the reset path also mutate the vector without this lock:
+  // open/close and the reset path also mutate the arrays without this lock:
   // they run single-threaded at init/shutdown, before any reader exists or
   // after they are gone. set_expected_min_height can run while readers are
   // live, so it does take the lock.

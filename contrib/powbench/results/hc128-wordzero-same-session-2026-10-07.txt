@@ -1,0 +1,49 @@
+HC-128 CPU against GPU, swept over the reseed mix. Shipped is 40
+NextKeys per Init. Pass -v for the full work-item grid.
+
+  CPU
+    nextper    threads          rounds/s        inits/s     nextkeys/s
+    40         1               3.854e+05      3.854e+05      1.542e+07
+    40         30              6.168e+06      6.168e+06      2.467e+08
+    0          1               4.990e+05      4.990e+05      0.000e+00
+    0          30              8.508e+06      8.508e+06      0.000e+00
+    10         1               4.599e+05      4.599e+05      4.599e+06
+    10         30              7.339e+06      7.339e+06      7.339e+07
+    160        1               2.042e+05      2.042e+05      3.267e+07
+    160        30              3.119e+06      3.119e+06      4.990e+08
+    640        1               8.191e+04      8.191e+04      5.242e+07
+    640        30              1.235e+06      1.235e+06      7.905e+08
+    40         1               3.739e+05      3.739e+05      1.496e+07
+    40         30              6.296e+06      6.296e+06      2.518e+08
+
+  GPU
+    NVIDIA GeForce RTX 3050, 8191 MB, 20 CUs
+    kernel against src/crypto/hc128.c: MATCH (gpu ba5022af, cpu ba5022af)
+    nextper    work items           rounds/s        inits/s     nextkeys/s
+    (peaks only; -v for the grid)
+    40         peak                1.045e+06  at 4096 items
+    0          peak                1.126e+06  at 4096 items
+    10         peak                1.085e+06  at 4096 items
+    160        peak                7.705e+05  at 4096 items
+    640        peak                3.632e+05  at 5120 items
+    40         peak                1.042e+06  at 4096 items
+
+    local mem 48 KB, so 12 instances per work-group
+    hcbench_lds against src/crypto/hc128.c: MATCH
+    lds  nextper 40   peak      2.150e+06  wg 4, 1048576 items   vs __global 2.06x
+    lds  nextper 0    peak      2.630e+06  wg 4, 262144 items   vs __global 2.34x
+
+  GPU / CPU by reseed mix, and how much disadvantage the reseeds buy
+    nextper      cpu rounds/s   gpu rounds/s       GPU is vs shipped
+    40              6.168e+06      1.045e+06       5.90x     1.000x   (shipped)
+    0               8.508e+06      1.126e+06       7.56x     1.281x
+    10              7.339e+06      1.085e+06       6.76x     1.146x
+    160             3.119e+06      7.705e+05       4.05x     0.686x
+    640             1.235e+06      3.632e+05       3.40x     0.576x
+    40              6.296e+06      1.042e+06       6.04x     1.024x   (shipped)
+
+  drift control, the shipped arm first against last: 2.4%
+
+  shipped mix, state in __local: GPU is 2.87x worse (against 5.90x in __global)
+
+  sink 44283a2f

@@ -1,0 +1,26 @@
+v8 chain fill: is it memory bound or HC-128 bound?
+height 4500000, cache 240 MB, window 5.3 MB, 30 s total
+reseed interval at odds 256, interleaved, 30 s
+
+  k         inits    ms/fill       vs k=1
+  1           257     0.9978       1.000x
+  4            65     0.5361       0.537x
+  8            33     0.4551       0.456x
+  16           17     0.4106       0.412x
+  256           2     0.3681       0.369x
+
+  RESEED height=4500000 k1=0.9978 k4=0.5361 k8=0.4551 k16=0.4106 k256=0.3681
+  10792 fills per arm
+v8 chain fill: is it memory bound or HC-128 bound?
+height 4500000, cache 240 MB, window 5.3 MB, 30 s total
+reseed interval at odds 256, interleaved, 30 s
+
+  k         inits    ms/fill       vs k=1
+  1           257     0.9967       1.000x
+  4            65     0.5355       0.537x
+  8            33     0.4545       0.456x
+  16           17     0.4100       0.411x
+  256           2     0.3677       0.369x
+
+  RESEED height=4500000 k1=0.9967 k4=0.5355 k8=0.4545 k16=0.4100 k256=0.3677
+  10806 fills per arm

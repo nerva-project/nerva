@@ -1,0 +1,28 @@
+NERVA PoW BENCH   real VM cores, same work both sides
+CPU  AMD Ryzen 5 5600X 6-Core Processor  (12 thr)
+LOAD 8% CPU busy before the run   <-- STOP MINERS AND CLOSE THE BROWSER
+     the CPU columns measure this machine against whatever else is
+     running on it, so they are not comparable with a clean run
+GPU  gfx901 16.0G/13.4G 64CU  vram=50% cap=25s cool=15s
+
+VARIANT       KB  nonces  ok   GPU H/s thr    CPU H/s   GPU:CPU    1T ms
+v5 1MB       1024    3264 yes     544.3   12    2977.8   0.1828x     2.43
+v8 pre-D1    1024    3264 yes     540.1   12    3390.4   0.1593x     1.79
+v8 D1        1024    3264 yes    1850.1   12    4889.0   0.3784x     1.27
+v8 D1+D3     1024    3264 yes    1828.0   12    4570.5   0.3999x     1.44
+v8 LDS-AES   1024    3264 yes    3292.7   12    4576.4   0.7195x     1.44
+v8 LDS k16   1024    3264 yes    3327.5!  12    7291.6   0.4563x     0.88
+v8+fp rne    1024    3264 yes     549.9   12    3308.0   0.1662x     1.88
+v8+fp        1024    3264 yes     541.5   12    3266.5   0.1658x     1.93
+v5 1MB end   1024    3264 yes     541.1   12    2999.5   0.1804x     2.44
+FP cost x v8 base   rne GPU  0.982x CPU  1.025x | modes GPU  0.997x CPU  1.038x
+GPU:CPU 0.1593x -> 0.1658x, FP HURTS by 4%   spread GPU 2.0% CPU 2.0%
+control: 0.787% drift between rows of identical GPU work, one
+         after the FP rows. Same scale as the costs above
+RESEED k16/k1  CPU all-thread 1.593x (C-2 needs 1.30x)  1T ms 1.4400 -> 0.8836 (1.630x)
+RESEED host-fed CPU better by 1.390x -> 2.191x (C-1: must not fall)
+ok = GPU matched CPU; on v8+fp that proves OpenCL's software rounding is
+bit-exact against a real MXCSR. No ok, no ratio. Lower GPU:CPU is better.
+CPU cost is per whole nonce, chain fill included: that is what a miner
+pays, since the salt is reseeded from the nonce. v5/v8 1MB are the same
+GPU work, so a gap there is the port, not the algorithm.

@@ -1,0 +1,33 @@
+NERVA PoW BENCH   real VM cores, same work both sides
+CPU  Intel(R) Core(TM) i7-7700HQ CPU @ 2.80GHz  (8 thr)
+LOAD 0% CPU busy before the run
+GPU  GeForce GTX 1050 Ti 4.0G/1.0G 6CU  vram=90% cap=25s cool=15s
+
+GPU rows with no result:
+  v5 1MB      ramp failed after 0 nonces ok, CL -4 (watchdog?)
+  v8 pre-D1   ramp failed after 0 nonces ok, CL -4 (watchdog?)
+  v8 D1       ramp failed after 0 nonces ok, CL -4 (watchdog?)
+  v8 D1+D3    ramp failed after 0 nonces ok, CL -4 (watchdog?)
+  v8 LDS-AES  ramp failed after 0 nonces ok, CL -4 (watchdog?)
+  v8 LDS k16  ramp failed after 0 nonces ok, CL -4 (watchdog?)
+  v8+fp rne   ramp failed after 0 nonces ok, CL -4 (watchdog?)
+  v8+fp       ramp failed after 0 nonces ok, CL -4 (watchdog?)
+  v5 1MB end  ramp failed after 0 nonces ok, CL -4 (watchdog?)
+
+VARIANT       KB  nonces  ok   GPU H/s thr    CPU H/s   GPU:CPU    1T ms
+v5 1MB       1024       -   -         -    8    1105.2         -     3.57
+v8 pre-D1    1024       -   -         -    6    1224.2!        -     2.85
+v8 D1        1024       -   -         -    6    1673.5!        -     1.98
+v8 D1+D3     1024       -   -         -    6    1547.6!        -     2.33
+v8 LDS-AES   1024       -   -         -    8    1522.2         -     2.32
+v8 LDS k16   1024       -   -         -    4    1967.4!        -     1.49
+v8+fp rne    1024       -   -         -    6    1195.5!        -     2.96
+v8+fp        1024       -   -         -    4    1139.2!        -     3.02
+v5 1MB end   1024       -   -         -    8    1102.0!        -     3.56
+FP cost x v8 base   rne GPU       - CPU  1.024x | modes GPU       - CPU  1.075x
+RESEED k16/k1  CPU all-thread 1.292x (C-2 needs 1.30x)  1T ms 2.3222 -> 1.4916 (1.557x)
+ok = GPU matched CPU; on v8+fp that proves OpenCL's software rounding is
+bit-exact against a real MXCSR. No ok, no ratio. Lower GPU:CPU is better.
+CPU cost is per whole nonce, chain fill included: that is what a miner
+pays, since the salt is reseeded from the nonce. v5/v8 1MB are the same
+GPU work, so a gap there is the port, not the algorithm.
