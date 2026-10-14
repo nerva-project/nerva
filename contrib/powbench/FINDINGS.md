@@ -6472,6 +6472,11 @@ can make an invalid block look valid.
 reachable on testnet and stagenet; handled by PR #163. The v14 path refetches on
 every call and is not affected.
 
+*2026-10-13: #163 merged into master and removed the cache, so every version
+now refetches on every call. Merged into this branch. `t_v14_longhash` drops
+its invalidation check, which had nothing left to check, and the mutation that
+removed the invalidation no longer exists; the other twelve still apply.*
+
 ### F93. 0xROOTPLS's second review: prefetch the field each pick reads, and make every pick read the hash
 
 *2026-10-13. [0xROOTPLS](https://github.com/0xROOTPLS) re-reviewed PR #162 at

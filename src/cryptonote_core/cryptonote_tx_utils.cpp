@@ -673,11 +673,11 @@ namespace cryptonote
       return false;
     const uint64_t stable_height = height - 256;
 
-    if (context->cached_height != height)
-    {
-      db.get_cna_v2_data(&context->random_values, stable_height, CN_SCRATCHPAD_MEMORY_V13);
-      context->cached_height = height;
-    }
+    // Refetch every call; do not cache on height. One context hashes several
+    // versions at the same height (alternative blocks), each reducing indices
+    // by a different bound and reading a different depth, so a height-keyed
+    // cache can serve a set computed for the wrong pad or chain position.
+    db.get_cna_v2_data(&context->random_values, stable_height, CN_SCRATCHPAD_MEMORY_V13);
 
     // Per-nonce seed: HC128 PRNG seeded from blob hash, used to fill chain salt.
     crypto::hash blob_hash;
@@ -776,13 +776,9 @@ namespace cryptonote
       return false;
     const uint64_t stable_height = height - 256;
 
-    // Fetch with v8's bound every call, never via cached_height: that cache is
-    // shared with v13, whose bound is 8 MB, and around the fork one context can
-    // hash both versions at the same height on competing chains. A stale
-    // v13-bounded set would index past this pad and split the chain. Invalidate
-    // it too, so a following v13 hash refetches with its own bound.
+    // random_values must land inside the 1 MB v8 pad, so fetch with v8's bound
+    // (see get_block_longhash_v13 on why this is not cached on height).
     db.get_cna_v2_data(&context->random_values, stable_height, CN_SCRATCHPAD_MEMORY_V8);
-    context->cached_height = (uint64_t)-1;
 
     // The salt is fetched from inside the hash (v14_fetch_salt), so its seed
     // can be the AES fill's final state. init_size_blk is fixed, so it is
@@ -871,11 +867,7 @@ namespace cryptonote
       return false;
     uint64_t stable_height = height - 256;
 
-    if (context->cached_height != height)
-    {
-      db.get_cna_v2_data(&context->random_values, stable_height, CN_SCRATCHPAD_MEMORY);
-      context->cached_height = height;
-    }
+    db.get_cna_v2_data(&context->random_values, stable_height, CN_SCRATCHPAD_MEMORY);
 
     // Make the hashing context unique per nonce by seeding it with a hash
     // of the hashing blob for a given nonce.
@@ -911,11 +903,7 @@ namespace cryptonote
 
     const uint64_t ht = height - 256;
 
-    if (context->cached_height != height)
-    {
-      db.get_cna_v2_data(&context->random_values, ht, CN_SCRATCHPAD_MEMORY);
-      context->cached_height = height;
-    }
+    db.get_cna_v2_data(&context->random_values, ht, CN_SCRATCHPAD_MEMORY);
 
     block b;
     std::stringstream ss;
@@ -955,11 +943,7 @@ namespace cryptonote
 
     const uint64_t ht = height - 256;
 
-    if (context->cached_height != height)
-    {
-      db.get_cna_v2_data(&context->random_values, ht, CN_SCRATCHPAD_MEMORY - 1);
-      context->cached_height = height;
-    }
+    db.get_cna_v2_data(&context->random_values, ht, CN_SCRATCHPAD_MEMORY - 1);
 
     block b;
     std::stringstream ss;
@@ -979,11 +963,7 @@ namespace cryptonote
     if (height < data_offset + CN_SEED_BACKREACH)
       return false;
 
-    if (context->cached_height != height)
-    {
-      db.get_cna_v2_data(&context->random_values, height - data_offset, CN_SCRATCHPAD_MEMORY - 1);
-      context->cached_height = height;
-    }
+    db.get_cna_v2_data(&context->random_values, height - data_offset, CN_SCRATCHPAD_MEMORY - 1);
 
     crypto::cn_slow_hash_v7_8(context, blob.data(), blob.size(), res, 0x40000 + ((height + 1) % 64));
 

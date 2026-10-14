@@ -37,8 +37,7 @@
 // The database is a fake whose answers are derived from every argument it is
 // given, so a wrong height, bound, odds, reseed interval or hash_words
 // setting changes the hash.
-// The arguments are also checked directly, and so is the invalidation of the
-// random_values cache that v13 shares. The real chain fill is pinned
+// The arguments are also checked directly. The real chain fill is pinned
 // separately, at every database open.
 //
 //   t_v14_longhash           check against the pinned vectors
@@ -215,12 +214,8 @@ namespace
       std::string blob;
       make_blob(c.blob_seed, blob);
       crypto::hash res;
-      // as if v13 had just cached random_values for this height: v14 must not
-      // reuse them (its bound differs) and must leave the cache invalidated
-      ctx->cached_height = c.height;
       const bool ok = cryptonote::get_block_longhash(ctx, db, 14, blob, res, c.height);
       CHECK_TRUE(ok);
-      CHECK_TRUE(ctx->cached_height == (uint64_t)-1);
 
       // the arguments themselves, so a failure says which one moved
       CHECK_TRUE(db.v2_calls == 1 && db.v6_calls == 1);
