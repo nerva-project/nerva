@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 // 
 // All rights reserved.
@@ -180,8 +180,7 @@ bool create_rsa_ssl_certificate(EVP_PKEY *&pkey, X509 *&cert)
     X509_free(cert);
     return false;
   }
-  X509_NAME *name = X509_get_subject_name(cert);
-  X509_set_issuer_name(cert, name);
+  X509_set_issuer_name(cert, X509_get_subject_name(cert));
 
   if (X509_sign(cert, pkey, EVP_sha256()) == 0)
   {
@@ -261,8 +260,7 @@ bool create_ec_ssl_certificate(EVP_PKEY *&pkey, X509 *&cert, int type)
     X509_free(cert);
     return false;
   }
-  X509_NAME *name = X509_get_subject_name(cert);
-  X509_set_issuer_name(cert, name);
+  X509_set_issuer_name(cert, X509_get_subject_name(cert));
 
   if (X509_sign(cert, pkey, EVP_sha256()) == 0)
   {
