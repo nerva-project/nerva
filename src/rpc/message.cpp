@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 // 
 // All rights reserved.
@@ -45,6 +45,7 @@ const char* Message::STATUS_RETRY = "Retry";
 const char* Message::STATUS_FAILED = "Failed";
 const char* Message::STATUS_BAD_REQUEST = "Invalid request type";
 const char* Message::STATUS_BAD_JSON = "Malformed json";
+const char* Message::STATUS_REQUEST_TOO_LARGE = "Request too large";
 
 namespace
 {
@@ -284,6 +285,17 @@ std::string BAD_JSON(const std::string& error_details)
   Message fail;
   fail.status = Message::STATUS_BAD_JSON;
   fail.error_details = error_details;
+
+  FullMessage fail_response = FullMessage::responseMessage(&fail);
+
+  return fail_response.getJson();
+}
+
+std::string REQUEST_TOO_LARGE()
+{
+  Message fail;
+  fail.status = Message::STATUS_REQUEST_TOO_LARGE;
+  fail.error_details = "Request exceeds maximum message size.";
 
   FullMessage fail_response = FullMessage::responseMessage(&fail);
 

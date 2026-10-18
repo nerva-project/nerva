@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 // 
 // All rights reserved.
@@ -29,9 +29,12 @@
 
 #include "zmq_server.h"
 
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <system_error>
+
+#include "rpc/message.h"
 
 namespace cryptonote
 {
@@ -39,7 +42,7 @@ namespace cryptonote
 namespace
 {
   constexpr const int num_zmq_threads = 1;
-  constexpr const std::int64_t max_message_size = 10 * 1024 * 1024; // 10 MiB
+  constexpr const std::int64_t max_frame_size = net::zmq::max_message_size;
   constexpr const std::chrono::seconds linger_timeout{2}; // wait period for pending out messages
 }
 
@@ -72,7 +75,20 @@ void ZmqServer::serve()
 
     while (1)
     {
-      const std::string message = MONERO_UNWRAP(net::zmq::receive(socket.get()));
+      expect<std::string> received = net::zmq::receive(socket.get());
+      if (!received)
+      {
+        // a reply socket must answer before it can receive again
+        if (received == net::zmq::make_error_code(EMSGSIZE))
+        {
+          MERROR("ZMQ RPC request exceeds maximum message size");
+          const std::string response = REQUEST_TOO_LARGE();
+          MONERO_UNWRAP(net::zmq::send(epee::strspan<std::uint8_t>(response), socket.get()));
+          continue;
+        }
+        MONERO_THROW(received.error(), "ZMQ RPC receive failed");
+      }
+      const std::string message = std::move(*received);
       MDEBUG("Received RPC request: \"" << message << "\"");
       const std::string& response = handler.handle(message);
 
@@ -116,7 +132,7 @@ bool ZmqServer::addTCPSocket(boost::string_ref address, boost::string_ref port)
     return false;
   }
 
-  if (zmq_setsockopt(rep_socket.get(), ZMQ_MAXMSGSIZE, std::addressof(max_message_size), sizeof(max_message_size)) != 0)
+  if (zmq_setsockopt(rep_socket.get(), ZMQ_MAXMSGSIZE, std::addressof(max_frame_size), sizeof(max_frame_size)) != 0)
   {
     MONERO_LOG_ZMQ_ERROR("Failed to set maximum incoming message size");
     return false;

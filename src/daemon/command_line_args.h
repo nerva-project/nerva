@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 // 
 // All rights reserved.
@@ -128,9 +128,19 @@ namespace daemon_args
     }
   };
 
+  const command_line::arg_descriptor<bool> arg_zmq_rpc_enabled = {
+    "zmq-rpc"
+  , "Enable the ZMQ RPC server (disabled by default). It has no restricted mode or authentication, so keep it on a local address"
+  };
+
+  const command_line::arg_descriptor<bool> arg_zmq_rpc_confirm_external_bind = {
+    "zmq-rpc-confirm-external-bind"
+  , "Confirm zmq-rpc-bind-ip value is NOT a loopback (local) IP"
+  };
+
   const command_line::arg_descriptor<bool> arg_zmq_rpc_disabled = {
     "no-zmq"
-  , "Disable ZMQ RPC server"
+  , "Disable ZMQ RPC server (the default; overrides --zmq-rpc)"
   };
 
   const command_line::arg_descriptor<bool> arg_noanalytics = {
