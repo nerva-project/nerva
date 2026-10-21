@@ -1,4 +1,4 @@
-# Copyright (c) 2018-2024, The Nerva Project
+# Copyright (c) 2018-2026, The Nerva Project
 # Copyright (c) 2014-2024, The Monero Project
 # 
 # All rights reserved.
@@ -54,8 +54,10 @@ set(UPNP_LIBRARIES "libminiupnpc-static" PARENT_SCOPE)
 
 find_package(Unbound)
 
-# iOS: link the depends libunbound; bundled unbound's getentropy_osx.c wants a header iOS lacks
-if(NOT UNBOUND_INCLUDE_DIR OR (STATIC AND NOT IOS))
+# Depends builds link the libunbound their toolchain provides, which is kept
+# current in contrib/depends; other static builds fall back to the bundled copy.
+# (iOS needs the depends one anyway: bundled getentropy_osx.c wants a header iOS lacks.)
+if(NOT UNBOUND_INCLUDE_DIR OR (STATIC AND NOT IOS AND NOT DEPENDS))
   # NOTE: If STATIC is true, CMAKE_FIND_LIBRARY_SUFFIXES has been reordered.
   # unbound has config tests which used OpenSSL libraries, so -ldl may need to
   # be set in this case.
@@ -70,7 +72,7 @@ if(NOT UNBOUND_INCLUDE_DIR OR (STATIC AND NOT IOS))
 else()
   message(STATUS "Found libunbound include (unbound.h) in ${UNBOUND_INCLUDE_DIR}")
   if(UNBOUND_LIBRARIES)
-    message(STATUS "Found libunbound shared library")
+    message(STATUS "Found libunbound library: ${UNBOUND_LIBRARIES}")
     set(UNBOUND_STATIC false PARENT_SCOPE)
     set(UNBOUND_INCLUDE ${UNBOUND_INCLUDE_DIR} PARENT_SCOPE)
     set(UNBOUND_LIBRARY ${UNBOUND_LIBRARIES} PARENT_SCOPE)
