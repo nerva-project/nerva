@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -65,6 +65,7 @@ namespace rpc
       static const char* STATUS_FAILED;
       static const char* STATUS_BAD_REQUEST;
       static const char* STATUS_BAD_JSON;
+      static const char* STATUS_REQUEST_TOO_LARGE;
 
       Message() : status(STATUS_OK), rpc_version(0) { }
 
@@ -125,6 +126,8 @@ namespace rpc
   std::string BAD_REQUEST(const std::string& request, rapidjson::Value& id);
 
   std::string BAD_JSON(const std::string& error_details);
+
+  std::string REQUEST_TOO_LARGE();
 
 
 }  // namespace rpc

@@ -68,8 +68,14 @@ paths:
     post:
       tags:
       - Blocks
+      - Restricted
       summary: Returns the hashes of the alternative (non-mainchain) blocks known to the daemon..
       description: 'Returns the hashes of the alternative (non-mainchain) blocks known to the daemon.
+
+
+        Restricted endpoints and methods are only registered when the daemon runs without --restricted-rpc
+        and without --rpc-restricted-bind-port. --rpc-login adds HTTP digest authentication but does not
+        re-enable restricted methods.
 
 
         The epee framework also accepts these fields as URL query parameters on GET; POST with a JSON

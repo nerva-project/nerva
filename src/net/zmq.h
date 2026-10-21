@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
@@ -27,6 +27,7 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <system_error>
@@ -58,6 +59,8 @@ namespace net
 {
 namespace zmq
 {
+    constexpr std::size_t max_message_size = 10 * 1024 * 1024; // 10 MiB
+
     //! \return Category for ZMQ errors.
     const std::error_category& error_category() noexcept;
 

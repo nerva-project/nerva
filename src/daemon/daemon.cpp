@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 // 
 // All rights reserved.
@@ -32,6 +32,7 @@
 #include <memory>
 #include <stdexcept>
 #include <boost/algorithm/string/split.hpp>
+#include <boost/asio/ip/address.hpp>
 #include "misc_log_ex.h"
 #include "daemon/daemon.h"
 #include "rpc/daemon_handler.h"
@@ -106,7 +107,11 @@ t_daemon::t_daemon(
 {
   zmq_rpc_bind_port = command_line::get_arg(vm, daemon_args::arg_zmq_rpc_bind_port);
   zmq_rpc_bind_address = command_line::get_arg(vm, daemon_args::arg_zmq_rpc_bind_ip);
-  zmq_rpc_disabled = command_line::get_arg(vm, daemon_args::arg_zmq_rpc_disabled);
+  zmq_rpc_disabled = !command_line::get_arg(vm, daemon_args::arg_zmq_rpc_enabled) || command_line::get_arg(vm, daemon_args::arg_zmq_rpc_disabled);
+  zmq_rpc_confirm_external_bind = command_line::get_arg(vm, daemon_args::arg_zmq_rpc_confirm_external_bind);
+  if (zmq_rpc_disabled && (!command_line::is_arg_defaulted(vm, daemon_args::arg_zmq_rpc_bind_ip) || !command_line::is_arg_defaulted(vm, daemon_args::arg_zmq_rpc_bind_port)))
+    MWARNING("The ZMQ RPC server is disabled by default: --" << daemon_args::arg_zmq_rpc_bind_ip.name << " and --"
+        << daemon_args::arg_zmq_rpc_bind_port.name << " have no effect without --" << daemon_args::arg_zmq_rpc_enabled.name);
 }
 
 t_daemon::~t_daemon() = default;
@@ -119,6 +124,10 @@ t_daemon::t_daemon(t_daemon && other)
     mp_internals = std::move(other.mp_internals);
     other.mp_internals.reset(nullptr);
     public_rpc_port = other.public_rpc_port;
+    zmq_rpc_bind_address = std::move(other.zmq_rpc_bind_address);
+    zmq_rpc_bind_port = std::move(other.zmq_rpc_bind_port);
+    zmq_rpc_disabled = other.zmq_rpc_disabled;
+    zmq_rpc_confirm_external_bind = other.zmq_rpc_confirm_external_bind;
   }
 }
 
@@ -130,6 +139,10 @@ t_daemon & t_daemon::operator=(t_daemon && other)
     mp_internals = std::move(other.mp_internals);
     other.mp_internals.reset(nullptr);
     public_rpc_port = other.public_rpc_port;
+    zmq_rpc_bind_address = std::move(other.zmq_rpc_bind_address);
+    zmq_rpc_bind_port = std::move(other.zmq_rpc_bind_port);
+    zmq_rpc_disabled = other.zmq_rpc_disabled;
+    zmq_rpc_confirm_external_bind = other.zmq_rpc_confirm_external_bind;
   }
   return *this;
 }
@@ -163,7 +176,22 @@ bool t_daemon::run(bool interactive)
 
     if (!zmq_rpc_disabled)
     {
-      if (!zmq_server.addTCPSocket(zmq_rpc_bind_address, zmq_rpc_bind_port))
+      // ZMQ RPC has no restricted mode or authentication, so a non-loopback
+      // bind must be confirmed explicitly; ZMQ's "*" binds every interface
+      boost::system::error_code ec{};
+      const bool zmq_wildcard = zmq_rpc_bind_address == "*";
+      const auto zmq_ip = zmq_wildcard ? boost::asio::ip::address() : boost::asio::ip::make_address(zmq_rpc_bind_address, ec);
+      const bool zmq_bind_allowed = !ec && ((!zmq_wildcard && zmq_ip.is_loopback()) || zmq_rpc_confirm_external_bind);
+      if (!zmq_bind_allowed)
+      {
+        if (ec)
+          LOG_ERROR("Invalid IP address given for --" << daemon_args::arg_zmq_rpc_bind_ip.name);
+        else
+          LOG_ERROR("--" << daemon_args::arg_zmq_rpc_bind_ip.name << " exposes the ZMQ RPC, which has no restricted mode or authentication. Override with --"
+              << daemon_args::arg_zmq_rpc_confirm_external_bind.name);
+      }
+
+      if (!zmq_bind_allowed || !zmq_server.addTCPSocket(zmq_rpc_bind_address, zmq_rpc_bind_port))
       {
         LOG_ERROR(std::string("Failed to add TCP Socket (") + zmq_rpc_bind_address
             + ":" + zmq_rpc_bind_port + ") to ZMQ RPC Server");

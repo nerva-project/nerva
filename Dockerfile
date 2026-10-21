@@ -1,6 +1,7 @@
 # Multistage docker build, requires docker 17.05
 
-# builder stage
+# builder stage: same release as the depends CI job, so the static build
+# this image ships is the one CI tests
 FROM ubuntu:20.04 as builder
 
 RUN set -ex && \
@@ -43,11 +44,11 @@ RUN set -ex && \
     cp -r /src/build/${BUILD_TARGET}/release/bin /src/build/out
 
 # runtime stage
-FROM ubuntu:20.04
+FROM ubuntu:24.04
 
 RUN set -ex && \
     apt-get update && \
-    apt-get --no-install-recommends --yes install ca-certificates && \
+    apt-get --no-install-recommends --yes install ca-certificates adduser && \
     apt-get clean && \
     rm -rf /var/lib/apt
 COPY --from=builder /src/build/out /usr/local/bin/
@@ -72,5 +73,9 @@ EXPOSE 17566
 # switch to user nerva
 USER nerva
 
+# The RPC listens on every interface so a published port reaches it, and it
+# runs restricted: wallets and explorers work, administrative calls (stopping
+# the daemon, mining, bans, peer limits) are refused. For an unrestricted RPC,
+# pass your own arguments to the container and do not publish 17566.
 ENTRYPOINT ["nervad"]
-CMD ["--p2p-bind-ip=0.0.0.0", "--p2p-bind-port=17565", "--rpc-bind-ip=0.0.0.0", "--rpc-bind-port=17566", "--non-interactive", "--confirm-external-bind"]
+CMD ["--p2p-bind-ip=0.0.0.0", "--p2p-bind-port=17565", "--rpc-bind-ip=0.0.0.0", "--rpc-bind-port=17566", "--restricted-rpc", "--non-interactive", "--confirm-external-bind"]

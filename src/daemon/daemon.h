@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 // 
 // All rights reserved.
@@ -48,6 +48,7 @@ private:
   std::string zmq_rpc_bind_address;
   std::string zmq_rpc_bind_port;
   bool zmq_rpc_disabled;
+  bool zmq_rpc_confirm_external_bind;
 public:
   t_daemon(
       boost::program_options::variables_map const & vm,
