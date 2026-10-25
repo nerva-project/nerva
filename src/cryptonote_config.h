@@ -251,9 +251,7 @@ namespace config
         {11, 500000},
         {12, 930000},
         {13, 4320000},  // CryptoNight-Adaptive v6: 8 MB scratchpad + random VM program
-        {14, 4500000}   // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v8.
-                        // Placeholder height, far enough out that builds from master
-                        // don't fork early; the real one is set at release.
+        {14, 4480000}   // CLSAG + Bulletproofs+ (type 7 only) + CryptoNight-Adaptive v8
     };
 
     namespace testnet
