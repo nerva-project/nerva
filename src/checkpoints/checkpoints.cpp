@@ -213,6 +213,7 @@ namespace cryptonote
       ADD_CHECKPOINT(4200000, "9e1bbcbf0bd690a59299008e51cfde8403364cde89a1c96bfe173158c3269a8f");
       ADD_CHECKPOINT(4300000, "6ee1e78bd980b5918bf2e7c87b72bb21bc86c7088750bea15e6b0b67a55a93c6");
       ADD_CHECKPOINT(4320000, "45ae8c2a5f5463671ee092adc3f0f786c57369ba5a6fff2119bac0f1a2b86339");   // HF13 activation
+      ADD_CHECKPOINT(4400000, "d4fdc6f8871467fa3c71f90174e9440c2f7ca93ba595984cb734483fc4ac5716");
     }
 
     // assume-valid skips PoW below ASSUME_VALID_HEIGHT; that is only safe if a
