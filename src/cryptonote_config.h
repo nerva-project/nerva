@@ -219,8 +219,8 @@ namespace config
 
     uint32_t const GENESIS_NONCE = 10000;
 
-    std::string const HF_MIN_VERSION = "0.1.7.0";
-    std::string const MIN_VERSION    = "0.1.6.4";
+    std::string const HF_MIN_VERSION = "0.4.0.0";
+    std::string const MIN_VERSION    = "0.3.0.0";
 
     // Skip PoW recomputation for blocks below this height during sync, anchored
     // by a hardcoded checkpoint (see checkpoints::init_default_checkpoints).
