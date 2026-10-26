@@ -57,6 +57,8 @@ namespace epee
       : m_run(true)
       , m_has_read_request(false)
       , m_read_status(state_init)
+      , m_request_id(0)
+      , m_result_id(0)
     {
 #ifdef HAVE_READLINE
       m_readline_buffer.start();
@@ -80,27 +82,26 @@ namespace epee
     // Not thread safe. Only one thread can call this method at once.
     bool get_line(std::string& line)
     {
-      if (!start_read())
+      uint64_t request_id;
+      if (!start_read(request_id))
         return false;
 
       if (state_eos == m_read_status)
         return false;
 
+      // wait for the result of this request; results of cancelled or older requests are dropped by the reader
       boost::unique_lock<boost::mutex> lock(m_response_mutex);
-      while (state_init == m_read_status)
+      while (state_eos != m_read_status && !(m_result_id == request_id && state_init != m_read_status))
       {
         m_response_cv.wait(lock);
       }
 
       bool res = false;
-      if (state_success == m_read_status)
+      if (state_success == m_read_status && m_result_id == request_id)
       {
         line = m_line;
         res = true;
       }
-
-      if (!eos() && m_read_status != state_cancelled)
-        m_read_status = state_init;
 
       return res;
     }
@@ -127,25 +128,30 @@ namespace epee
 
     void cancel()
     {
+      {
+        boost::unique_lock<boost::mutex> lock(m_request_mutex);
+        m_has_read_request = false;
+      }
       boost::unique_lock<boost::mutex> lock(m_response_mutex);
+      m_result_id = m_request_id;
       m_read_status = state_cancelled;
-      m_has_read_request = false;
       m_response_cv.notify_one();
     }
 
   private:
-    bool start_read()
+    bool start_read(uint64_t &request_id)
     {
       boost::unique_lock<boost::mutex> lock(m_request_mutex);
       if (!m_run.load(std::memory_order_relaxed) || m_has_read_request)
         return false;
 
+      request_id = ++m_request_id;
       m_has_read_request = true;
       m_request_cv.notify_one();
       return true;
     }
 
-    bool wait_read()
+    bool wait_read(uint64_t &request_id)
     {
       boost::unique_lock<boost::mutex> lock(m_request_mutex);
       while (m_run.load(std::memory_order_relaxed) && !m_has_read_request)
@@ -156,13 +162,21 @@ namespace epee
       if (m_has_read_request)
       {
         m_has_read_request = false;
+        request_id = m_request_id;
         return true;
       }
 
       return false;
     }
 
-    bool wait_stdin_data()
+    // a request is stale once it was cancelled or a newer one replaced it
+    bool is_stale(uint64_t request_id)
+    {
+      boost::unique_lock<boost::mutex> lock(m_response_mutex);
+      return request_id != m_request_id || (m_result_id == request_id && state_cancelled == m_read_status);
+    }
+
+    bool wait_stdin_data(uint64_t request_id)
     {
 #if !defined(WIN32)
       #if defined(__OpenBSD__) || defined(__ANDROID__)
@@ -173,7 +187,7 @@ namespace epee
 
       while (m_run.load(std::memory_order_relaxed))
       {
-        if (m_read_status == state_cancelled)
+        if (is_stale(request_id))
           return false;
 
         fd_set read_set;
@@ -193,7 +207,7 @@ namespace epee
 #else
       while (m_run.load(std::memory_order_relaxed))
       {
-        if (m_read_status == state_cancelled)
+        if (is_stale(request_id))
           return false;
 
         DWORD retval = ::WaitForSingleObject(::GetStdHandle(STD_INPUT_HANDLE), 100);
@@ -216,7 +230,8 @@ namespace epee
     {
       while (true)
       {
-        if (!wait_read())
+        uint64_t request_id;
+        if (!wait_read(request_id))
           break;
 
         std::string line;
@@ -224,19 +239,22 @@ namespace epee
 #ifdef HAVE_READLINE
 reread:
 #endif
-        if (wait_stdin_data())
+        if (wait_stdin_data(request_id))
         {
           if (m_run.load(std::memory_order_relaxed))
           {
 #ifdef HAVE_READLINE
-            switch (m_readline_buffer.get_line(line))
+            if (!is_stale(request_id))
             {
-            case rdln::empty:   goto eof;
-            case rdln::partial: goto reread;
-            case rdln::full:    break;
+              switch (m_readline_buffer.get_line(line))
+              {
+              case rdln::empty:   goto eof;
+              case rdln::partial: goto reread;
+              case rdln::full:    break;
+              }
             }
 #else
-            if (m_read_status != state_cancelled)
+            if (!is_stale(request_id))
               std::getline(std::cin, line);
 #endif
             read_ok = !std::cin.eof() && !std::cin.fail();
@@ -250,21 +268,26 @@ reread:
 #ifdef HAVE_READLINE
 eof:
 #endif
-          m_read_status = state_eos;
+          {
+            boost::unique_lock<boost::mutex> lock(m_response_mutex);
+            m_read_status = state_eos;
+          }
           m_response_cv.notify_one();
           break;
         }
         else
         {
           boost::unique_lock<boost::mutex> lock(m_response_mutex);
-          if (m_run.load(std::memory_order_relaxed))
+          if (!m_run.load(std::memory_order_relaxed))
+          {
+            m_result_id = request_id;
+            m_read_status = state_cancelled;
+          }
+          else if (request_id == m_request_id && !(m_result_id == request_id && state_cancelled == m_read_status))
           {
             m_line = std::move(line);
+            m_result_id = request_id;
             m_read_status = read_ok ? state_success : state_error;
-          }
-          else
-          {
-            m_read_status = state_cancelled;
           }
           m_response_cv.notify_one();
         }
@@ -290,6 +313,8 @@ eof:
     std::string m_line;
     bool m_has_read_request;
     t_state m_read_status;
+    std::atomic<uint64_t> m_request_id;
+    uint64_t m_result_id;
 
     boost::mutex m_request_mutex;
     boost::mutex m_response_mutex;
