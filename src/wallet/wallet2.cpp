@@ -31,7 +31,9 @@
 
 #include <algorithm>
 #include <numeric>
+#include <set>
 #include <tuple>
+#include <unordered_set>
 #include <boost/format.hpp>
 #include <boost/optional/optional.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -5429,6 +5431,25 @@ void wallet2::generate_chacha_key_from_password(const epee::wipeable_string &pas
 {
   crypto::generate_chacha_key(pass.data(), pass.size(), key, m_kdf_rounds);
 }
+//----------------------------------------------------------------------------------------------------
+void wallet2::trim_transfer_maps(size_t num_transfers)
+{
+  for (auto it = m_key_images.begin(); it != m_key_images.end(); )
+  {
+    if (it->second >= num_transfers)
+      it = m_key_images.erase(it);
+    else
+      ++it;
+  }
+  for (auto it = m_pub_keys.begin(); it != m_pub_keys.end(); )
+  {
+    if (it->second >= num_transfers)
+      it = m_pub_keys.erase(it);
+    else
+      ++it;
+  }
+}
+//----------------------------------------------------------------------------------------------------
 void wallet2::load(const std::string& wallet_, const epee::wipeable_string& password)
 {
   clear();
@@ -5540,6 +5561,9 @@ void wallet2::load(const std::string& wallet_, const epee::wipeable_string& pass
       m_account_public_address.m_spend_public_key != m_account.get_keys().m_account_address.m_spend_public_key ||
       m_account_public_address.m_view_public_key  != m_account.get_keys().m_account_address.m_view_public_key,
       error::wallet_files_doesnt_correspond, m_keys_file, m_wallet_file);
+
+    // Repair stale indices from older output imports.
+    trim_transfer_maps(m_transfers.size());
   }
 
   cryptonote::block genesis;
@@ -10688,19 +10712,8 @@ void wallet2::check_tx_key_helper(const cryptonote::transaction &tx, const crypt
       }
       else
       {
-        crypto::secret_key scalar1;
-        crypto::derivation_to_scalar(found_derivation, n, scalar1);
-        rct::ecdhTuple ecdh_info = tx.rct_signatures.ecdhInfo[n];
-        rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar1), tx.rct_signatures.type == rct::RCTTypeBulletproof2 || tx.rct_signatures.type == rct::RCTTypeCLSAG || tx.rct_signatures.type == rct::RCTTypeBulletproofPlus);
-        const rct::key C = tx.rct_signatures.outPk[n].mask;
-        rct::key Ctmp;
-        THROW_WALLET_EXCEPTION_IF(sc_check(ecdh_info.mask.bytes) != 0, error::wallet_internal_error, "Bad ECDH input mask");
-        THROW_WALLET_EXCEPTION_IF(sc_check(ecdh_info.amount.bytes) != 0, error::wallet_internal_error, "Bad ECDH input amount");
-        rct::addKeys2(Ctmp, ecdh_info.mask, ecdh_info.amount, rct::H);
-        if (rct::equalKeys(C, Ctmp))
-          amount = rct::h2d(ecdh_info.amount);
-        else
-          amount = 0;
+        rct::key mask;
+        amount = decodeRct(tx.rct_signatures, found_derivation, n, mask, hw::get_device("default"));
       }
       received += amount;
     }
@@ -10754,7 +10767,7 @@ void wallet2::check_tx_key_helper(const crypto::hash &txid, const crypto::key_de
   {
     std::string err;
     uint64_t bc_height = get_daemon_blockchain_height(err);
-    if (err.empty())
+    if (err.empty() && bc_height > res.txs.front().block_height)
       confirmations = bc_height - res.txs.front().block_height;
   }
 }
@@ -10962,7 +10975,7 @@ bool wallet2::check_tx_proof(const crypto::hash &txid, const cryptonote::account
   {
     std::string err;
     uint64_t bc_height = get_daemon_blockchain_height(err);
-    if (err.empty())
+    if (err.empty() && bc_height > res.txs.front().block_height)
       confirmations = bc_height - res.txs.front().block_height;
   }
 
@@ -11195,11 +11208,34 @@ bool wallet2::check_reserve_proof(const cryptonote::account_public_address &addr
   THROW_WALLET_EXCEPTION_IF(!tools::base58::decode(sig_str.substr(std::strlen(header)), sig_decoded), error::wallet_internal_error,
     "Signature decoding error");
 
-  std::istringstream iss(sig_decoded);
-  boost::archive::portable_binary_iarchive ar(iss);
+  bool loaded = false;
   std::vector<reserve_proof_entry> proofs;
   std::unordered_map<crypto::public_key, crypto::signature> subaddr_spendkeys;
-  ar >> proofs >> subaddr_spendkeys;
+  try
+  {
+    std::istringstream iss(sig_decoded);
+    boost::archive::portable_binary_iarchive ar(iss);
+    ar >> proofs >> subaddr_spendkeys;
+    loaded = true;
+  }
+  catch(...) {}
+
+  THROW_WALLET_EXCEPTION_IF(!loaded, error::wallet_internal_error, "Failed to parse reserve proof signature data");
+
+  std::unordered_set<crypto::key_image> seen_key_images;
+  const auto output_less = [](const std::pair<crypto::hash, uint64_t> &a, const std::pair<crypto::hash, uint64_t> &b)
+  {
+    const int cmp = memcmp(&a.first, &b.first, sizeof(crypto::hash));
+    return cmp < 0 || (cmp == 0 && a.second < b.second);
+  };
+  std::set<std::pair<crypto::hash, uint64_t>, decltype(output_less)> seen_outputs(output_less);
+  for (const reserve_proof_entry &proof : proofs)
+  {
+    THROW_WALLET_EXCEPTION_IF(!seen_key_images.insert(proof.key_image).second, error::wallet_internal_error, "Duplicate key image in reserve proof");
+    THROW_WALLET_EXCEPTION_IF(!seen_outputs.emplace(proof.txid, proof.index_in_tx).second, error::wallet_internal_error, "Duplicate output in reserve proof");
+    THROW_WALLET_EXCEPTION_IF(rct::ki2rct(proof.key_image) == rct::identity() || !rct::isInMainSubgroup(rct::ki2rct(proof.key_image)),
+      error::wallet_internal_error, "Invalid key image in reserve proof");
+  }
 
   THROW_WALLET_EXCEPTION_IF(subaddr_spendkeys.count(address.m_spend_public_key) == 0, error::wallet_internal_error,
     "The given address isn't found in the proof");
@@ -11292,11 +11328,8 @@ bool wallet2::check_reserve_proof(const cryptonote::account_public_address &addr
     if (amount == 0)
     {
       // decode rct
-      crypto::secret_key shared_secret;
-      crypto::derivation_to_scalar(derivation, proof.index_in_tx, shared_secret);
-      rct::ecdhTuple ecdh_info = tx.rct_signatures.ecdhInfo[proof.index_in_tx];
-      rct::ecdhDecode(ecdh_info, rct::sk2rct(shared_secret), tx.rct_signatures.type == rct::RCTTypeBulletproof2 || tx.rct_signatures.type == rct::RCTTypeCLSAG || tx.rct_signatures.type == rct::RCTTypeBulletproofPlus);
-      amount = rct::h2d(ecdh_info.amount);
+      rct::key mask_;
+      amount = decodeRct(tx.rct_signatures, derivation, proof.index_in_tx, mask_, hw::get_device("default"));
     }
     total += amount;
     if (kispent_res.spent_status[i])
@@ -12153,7 +12186,10 @@ size_t wallet2::import_outputs(const std::pair<size_t, std::vector<tools::wallet
 
   const size_t offset = outputs.first;
   const size_t original_size = m_transfers.size();
-  m_transfers.resize(offset + outputs.second.size());
+  const size_t num_outputs = offset + outputs.second.size();
+  if (num_outputs < m_transfers.size())
+    trim_transfer_maps(num_outputs);
+  m_transfers.resize(num_outputs);
   for (size_t i = 0; i < offset; ++i)
     m_transfers[i].m_key_image_request = false;
   for (size_t i = 0; i < outputs.second.size(); ++i)
