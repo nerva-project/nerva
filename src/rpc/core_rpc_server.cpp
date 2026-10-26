@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2024, The Nerva Project
+// Copyright (c) 2018-2026, The Nerva Project
 // Copyright (c) 2014-2024, The Monero Project
 // 
 // All rights reserved.
@@ -2444,7 +2444,7 @@ namespace cryptonote
       for (const auto &str: req.txids)
       {
         cryptonote::blobdata txid_data;
-        if(!epee::string_tools::parse_hexstr_to_binbuff(str, txid_data))
+        if(!epee::string_tools::parse_hexstr_to_binbuff(str, txid_data) || txid_data.size() != sizeof(crypto::hash))
         {
           failed = true;
         }
@@ -2584,8 +2584,7 @@ namespace cryptonote
   bool core_rpc_server::on_get_min_version(const COMMAND_RPC_MIN_VERSION::request& req, COMMAND_RPC_MIN_VERSION::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
   {
     PERF_TIMER(on_get_min_version);
-    cryptonote::network_type net_type = nettype();
-    res.version_int = m_core.get_blockchain_storage().get_minimum_version_for_fork(net_type);
+    res.version_int = m_core.get_blockchain_storage().get_minimum_version_for_fork();
 
     uint8_t a, b, c, d;
     a = (uint8_t)(res.version_int >> 24);

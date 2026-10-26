@@ -960,7 +960,7 @@ namespace nodetool
       if (hsh_result)
       {
         uint32_t rsp_ver = version_string_to_integer(rsp.version);
-        m_minimum_version = m_min_version_override ? m_minimum_version : m_payload_handler.get_core().get_blockchain_storage().get_minimum_version_for_fork(m_minimum_version);
+        m_minimum_version = m_min_version_override ? m_minimum_version : m_payload_handler.get_core().get_blockchain_storage().get_minimum_version_for_fork();
         if (rsp_ver < m_minimum_version)
         {
           ban_reason = "Incorrect version (" + rsp.version + ")";
@@ -1021,7 +1021,7 @@ namespace nodetool
       }
 
       uint32_t rsp_ver = version_string_to_integer(rsp.node_data.version);
-      m_minimum_version = m_min_version_override ? m_minimum_version : m_payload_handler.get_core().get_blockchain_storage().get_minimum_version_for_fork(m_minimum_version);
+      m_minimum_version = m_min_version_override ? m_minimum_version : m_payload_handler.get_core().get_blockchain_storage().get_minimum_version_for_fork();
       if (rsp_ver < m_minimum_version)
       {
         LOG_PRINT_L0("Host " << context.m_remote_address.str() << " has incorrect version: " << rsp.node_data.version);
@@ -2386,7 +2386,7 @@ namespace nodetool
     }
 
     uint32_t rsp_ver = version_string_to_integer(arg.node_data.version);
-    m_minimum_version = m_min_version_override ? m_minimum_version : m_payload_handler.get_core().get_blockchain_storage().get_minimum_version_for_fork(m_minimum_version);
+    m_minimum_version = m_min_version_override ? m_minimum_version : m_payload_handler.get_core().get_blockchain_storage().get_minimum_version_for_fork();
     if (rsp_ver < m_minimum_version)
     {
       ban_reason = "Incorrect version (" + arg.node_data.version + ")";
