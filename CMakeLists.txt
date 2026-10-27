@@ -1,4 +1,4 @@
-# Copyright (c) 2018-2024, The Nerva Project
+# Copyright (c) 2018-2026, The Nerva Project
 # Copyright (c) 2014-2024, The Monero Project
 #
 # All rights reserved.
@@ -386,7 +386,6 @@ if (NOT MANUAL_SUBMODULES)
         message(STATUS "Checking submodules")
         check_submodule(external/miniupnp)
         check_submodule(external/rapidjson)
-        check_submodule(external/unbound)
     endif ()
 endif ()
 

@@ -1,0 +1,19 @@
+diff --git a/configure.ac b/configure.ac
+--- a/configure.ac
++++ b/configure.ac
+@@ -1591,6 +1591,7 @@
+ # check for libexpat
+ AC_ARG_WITH(libexpat, AS_HELP_STRING([--with-libexpat=path],[specify explicit path for libexpat.]),
+     [ ],[ withval="/usr/local /opt/local /usr/lib /usr/pkg /usr/sfw /usr" ])
++if test x_$withval = x_yes -o x_$withval != x_no; then
+ AC_MSG_CHECKING(for libexpat)
+ found_libexpat="no"
+ for dir in $withval ; do
+@@ -1612,6 +1613,7 @@
+ AC_CHECK_DECLS([XML_StopParser], [], [], [AC_INCLUDES_DEFAULT
+ #include <expat.h>
+ ])
++fi
+ 
+ # hiredis (redis C client for cachedb)
+ AC_ARG_WITH(libhiredis, AS_HELP_STRING([--with-libhiredis=path],[specify explicit path for libhiredis.]),

@@ -3,13 +3,13 @@ $(package)_version=1.26.1
 $(package)_download_path=https://www.nlnetlabs.nl/downloads/$(package)/
 $(package)_file_name=$(package)-$($(package)_version).tar.gz
 $(package)_sha256_hash=35a6dc0e425a9282c3426d9a3043144011bf0534aed4b73ab62c52aee0af1503
-$(package)_dependencies=openssl expat
-$(package)_patches=disable-glibc-reallocarray.patch
+$(package)_dependencies=openssl
+$(package)_patches=disable-glibc-reallocarray.patch no-expat.patch
 
 
 define $(package)_set_vars
   $(package)_config_opts=--disable-shared --enable-static --without-pyunbound --prefix=$(host_prefix)
-  $(package)_config_opts+=--with-libexpat=$(host_prefix) --with-ssl=$(host_prefix) --with-libevent=no
+  $(package)_config_opts+=--with-libexpat=no --with-ssl=$(host_prefix) --with-libevent=no
   $(package)_config_opts+=--without-pythonmodule --disable-flto --with-pthreads --with-libunbound-only
   $(package)_config_opts_linux=--with-pic
   $(package)_config_opts_w64=--enable-static-exe --sysconfdir=/etc --prefix=$(host_prefix) --target=$(host_prefix)
@@ -20,6 +20,7 @@ endef
 
 define $(package)_preprocess_cmds
   patch -p1 < $($(package)_patch_dir)/disable-glibc-reallocarray.patch &&\
+  patch -p1 < $($(package)_patch_dir)/no-expat.patch &&\
   autoconf
 endef
 
