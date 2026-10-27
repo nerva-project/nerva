@@ -53,10 +53,12 @@ RUN set -ex && \
     rm -rf /var/lib/apt
 COPY --from=builder /src/build/out /usr/local/bin/
 
-# Create nerva user
-RUN adduser --system --group --disabled-password nerva && \
+# Create nerva user. The UID/GID and home are pinned to what the ubuntu:20.04
+# image produced, so volumes written by earlier images stay readable.
+RUN addgroup --system --gid 101 nerva && \
+	adduser --system --uid 101 --ingroup nerva --home /home/nerva --disabled-password nerva && \
 	mkdir -p /wallet /home/nerva/.nerva && \
-	chown -R nerva:nerva /home/nerva/.nerva && \
+	chown -R nerva:nerva /home/nerva && \
 	chown -R nerva:nerva /wallet
 
 # Contains the blockchain
