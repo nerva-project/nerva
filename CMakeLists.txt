@@ -1,4 +1,4 @@
-# Copyright (c) 2018-2024, The Nerva Project
+# Copyright (c) 2018-2026, The Nerva Project
 # Copyright (c) 2014-2024, The Monero Project
 #
 # All rights reserved.
@@ -854,8 +854,8 @@ else ()
 
     # if those don't work for your compiler, single it out where appropriate
     if (CMAKE_BUILD_TYPE STREQUAL "Release" AND NOT OPENBSD)
-        set(C_SECURITY_FLAGS "${C_SECURITY_FLAGS} -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1")
-        set(CXX_SECURITY_FLAGS "${CXX_SECURITY_FLAGS} -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1")
+        set(C_SECURITY_FLAGS "${C_SECURITY_FLAGS} -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2")
+        set(CXX_SECURITY_FLAGS "${CXX_SECURITY_FLAGS} -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2")
     endif ()
 
     # warnings
@@ -1105,43 +1105,30 @@ if (${BOOST_IGNORE_SYSTEM_PATHS} STREQUAL "ON")
     set(Boost_NO_SYSTEM_PATHS TRUE)
 endif ()
 
-set(OLD_LIB_SUFFIXES ${CMAKE_FIND_LIBRARY_SUFFIXES})
-set(Boost_NO_BOOST_CMAKE ON)
 if (STATIC)
-    if (MINGW)
-        set(CMAKE_FIND_LIBRARY_SUFFIXES .a)
-    endif ()
-
     set(Boost_USE_STATIC_LIBS ON)
     set(Boost_USE_STATIC_RUNTIME ON)
 endif ()
 
-set(BOOST_MIN_VER 1.62)
-find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED)
+set(BOOST_MIN_VER 1.69)
+find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED CONFIG)
 
 if (NOT Boost_FOUND)
     die("Could not find Boost libraries, please make sure you have installed Boost or libboost-all-dev (>=${BOOST_MIN_VER}) or the equivalent")
 elseif (Boost_FOUND)
-    message(STATUS "Found Boost Version: ${Boost_VERSION}")
-    set(CMAKE_FIND_LIBRARY_SUFFIXES ${OLD_LIB_SUFFIXES})
+    message(STATUS "Found Boost Version: ${Boost_VERSION_STRING}")
 
     set(BOOST_COMPONENTS filesystem thread date_time chrono serialization program_options)
     if (WIN32)
         list(APPEND BOOST_COMPONENTS locale)
     endif ()
 
-    # Boost_VERSION is not something can be compared using VERSION_* comparator
-    if (Boost_VERSION LESS 106900)
-        # Boost system is header only since 1.69
-        list(APPEND BOOST_COMPONENTS system)
-    endif ()
-
-    if (Boost_VERSION LESS 107700)
-        # Boost regex is header only since 1.77
+    # Boost regex is header only since 1.77
+    if (Boost_VERSION_STRING VERSION_LESS 1.77.0)
         list(APPEND BOOST_COMPONENTS regex)
     endif ()
 
-    find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED COMPONENTS ${BOOST_COMPONENTS})
+    find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED COMPONENTS ${BOOST_COMPONENTS} CONFIG)
 endif ()
 
 add_definitions(-DBOOST_ASIO_ENABLE_SEQUENTIAL_STRAND_ALLOCATION)
@@ -1274,12 +1261,8 @@ endif ()
 add_subdirectory(contrib)
 add_subdirectory(src)
 
-find_package(PythonInterp)
 if (BUILD_TESTS)
-    message(STATUS "Building tests")
-    add_subdirectory(tests)
-else ()
-    message(STATUS "Not building tests")
+    message(FATAL_ERROR "This tree has no tests/ directory. The consensus checks are in contrib/hf14checks; see its CMakeLists.txt.")
 endif ()
 
 if (BUILD_DEBUG_UTILITIES)
