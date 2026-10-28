@@ -1,4 +1,4 @@
-# Copyright (c) 2018-2024, The Nerva Project
+# Copyright (c) 2018-2026, The Nerva Project
 # Copyright (c) 2014-2024, The Monero Project
 #
 # All rights reserved.
@@ -96,16 +96,18 @@ jobs:
                 run: |
                     ${{env.CCACHE_SETTINGS}}
                     make -j${{env.MAKE_JOB_COUNT}}
-            # v14 proof-of-work checks that need a finished build: the chain
-            # entry point (t_v8_chain) and get_block_longhash_v14 end to end
-            # over a fake chain (t_v14_longhash).
-            -   name: v14 PoW checks
+            # HF14 checks that need a finished build: the v14 proof-of-work
+            # chain entry point (t_v8_chain), get_block_longhash_v14 end to end
+            # over a fake chain (t_v14_longhash), and the transaction format
+            # checks (CLSAG, Bulletproofs+, serialization, fee/weight, ring size).
+            -   name: HF14 checks
                 run: |
                     LIB=$(find build -path '*/release/src/crypto/libcncrypto.a' | head -n 1)
                     test -n "$LIB" || { echo "no release build tree found"; exit 1; }
                     NERVA_BUILD="$PWD/$(dirname "$(dirname "$(dirname "$LIB")")")"
                     cmake -S contrib/hf14checks -B hf14checks-build -DNERVA_BUILD="$NERVA_BUILD"
-                    cmake --build hf14checks-build --target t_v8_chain t_v14_longhash -j${{env.MAKE_JOB_COUNT}}
+                    cmake --build hf14checks-build --target t_v8_chain t_v14_longhash t_clsag t_bp_plus t_serialization t_fee_weight t_ring_size -j${{env.MAKE_JOB_COUNT}}
+                    for t in t_clsag t_bp_plus t_serialization t_fee_weight t_ring_size; do ./hf14checks-build/$t; done
                     ./hf14checks-build/t_v8_chain
                     ./hf14checks-build/t_v14_longhash
                     # again on the software-AES arm, which NO_AES builds and
