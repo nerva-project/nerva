@@ -37,7 +37,12 @@ include_directories(
   "${NERVA_ROOT}/external"
   "${NERVA_ROOT}/external/rapidjson/include")
 
-find_package(Boost REQUIRED COMPONENTS serialization thread chrono system filesystem regex program_options)
+set(HF14_BOOST_COMPONENTS serialization thread chrono filesystem regex program_options)
+find_package(Boost REQUIRED)
+if ("${Boost_MAJOR_VERSION}.${Boost_MINOR_VERSION}" VERSION_LESS 1.69)
+  list(APPEND HF14_BOOST_COMPONENTS system)
+endif ()
+find_package(Boost REQUIRED COMPONENTS ${HF14_BOOST_COMPONENTS})
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 
